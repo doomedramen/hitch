@@ -1,5 +1,0 @@
-09ce95441dd600bfb884c9cebc31f89fe5c922ef7253e9f4a2049e4f194ce326  hitch_0.0.1-next_darwin_amd64.tar.gz
-ad01ac61536c57df264a0aee2d77958d33d3c3a188b0134f245f155b97b896b1  hitch_0.0.1-next_darwin_arm64.tar.gz
-8ae99acb375320611b62e9847953636c7d03fc8a743630601bc5697463d7f678  hitch_0.0.1-next_linux_amd64.tar.gz
-029f4e12d9ddda5a568c1df15ddc1cf2683ad26241ba452617ee7c15e4d5dfc6  hitch_0.0.1-next_linux_arm64.tar.gz
-6cdcc2758f3e54322ef3b71e85fabc666a6ca693044cfcc315bca585722c44c9  hitch_0.0.1-next_windows_amd64.zip
