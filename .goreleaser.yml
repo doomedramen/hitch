@@ -93,16 +93,16 @@ changelog:
     - title: Others
       order: 999
 
-# Homebrew tap configuration
-brews:
-  - # Repository for Homebrew formula
+# Homebrew tap configuration (using casks - v2.10+ standard)
+homebrew_casks:
+  - # Repository for Homebrew cask
     repository:
       owner: DoomedRamen
       name: homebrew-hitch
       branch: main
 
-    # Formula file location
-    directory: Formula
+    # Cask file location (Casks is the default, but being explicit)
+    directory: Casks
 
     # Project info
     name: hitch
@@ -114,14 +114,9 @@ brews:
     test: |
       system "#{bin}/hitch", "--version"
 
-    # Install instructions
+    # Install instructions (uses system to execute the binary)
     install: |
       bin.install "hitch"
-
-      # Install shell completions (if we add them later)
-      # bash_completion.install "completions/hitch.bash" => "hitch"
-      # zsh_completion.install "completions/_hitch" => "_hitch"
-      # fish_completion.install "completions/hitch.fish"
 
 # GitHub Release configuration
 release:
