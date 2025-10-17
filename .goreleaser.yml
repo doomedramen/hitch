@@ -93,8 +93,10 @@ changelog:
     - title: Others
       order: 999
 
-# Homebrew tap configuration (v2+ standard)
-homebrew:
+# Homebrew tap configuration
+# Note: brews is deprecated in v2.10+ in favor of homebrew_casks, but casks are for GUI apps.
+# For CLI tools like hitch, we continue using brews until GoReleaser provides a proper alternative.
+brews:
   - # Repository for Homebrew formula
     repository:
       owner: DoomedRamen
@@ -114,7 +116,7 @@ homebrew:
     test: |
       system "#{bin}/hitch", "--version"
 
-    # Install instructions (uses system to execute the binary)
+    # Install instructions
     install: |
       bin.install "hitch"
 
