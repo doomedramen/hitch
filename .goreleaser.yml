@@ -93,16 +93,16 @@ changelog:
     - title: Others
       order: 999
 
-# Homebrew tap configuration (using casks - v2.10+ standard)
-homebrew_casks:
-  - # Repository for Homebrew cask
+# Homebrew tap configuration (v2+ standard)
+homebrew:
+  - # Repository for Homebrew formula
     repository:
       owner: DoomedRamen
       name: homebrew-hitch
       branch: main
 
-    # Cask file location (Casks is the default, but being explicit)
-    directory: Casks
+    # Formula file location
+    directory: Formula
 
     # Project info
     name: hitch
