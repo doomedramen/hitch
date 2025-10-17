@@ -95,11 +95,11 @@ changelog:
 
 # Homebrew tap configuration
 brews:
-  - # Repository for Homebrew formula (using homebrew branch in same repo)
+  - # Repository for Homebrew formula
     repository:
       owner: DoomedRamen
-      name: hitch
-      branch: homebrew
+      name: homebrew-hitch
+      branch: main
 
     # Formula file location
     directory: Formula
