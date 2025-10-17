@@ -1,6 +1,9 @@
 # GoReleaser configuration for Hitch
 # Documentation: https://goreleaser.com
 
+# Configuration version
+version: 2
+
 # Pre-release hooks
 before:
   hooks:
@@ -92,14 +95,14 @@ changelog:
 
 # Homebrew tap configuration
 brews:
-  - # Repository for Homebrew formula
+  - # Repository for Homebrew formula (using homebrew branch in same repo)
     repository:
       owner: DoomedRamen
-      name: homebrew-hitch
-      branch: main
+      name: hitch
+      branch: homebrew
 
     # Formula file location
-    folder: Formula
+    directory: Formula
 
     # Project info
     name: hitch

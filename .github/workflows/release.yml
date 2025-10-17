@@ -37,5 +37,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Uncomment when Homebrew tap is ready:
-          # HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Note: GITHUB_TOKEN has permissions to push to homebrew branch in same repo
+          # If using separate tap repo, add: HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

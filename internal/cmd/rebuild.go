@@ -186,7 +186,7 @@ func performRebuild(repo *hitchgit.Repo, envName string, env metadata.Environmen
 	} else {
 		fmt.Println("Merging features into temp branch:")
 		for _, feature := range env.Features {
-			if err := repo.Merge(feature, true); err != nil {
+			if err := repo.Merge(feature, ""); err != nil {
 				// Merge failed!
 				errorMsg(fmt.Sprintf("Merge conflict when adding %s", feature))
 				fmt.Println()

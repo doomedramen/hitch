@@ -579,6 +579,8 @@ Lock duration: 5 minutes
 
 ### `hitch list`
 
+> **Coming Soon** - This command is planned for a future release.
+
 List all tracked branches and their status.
 
 ```bash
@@ -639,6 +641,8 @@ Total: 3 branches (2 active, 1 merged)
 ---
 
 ### `hitch config`
+
+> **Coming Soon** - This command is planned for a future release.
 
 View or modify Hitch configuration.
 

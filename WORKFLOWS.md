@@ -445,18 +445,22 @@ hitch status
 ### Monthly Audit
 
 ```bash
-# List all tracked branches
-hitch list
+# Check environment status
+hitch status
 
-# Review inactive branches
-hitch list --unmerged
+# Check for stale branches
+hitch status --stale
 
-# Review merged branches awaiting cleanup
-hitch list --merged
+# Review metadata manually
+git checkout hitch-metadata
+cat hitch.json | jq '.branches'
+git checkout -
 
-# Check configuration
-hitch config show
+# Check configuration in metadata
+git show hitch-metadata:hitch.json | jq '.config'
 ```
+
+> **Note:** `hitch list` and `hitch config` commands are planned for a future release. For now, use `hitch status` and manual inspection of the metadata.
 
 ### Keeping Environments Fresh
 
