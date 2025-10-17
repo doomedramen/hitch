@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +9,23 @@ import (
 
 	hitchgit "github.com/DoomedRamen/hitch/internal/git"
 )
+
+// init ensures tests can only run inside Docker for isolation
+func init() {
+	if os.Getenv("HITCH_TEST_IN_DOCKER") != "1" {
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "ERROR: Tests must be run inside Docker for isolation")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "This prevents tests from potentially modifying your working repository.")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "To run tests safely:")
+		fmt.Fprintln(os.Stderr, "  just test-docker         # Run all tests")
+		fmt.Fprintln(os.Stderr, "  just test-docker-verbose # Run with verbose output")
+		fmt.Fprintln(os.Stderr, "  just test-integration    # Run integration tests")
+		fmt.Fprintln(os.Stderr, "")
+		os.Exit(1)
+	}
+}
 
 // TestRepo represents an isolated Git repository for testing
 type TestRepo struct {

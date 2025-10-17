@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Test service - runs tests in isolation
   test:
@@ -13,8 +11,8 @@ services:
       - go-cache:/go/pkg/mod
       - go-build-cache:/home/testuser/.cache/go-build
     environment:
-      - CGO_ENABLED=0
-    command: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+      - HITCH_TEST_IN_DOCKER=1
+    command: go test -v -race ./...
 
   # Lint service - runs golangci-lint
   lint:
@@ -35,7 +33,12 @@ services:
     volumes:
       - .:/workspace:ro
       - go-cache:/go/pkg/mod
-    command: sh -c "go test -coverprofile=coverage.out -covermode=atomic ./... && go tool cover -html=coverage.out -o coverage.html"
+      - go-build-cache:/home/testuser/.cache/go-build
+      - ./coverage.out:/tmp/coverage.out  # Map coverage file to host
+      - ./coverage.html:/tmp/coverage.html
+    environment:
+      - HITCH_TEST_IN_DOCKER=1
+    command: sh -c "go test -coverprofile=/tmp/coverage.out -covermode=atomic ./... && go tool cover -html=/tmp/coverage.out -o /tmp/coverage.html"
 
   # Integration test service - for full workflow tests
   integration:
@@ -46,6 +49,7 @@ services:
       - .:/workspace:ro
       - go-cache:/go/pkg/mod
     environment:
+      - HITCH_TEST_IN_DOCKER=1
       - INTEGRATION_TESTS=1
     command: go test -v -tags=integration ./...
 

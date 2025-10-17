@@ -1,18 +1,23 @@
 # Dockerfile for running Hitch tests in isolation
 # This prevents test runs from polluting the actual repository
 
-FROM golang:1.22-alpine
+FROM golang:1.25-alpine
 
-# Install git and other dependencies
+# Install git and other dependencies (including build-base for CGO/race detector)
 RUN apk add --no-cache \
     git \
     bash \
     make \
-    curl
+    curl \
+    build-base
 
 # Set up a non-root user for running tests
 RUN addgroup -g 1000 testuser && \
     adduser -D -u 1000 -G testuser testuser
+
+# Create cache directories with proper ownership
+RUN mkdir -p /home/testuser/.cache/go-build && \
+    chown -R testuser:testuser /home/testuser/.cache
 
 # Configure git for test user
 RUN git config --global user.name "Hitch Test User" && \

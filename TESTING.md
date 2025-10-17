@@ -5,11 +5,11 @@ This document explains how to run tests for Hitch and how the testing infrastruc
 ## Quick Start
 
 ```bash
-# Run tests directly (fast)
+# Run tests (uses Docker automatically)
 just test
 
-# Run tests in isolated Docker environment (recommended for local development)
-just test-docker
+# Run tests with verbose output
+just test-docker-verbose
 
 # Run tests with coverage
 just test-coverage
@@ -18,51 +18,50 @@ just test-coverage
 just test-all
 ```
 
+## ⚠️ Important: Docker-Only Testing
+
+**Tests MUST run inside Docker for safety.** This is enforced automatically to prevent tests from potentially modifying your working repository.
+
+If you try to run tests directly with `go test`, you'll see:
+```
+ERROR: Tests must be run inside Docker for isolation
+
+To run tests safely:
+  just test-docker         # Run all tests
+  just test-docker-verbose # Run with verbose output
+  just test-integration    # Run integration tests
+```
+
 ## Testing Philosophy
 
 Hitch manipulates Git repositories directly, which means tests need isolated environments to avoid "poisoning" the working repository. We achieve this through:
 
-1. **Temporary test repositories** - Each test creates isolated Git repos in `/tmp`
-2. **Docker isolation (optional)** - For extra safety during local development
-3. **CI isolation** - GitHub Actions runners are already isolated VMs
+1. **Docker isolation (enforced)** - All tests run in isolated containers with read-only volume mounts
+2. **Temporary test repositories** - Each test creates isolated Git repos in `/tmp` within the container
+3. **CI isolation** - GitHub Actions sets `HITCH_TEST_IN_DOCKER=1` automatically
 
 ## Running Tests
 
-### Direct (Fastest)
+### Docker (Required)
 
-Tests create temporary Git repositories automatically, so they're safe to run directly:
-
-```bash
-go test ./...
-```
-
-or
+All tests run in Docker automatically for complete isolation:
 
 ```bash
+# Basic tests (recommended alias)
 just test
+
+# Or use explicit docker commands:
+just test-docker          # Same as 'just test'
+just test-docker-verbose  # Verbose output
+just test-integration     # Integration tests only
+just test-coverage        # Generate coverage report
 ```
 
-**When to use:** Quick feedback during development, CI/CD
-
-### Docker (Safest for Local Development)
-
-Run tests in complete isolation with Docker:
-
-```bash
-# Basic tests
-just test-docker
-
-# Verbose output
-just test-docker-verbose
-
-# Integration tests
-just test-integration
-
-# Coverage report
-just test-docker-coverage
-```
-
-**When to use:** Before committing, when you want guaranteed isolation
+**Why Docker is required:**
+- Read-only volume mounts prevent repository modification
+- Isolated Git configuration (won't affect your global .gitconfig)
+- Consistent environment across all developers
+- `HITCH_TEST_IN_DOCKER=1` environment variable enforces this
 
 ### CI/CD
 
@@ -71,8 +70,8 @@ Tests run automatically on:
 - Every pull request
 - Before releases
 
-The CI workflow (`test.yml`) runs:
-- Unit tests with race detection
+The CI workflow (`.github/workflows/test.yml`) sets `HITCH_TEST_IN_DOCKER=1` and runs:
+- Unit tests with race detection (in Docker)
 - Linting (golangci-lint)
 - Multi-platform builds
 - Coverage reporting
@@ -246,11 +245,11 @@ go test -v -run TestPromoteBranch ./internal/metadata
 ### With Debugging
 
 ```bash
-# Print all output
-go test -v ./... 2>&1 | tee test.log
+# Run with custom flags in Docker
+docker compose run --rm test go test -v ./... 2>&1 | tee test.log
 
-# Keep temp directories for inspection
-HITCH_TEST_KEEP_TEMP=1 go test -v ./...
+# Keep temp directories for inspection (inside container)
+docker compose run --rm test sh -c "HITCH_TEST_KEEP_TEMP=1 go test -v ./..."
 ```
 
 ### Docker Debugging

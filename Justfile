@@ -15,13 +15,21 @@ build-all:
     GOOS=darwin GOARCH=arm64 go build -o dist/hitch-darwin-arm64 ./cmd/hitch
     GOOS=windows GOARCH=amd64 go build -o dist/hitch-windows-amd64.exe ./cmd/hitch
 
-# Run tests
+# Run tests (requires Docker for isolation)
 test:
-    go test ./...
+    @echo "⚠️  Tests must run in Docker for isolation"
+    @echo "Running: docker compose run --rm test"
+    @echo ""
+    docker compose run --rm test
 
-# Run tests with coverage
+# Run tests with coverage (requires Docker for isolation)
 test-coverage:
-    go test -coverprofile=coverage.out ./...
+    @echo "⚠️  Tests must run in Docker for isolation"
+    @echo "Running: docker compose run --rm coverage"
+    @echo ""
+    docker compose run --rm coverage
+    @echo ""
+    @echo "Opening coverage report in browser..."
     go tool cover -html=coverage.out
 
 # Run tests in isolated Docker environment (recommended for local development)
@@ -128,8 +136,8 @@ release-check:
     echo "✅ No uncommitted changes"
     echo "✅ In sync with remote"
     echo ""
-    echo "Running tests..."
-    go test ./...
+    echo "Running tests in Docker..."
+    docker compose run --rm test
     echo ""
     echo "✅ Ready to release!"
 
