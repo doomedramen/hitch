@@ -102,6 +102,7 @@ brews:
       owner: DoomedRamen
       name: homebrew-hitch
       branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
     # Formula file location
     directory: Formula
