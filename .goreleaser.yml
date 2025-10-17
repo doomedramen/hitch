@@ -1,0 +1,168 @@
+# GoReleaser configuration for Hitch
+# Documentation: https://goreleaser.com
+
+# Pre-release hooks
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+# Build configuration
+builds:
+  - # Entry point
+    main: ./cmd/hitch
+
+    # Output binary name
+    binary: hitch
+
+    # Disable CGO for static binaries
+    env:
+      - CGO_ENABLED=0
+
+    # Target platforms
+    goos:
+      - darwin   # macOS
+      - linux    # Linux
+      - windows  # Windows (nice to have)
+
+    goarch:
+      - amd64    # Intel/AMD 64-bit
+      - arm64    # ARM 64-bit (M1/M2/M3 Macs, modern servers)
+
+    # Ignore unsupported combinations
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+    # Build flags
+    flags:
+      - -trimpath
+
+    # Linker flags (embed version info)
+    ldflags:
+      - -s -w
+      - -X github.com/DoomedRamen/hitch/internal/version.Version={{.Version}}
+      - -X github.com/DoomedRamen/hitch/internal/version.Commit={{.Commit}}
+      - -X github.com/DoomedRamen/hitch/internal/version.Date={{.Date}}
+
+# Archive configuration (how binaries are packaged)
+archives:
+  - # Archive format
+    format: tar.gz
+
+    # Use zip for Windows
+    format_overrides:
+      - goos: windows
+        format: zip
+
+    # Archive naming: hitch_1.0.0_darwin_amd64.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+    # Files to include in archive
+    files:
+      - LICENSE
+      - README.md
+      - COMMANDS.md
+
+# Checksum file for verifying downloads
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+# Changelog generation from git commits
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - 'typo'
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+# Homebrew tap configuration
+brews:
+  - # Repository for Homebrew formula
+    repository:
+      owner: DoomedRamen
+      name: homebrew-hitch
+      branch: main
+
+    # Formula file location
+    folder: Formula
+
+    # Project info
+    name: hitch
+    homepage: https://github.com/DoomedRamen/hitch
+    description: Git workflow manager for multi-environment development teams
+    license: MIT
+
+    # Installation test
+    test: |
+      system "#{bin}/hitch", "--version"
+
+    # Install instructions
+    install: |
+      bin.install "hitch"
+
+      # Install shell completions (if we add them later)
+      # bash_completion.install "completions/hitch.bash" => "hitch"
+      # zsh_completion.install "completions/_hitch" => "_hitch"
+      # fish_completion.install "completions/hitch.fish"
+
+# GitHub Release configuration
+release:
+  # Repository
+  github:
+    owner: DoomedRamen
+    name: hitch
+
+  # Draft release (set to false for automatic releases)
+  draft: false
+
+  # Pre-release detection
+  prerelease: auto
+
+  # Release name template
+  name_template: "Hitch {{.Version}}"
+
+  # Release notes
+  header: |
+    ## Hitch {{.Version}}
+
+    Install or upgrade:
+    ```bash
+    # Homebrew (macOS/Linux)
+    brew tap DoomedRamen/hitch
+    brew install hitch
+    # or
+    brew upgrade hitch
+
+    # curl (macOS/Linux)
+    curl -fsSL https://raw.githubusercontent.com/DoomedRamen/hitch/main/install.sh | bash
+
+    # Go
+    go install github.com/DoomedRamen/hitch/cmd/hitch@{{.Version}}
+    ```
+
+  footer: |
+    **Full Changelog**: https://github.com/DoomedRamen/hitch/compare/{{.PreviousTag}}...{{.Tag}}
+
+# Announce releases (optional - can add Discord, Slack, etc.)
+# announce:
+#   discord:
+#     enabled: false
+
+# Snapshot configuration (for local builds without tags)
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"

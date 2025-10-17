@@ -52,16 +52,50 @@ Key principles:
 
 ## Installation
 
-```bash
-# Download pre-built binary (coming soon)
-curl -sSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch-$(uname -s)-$(uname -m) -o /usr/local/bin/hitch
-chmod +x /usr/local/bin/hitch
+### Homebrew (macOS/Linux)
 
-# Or build from source
+```bash
+brew tap DoomedRamen/hitch
+brew install hitch
+```
+
+### curl (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DoomedRamen/hitch/main/install.sh | bash
+```
+
+### Go Install
+
+```bash
+go install github.com/DoomedRamen/hitch/cmd/hitch@latest
+```
+
+### Manual Download
+
+Download pre-built binaries from [GitHub Releases](https://github.com/DoomedRamen/hitch/releases/latest):
+
+```bash
+# macOS ARM64 (M1/M2/M3)
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_darwin_arm64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# macOS AMD64 (Intel)
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_darwin_amd64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# Linux AMD64
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_linux_amd64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+```
+
+### Build from Source
+
+```bash
 git clone https://github.com/DoomedRamen/hitch.git
 cd hitch
 go build -o hitch ./cmd/hitch
-mv hitch /usr/local/bin/
+sudo mv hitch /usr/local/bin/
 ```
 
 ## Quick Start
