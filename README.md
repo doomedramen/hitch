@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="hitch.svg" alt="Hitch Logo" width="200"/>
+</p>
+
 # Hitch
 
 **A Git workflow manager for multi-environment development teams**
