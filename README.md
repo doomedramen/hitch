@@ -6,6 +6,14 @@
 
 **A Git workflow manager for multi-environment development teams**
 
+<p align="center">
+  <a href="https://github.com/DoomedRamen/hitch/actions/workflows/test.yml"><img src="https://github.com/DoomedRamen/hitch/actions/workflows/test.yml/badge.svg" alt="Test Status"></a>
+  <a href="https://github.com/DoomedRamen/hitch/actions/workflows/release.yml"><img src="https://github.com/DoomedRamen/hitch/actions/workflows/release.yml/badge.svg" alt="Release Status"></a>
+  <a href="https://github.com/DoomedRamen/hitch/releases/latest"><img src="https://img.shields.io/github/v/release/DoomedRamen/hitch" alt="Latest Release"></a>
+  <a href="https://goreportcard.com/report/github.com/DoomedRamen/hitch"><img src="https://goreportcard.com/badge/github.com/DoomedRamen/hitch" alt="Go Report Card"></a>
+  <a href="https://github.com/DoomedRamen/hitch/blob/main/LICENSE"><img src="https://img.shields.io/github/license/DoomedRamen/hitch" alt="License"></a>
+</p>
+
 Hitch simplifies managing feature branches across multiple deployment environments (dev, qa, production) by treating environment branches as **hitched branches** - ephemeral, reconstructible branches that are "hitched" to a specific feature list rather than having permanent independent histories.
 
 ## Installation
@@ -201,6 +209,9 @@ When you run `hitch promote feature/xyz to qa`, Hitch:
 - [WORKFLOWS.md](./WORKFLOWS.md) - Common workflow patterns
 - [TERMINOLOGY.md](./TERMINOLOGY.md) - Glossary of Hitch terminology
 - [SAFETY.md](./SAFETY.md) - Safety mechanisms and best practices
+- [TESTING.md](./TESTING.md) - Testing guide for contributors
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - Contribution guidelines
+- [CHANGELOG.md](./CHANGELOG.md) - Version history
 - [RELEASING.md](./RELEASING.md) - Release process for maintainers
 
 ## Why "Hitch"?

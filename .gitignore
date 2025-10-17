@@ -1,2 +1,12 @@
 hitch
 dist/
+
+# Test artifacts
+coverage.out
+coverage.html
+*.test
+!Dockerfile.test
+*.prof
+
+# Temporary test repositories
+/tmp/hitch-test-*

@@ -1,0 +1,85 @@
+# golangci-lint configuration for Hitch
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  enable:
+    # Essential linters
+    - errcheck        # Check for unchecked errors
+    - gosimple        # Simplify code
+    - govet           # Go vet
+    - ineffassign     # Detect ineffectual assignments
+    - staticcheck     # Advanced static analysis
+    - unused          # Find unused code
+
+    # Code quality
+    - gofmt           # Check formatting
+    - goimports       # Check imports
+    - misspell        # Spell checking
+    - unconvert       # Remove unnecessary type conversions
+    - unparam         # Find unused function parameters
+
+    # Best practices
+    - bodyclose       # Check HTTP response bodies are closed
+    - errorlint       # Error wrapping checks
+    - exportloopref   # Check for exported loop variable references
+    - gocritic        # Opinionated checks
+    - gocyclo         # Cyclomatic complexity
+    - revive          # Fast, configurable, extensible
+
+    # Security
+    - gosec           # Security checks
+
+  disable:
+    - typecheck       # Can be buggy with go workspaces
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # Too strict for readability
+
+  gocyclo:
+    min-complexity: 15
+
+  revive:
+    rules:
+      - name: exported
+        disabled: true  # Too strict for CLI tools
+
+  gosec:
+    excludes:
+      - G204  # Subprocess with variable - needed for git commands
+      - G304  # File path from variable - needed for repo operations
+
+issues:
+  exclude-rules:
+    # Exclude test files from certain linters
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+        - unparam
+
+    # Exclude testutil from certain linters
+    - path: internal/testutil/
+      linters:
+        - errcheck
+        - gosec
+
+  max-issues-per-linter: 0
+  max-same-issues: 0

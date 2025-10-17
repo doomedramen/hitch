@@ -24,6 +24,27 @@ test-coverage:
     go test -coverprofile=coverage.out ./...
     go tool cover -html=coverage.out
 
+# Run tests in isolated Docker environment (recommended for local development)
+test-docker:
+    docker compose run --rm test
+
+# Run tests with verbose output in Docker
+test-docker-verbose:
+    docker compose run --rm test go test -v -race ./...
+
+# Run integration tests in Docker
+test-integration:
+    docker compose run --rm integration
+
+# Run tests and generate coverage report in Docker
+test-docker-coverage:
+    docker compose run --rm coverage
+
+# Run all quality checks (tests + lint) in Docker
+test-all:
+    docker compose run --rm test
+    docker compose run --rm lint
+
 # Format code
 fmt:
     go fmt ./...

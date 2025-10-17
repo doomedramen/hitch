@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # Test service - runs tests in isolation
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      # Mount source code read-only to prevent accidental modification
+      - .:/workspace:ro
+      # Use a volume for Go cache to speed up builds
+      - go-cache:/go/pkg/mod
+      - go-build-cache:/home/testuser/.cache/go-build
+    environment:
+      - CGO_ENABLED=0
+    command: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+  # Lint service - runs golangci-lint
+  lint:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/workspace:ro
+      - go-cache:/go/pkg/mod
+      - golangci-cache:/home/testuser/.cache/golangci-lint
+    command: golangci-lint run --timeout=5m
+
+  # Coverage service - generates coverage report
+  coverage:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/workspace:ro
+      - go-cache:/go/pkg/mod
+    command: sh -c "go test -coverprofile=coverage.out -covermode=atomic ./... && go tool cover -html=coverage.out -o coverage.html"
+
+  # Integration test service - for full workflow tests
+  integration:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/workspace:ro
+      - go-cache:/go/pkg/mod
+    environment:
+      - INTEGRATION_TESTS=1
+    command: go test -v -tags=integration ./...
+
+volumes:
+  go-cache:
+  go-build-cache:
+  golangci-cache:

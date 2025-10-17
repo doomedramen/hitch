@@ -237,6 +237,14 @@ func (m *Metadata) AddBranchToEnvironment(env string, branch string, user string
 	return nil
 }
 
+// IsEligibleForCleanup checks if a branch is eligible for cleanup
+func (b *BranchInfo) IsEligibleForCleanup() bool {
+	if b.EligibleForCleanupAt == nil {
+		return false
+	}
+	return time.Now().After(*b.EligibleForCleanupAt)
+}
+
 // RemoveBranchFromEnvironment removes a branch from an environment's feature list
 func (m *Metadata) RemoveBranchFromEnvironment(env string, branch string, user string) error {
 	e, exists := m.Environments[env]

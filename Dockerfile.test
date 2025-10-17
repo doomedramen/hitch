@@ -1,0 +1,42 @@
+# Dockerfile for running Hitch tests in isolation
+# This prevents test runs from polluting the actual repository
+
+FROM golang:1.22-alpine
+
+# Install git and other dependencies
+RUN apk add --no-cache \
+    git \
+    bash \
+    make \
+    curl
+
+# Set up a non-root user for running tests
+RUN addgroup -g 1000 testuser && \
+    adduser -D -u 1000 -G testuser testuser
+
+# Configure git for test user
+RUN git config --global user.name "Hitch Test User" && \
+    git config --global user.email "test@hitch.test" && \
+    git config --global init.defaultBranch main
+
+# Install golangci-lint for linting
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin v1.61.0
+
+# Create workspace directory
+WORKDIR /workspace
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Change ownership to testuser
+RUN chown -R testuser:testuser /workspace
+
+# Switch to non-root user
+USER testuser
+
+# Default command runs tests
+CMD ["go", "test", "-v", "./..."]
