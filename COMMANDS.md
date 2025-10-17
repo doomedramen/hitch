@@ -46,15 +46,15 @@ hitch init [flags]
 1. Verifies current directory is a Git repository
 2. Creates `hitch-metadata` orphan branch
 3. Writes initial `hitch.json` with default configuration
-4. Pushes metadata branch to remote
-5. Optionally installs Git hooks
+4. Pushes metadata branch to remote (unless `--no-push` specified)
+5. Returns to your original branch
 
 **Flags:**
 - `--environments <list>` - Comma-separated list of environments (default: "dev,qa")
 - `--base <branch>` - Base branch name (default: "main")
-- `--install-hooks` - Install Git hooks (default: true)
 - `--retention-days <int>` - Days to keep branches after merge (default: 7)
 - `--stale-days <int>` - Days before warning about inactive branches (default: 30)
+- `--no-push` - Don't push hitch-metadata to remote (local only)
 
 **Example:**
 ```bash
@@ -64,17 +64,33 @@ hitch init
 # Initialize with custom environments
 hitch init --environments dev,staging,qa,prod --base main
 
-# Initialize without installing hooks
-hitch init --install-hooks=false
+# Initialize without pushing to remote
+hitch init --no-push
 ```
 
-**Output:**
+**Output (with default push):**
 ```
 ✓ Hitch initialized successfully
+✓ Pushed hitch-metadata to origin
 
 Environments configured: dev, qa
 Base branch: main
-Hooks installed: yes
+
+Next steps:
+  1. Create a feature branch: git checkout -b feature/my-feature
+  2. Promote to dev: hitch promote feature/my-feature to dev
+  3. Check status: hitch status
+```
+
+**Output (with --no-push):**
+```
+✓ Hitch initialized successfully
+ℹ Skipped push to remote (--no-push specified)
+To push later, run:
+  git push -u origin hitch-metadata
+
+Environments configured: dev, qa
+Base branch: main
 
 Next steps:
   1. Create a feature branch: git checkout -b feature/my-feature
