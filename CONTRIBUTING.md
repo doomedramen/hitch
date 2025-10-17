@@ -178,8 +178,26 @@ just test-all
      repo_test.go  ← Your tests here
    ```
 
-2. **Use testutil helpers** for Git operations:
+2. **ALL test files MUST start with the build tag:**
    ```go
+   //go:build dockertest
+
+   package mypackage_test
+   ```
+
+   This build constraint prevents tests from running outside Docker (where they could modify your working repository).
+
+3. **Use testutil helpers** for Git operations:
+   ```go
+   //go:build dockertest
+
+   package git_test
+
+   import (
+       "testing"
+       "github.com/DoomedRamen/hitch/internal/testutil"
+   )
+
    func TestSomething(t *testing.T) {
        repo := testutil.NewTestRepo(t)
        // repo is automatically cleaned up
@@ -194,7 +212,7 @@ just test-all
    }
    ```
 
-3. **Test one thing per test**:
+4. **Test one thing per test**:
    ```go
    // Good
    func TestCreateBranch(t *testing.T) { /* ... */ }
@@ -206,7 +224,7 @@ just test-all
    }
    ```
 
-4. **Use table-driven tests** for multiple cases:
+5. **Use table-driven tests** for multiple cases:
    ```go
    func TestValidateName(t *testing.T) {
        tests := []struct {

@@ -20,17 +20,19 @@ just test-all
 
 ## ⚠️ Important: Docker-Only Testing
 
-**Tests MUST run inside Docker for safety.** This is enforced automatically to prevent tests from potentially modifying your working repository.
+**Tests MUST run inside Docker for safety.** This is enforced via Go build tags - test files won't even compile without the `dockertest` tag.
 
 If you try to run tests directly with `go test`, you'll see:
 ```
-ERROR: Tests must be run inside Docker for isolation
-
-To run tests safely:
-  just test-docker         # Run all tests
-  just test-docker-verbose # Run with verbose output
-  just test-integration    # Run integration tests
+?   	github.com/DoomedRamen/hitch/internal/metadata	[no test files]
 ```
+
+This prevents tests from potentially modifying your working repository. All test files include:
+```go
+//go:build dockertest
+```
+
+This build constraint ensures tests can ONLY run when explicitly tagged (which Docker/CI provide automatically).
 
 ## Testing Philosophy
 
@@ -144,7 +146,18 @@ just test-integration
 
 ### Example Test
 
+**IMPORTANT: All test files must start with the build tag:**
+
 ```go
+//go:build dockertest
+
+package mypackage_test
+
+import (
+    "testing"
+    "github.com/DoomedRamen/hitch/internal/testutil"
+)
+
 func TestPromoteBranch(t *testing.T) {
     // Setup: Create test repo with Hitch initialized
     repo := testutil.NewTestRepo(t)
@@ -310,11 +323,37 @@ docker compose build --no-cache test
 ## Adding New Tests
 
 1. Create `*_test.go` file next to source
-2. Use `testutil.NewTestRepo()` for isolation
-3. Follow naming convention: `TestFunctionName`
-4. Run tests: `just test`
-5. Run lint: `just lint`
-6. Commit and push (CI will validate)
+2. **Add build tag as first line:** `//go:build dockertest`
+3. Use `testutil.NewTestRepo()` for isolation
+4. Follow naming convention: `TestFunctionName`
+5. Run tests: `just test`
+6. Run lint: `just lint`
+7. Commit and push (CI will validate)
+
+### Test Template
+
+Copy this template for new test files:
+
+```go
+//go:build dockertest
+
+package mypackage_test
+
+import (
+    "testing"
+    "github.com/DoomedRamen/hitch/internal/testutil"
+)
+
+func TestYourFeature(t *testing.T) {
+    repo := testutil.NewTestRepo(t)
+
+    // Your test code here
+
+    if got != want {
+        t.Errorf("got %v, want %v", got, want)
+    }
+}
+```
 
 ## Resources
 

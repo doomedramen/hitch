@@ -12,7 +12,7 @@ services:
       - go-build-cache:/home/testuser/.cache/go-build
     environment:
       - HITCH_TEST_IN_DOCKER=1
-    command: go test -v -race ./...
+    command: go test -v -race -tags dockertest ./...
 
   # Lint service - runs golangci-lint
   lint:
@@ -38,7 +38,7 @@ services:
       - ./coverage.html:/tmp/coverage.html
     environment:
       - HITCH_TEST_IN_DOCKER=1
-    command: sh -c "go test -coverprofile=/tmp/coverage.out -covermode=atomic ./... && go tool cover -html=/tmp/coverage.out -o /tmp/coverage.html"
+    command: sh -c "go test -tags dockertest -coverprofile=/tmp/coverage.out -covermode=atomic ./... && go tool cover -html=/tmp/coverage.out -o /tmp/coverage.html"
 
   # Integration test service - for full workflow tests
   integration:
@@ -51,7 +51,7 @@ services:
     environment:
       - HITCH_TEST_IN_DOCKER=1
       - INTEGRATION_TESTS=1
-    command: go test -v -tags=integration ./...
+    command: go test -v -tags dockertest,integration ./...
 
 volumes:
   go-cache:

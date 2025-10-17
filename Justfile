@@ -38,7 +38,7 @@ test-docker:
 
 # Run tests with verbose output in Docker
 test-docker-verbose:
-    docker compose run --rm test go test -v -race ./...
+    docker compose run --rm test go test -v -race -tags dockertest ./...
 
 # Run integration tests in Docker
 test-integration:
@@ -137,7 +137,7 @@ release-check:
     echo "✅ In sync with remote"
     echo ""
     echo "Running tests in Docker..."
-    docker compose run --rm test
+    just test-docker
     echo ""
     echo "✅ Ready to release!"
 
