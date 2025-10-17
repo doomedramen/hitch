@@ -81,7 +81,7 @@ func runHookPrePush(cmd *cobra.Command, args []string) error {
 	// 5. Check if current branch is a managed environment
 	env, isManaged := meta.Environments[currentBranch]
 	if !isManaged {
-		// Not a managed branch, allow push
+		// Not a hitched branch, allow push
 		os.Exit(0)
 		return nil
 	}
@@ -119,8 +119,8 @@ func runHookPrePush(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Not locked but is managed branch, warn but allow
-	warning(fmt.Sprintf("Pushing directly to managed branch %s", currentBranch))
+	// Not locked but is hitched branch, warn but allow
+	warning(fmt.Sprintf("Pushing directly to hitched branch %s", currentBranch))
 	fmt.Fprintf(os.Stderr, "This may be overwritten by: hitch rebuild %s\n", currentBranch)
 	fmt.Fprintln(os.Stderr)
 

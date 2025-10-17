@@ -279,12 +279,23 @@ func (r *Repo) DeleteBranch(name string, force bool) error {
 	return nil
 }
 
-// Merge merges a branch into the current branch
+// DeleteRemoteBranch deletes a branch from remote
+func (r *Repo) DeleteRemoteBranch(remoteName string, branchName string) error {
+	cmd := exec.Command("git", "push", remoteName, "--delete", branchName)
+	cmd.Dir = r.workdir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to delete remote branch %s: %s", branchName, string(output))
+	}
+	return nil
+}
+
+// Merge merges a branch into the current branch with an optional message
 // Note: This uses git command as go-git's merge support is limited
-func (r *Repo) Merge(branch string, noFF bool) error {
-	args := []string{"merge"}
-	if noFF {
-		args = append(args, "--no-ff")
+func (r *Repo) Merge(branch string, message string) error {
+	args := []string{"merge", "--no-ff"}
+	if message != "" {
+		args = append(args, "-m", message)
 	}
 	args = append(args, branch)
 
@@ -301,6 +312,41 @@ func (r *Repo) Merge(branch string, noFF bool) error {
 			}
 		}
 		return fmt.Errorf("merge failed: %s", string(output))
+	}
+
+	return nil
+}
+
+// MergeSquash squash merges a branch into the current branch
+func (r *Repo) MergeSquash(branch string, message string) error {
+	// Squash merge
+	cmd := exec.Command("git", "merge", "--squash", branch)
+	cmd.Dir = r.workdir
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// Check if it's a merge conflict
+		if strings.Contains(string(output), "CONFLICT") {
+			return &MergeConflictError{
+				Branch:  branch,
+				Message: string(output),
+			}
+		}
+		return fmt.Errorf("squash merge failed: %s", string(output))
+	}
+
+	// Commit the squashed changes
+	commitMsg := message
+	if commitMsg == "" {
+		commitMsg = fmt.Sprintf("Squash merge %s", branch)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", commitMsg)
+	cmd.Dir = r.workdir
+	output, err = cmd.CombinedOutput()
+
+	if err != nil {
+		return fmt.Errorf("failed to commit squashed changes: %s", string(output))
 	}
 
 	return nil

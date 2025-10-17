@@ -46,15 +46,15 @@ hitch init [flags]
 1. Verifies current directory is a Git repository
 2. Creates `hitch-metadata` orphan branch
 3. Writes initial `hitch.json` with default configuration
-4. Pushes metadata branch to remote
-5. Optionally installs Git hooks
+4. Pushes metadata branch to remote (unless `--no-push` specified)
+5. Returns to your original branch
 
 **Flags:**
 - `--environments <list>` - Comma-separated list of environments (default: "dev,qa")
 - `--base <branch>` - Base branch name (default: "main")
-- `--install-hooks` - Install Git hooks (default: true)
 - `--retention-days <int>` - Days to keep branches after merge (default: 7)
 - `--stale-days <int>` - Days before warning about inactive branches (default: 30)
+- `--no-push` - Don't push hitch-metadata to remote (local only)
 
 **Example:**
 ```bash
@@ -64,17 +64,33 @@ hitch init
 # Initialize with custom environments
 hitch init --environments dev,staging,qa,prod --base main
 
-# Initialize without installing hooks
-hitch init --install-hooks=false
+# Initialize without pushing to remote
+hitch init --no-push
 ```
 
-**Output:**
+**Output (with default push):**
 ```
 ✓ Hitch initialized successfully
+✓ Pushed hitch-metadata to origin
 
 Environments configured: dev, qa
 Base branch: main
-Hooks installed: yes
+
+Next steps:
+  1. Create a feature branch: git checkout -b feature/my-feature
+  2. Promote to dev: hitch promote feature/my-feature to dev
+  3. Check status: hitch status
+```
+
+**Output (with --no-push):**
+```
+✓ Hitch initialized successfully
+ℹ Skipped push to remote (--no-push specified)
+To push later, run:
+  git push -u origin hitch-metadata
+
+Environments configured: dev, qa
+Base branch: main
 
 Next steps:
   1. Create a feature branch: git checkout -b feature/my-feature
@@ -154,7 +170,7 @@ hitch promote <branch> to <environment> [flags]
 2. Acquires lock on environment
 3. Adds branch to environment's feature list
 4. Rebuilds environment from base + all features (using safe temp branch)
-5. Force-pushes rebuilt environment branch
+5. Force-pushes rebuilt hitched branch
 6. Updates metadata
 7. Releases lock
 8. Returns you to your original branch
@@ -234,7 +250,7 @@ hitch demote <branch> from <environment> [flags]
 1. Acquires lock on environment
 2. Removes branch from environment's feature list
 3. Rebuilds environment without that branch
-4. Force-pushes rebuilt environment branch
+4. Force-pushes rebuilt hitched branch
 5. Updates metadata
 6. Releases lock
 
@@ -331,13 +347,13 @@ hitch rebuild <environment> [flags]
 2. Checks out fresh base branch (main)
 3. Creates temporary branch (e.g., `dev-hitch-temp`)
 4. Merges all features into temp branch
-5. **Only if ALL merges succeed:** swaps temp branch to become the new environment branch
-6. Force-pushes rebuilt environment branch
+5. **Only if ALL merges succeed:** swaps temp branch to become the new hitched branch
+6. Force-pushes rebuilt hitched branch
 7. Releases lock
 8. Returns you to your original branch
 
 **Safety (always enabled):**
-- Original environment branch is **never touched** until rebuild succeeds
+- Original hitched branch is **never touched** until rebuild succeeds
 - If ANY merge fails, temp branch is deleted and original is preserved
 - This is the ONLY way Hitch rebuilds - there is no "unsafe mode"
 
@@ -563,6 +579,8 @@ Lock duration: 5 minutes
 
 ### `hitch list`
 
+> **Coming Soon** - This command is planned for a future release.
+
 List all tracked branches and their status.
 
 ```bash
@@ -623,6 +641,8 @@ Total: 3 branches (2 active, 1 merged)
 ---
 
 ### `hitch config`
+
+> **Coming Soon** - This command is planned for a future release.
 
 View or modify Hitch configuration.
 
@@ -728,7 +748,7 @@ $ hitch hook pre-push
 **Output when warning:**
 ```bash
 $ hitch hook pre-push
-⚠️  Pushing directly to managed branch dev
+⚠️  Pushing directly to hitched branch dev
 This may be overwritten by: hitch rebuild dev
 # Exit code: 0 (allows push but warns)
 ```

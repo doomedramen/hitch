@@ -2,9 +2,66 @@
 
 **A Git workflow manager for multi-environment development teams**
 
-Hitch simplifies managing feature branches across multiple deployment environments (dev, qa, production) by treating integration branches as ephemeral, reconstructible artifacts rather than permanent branches with independent histories.
+Hitch simplifies managing feature branches across multiple deployment environments (dev, qa, production) by treating environment branches as **hitched branches** - ephemeral, reconstructible branches that are "hitched" to a specific feature list rather than having permanent independent histories.
 
-## The Problem
+## Installation
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap DoomedRamen/hitch
+brew install hitch
+```
+
+### curl (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DoomedRamen/hitch/main/install.sh | bash
+```
+
+### Go Install
+
+```bash
+go install github.com/DoomedRamen/hitch/cmd/hitch@latest
+```
+
+### Manual Download
+
+Download pre-built binaries from [GitHub Releases](https://github.com/DoomedRamen/hitch/releases/latest):
+
+```bash
+# macOS ARM64 (M1/M2/M3)
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_darwin_arm64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# macOS AMD64 (Intel)
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_darwin_amd64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# Linux AMD64
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_linux_amd64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# Linux ARM64
+curl -fsSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch_<version>_linux_arm64.tar.gz | tar -xz
+sudo mv hitch /usr/local/bin/
+
+# Windows AMD64
+# Download from releases page and add to PATH
+```
+
+### Build from Source
+
+```bash
+git clone https://github.com/DoomedRamen/hitch.git
+cd hitch
+go build -o hitch ./cmd/hitch
+sudo mv hitch /usr/local/bin/
+```
+
+## Overview
+
+### The Problem
 
 Traditional multi-environment Git workflows lead to:
 
@@ -14,7 +71,7 @@ Traditional multi-environment Git workflows lead to:
 - **Manual cherry-picking** to untangle mixed changes
 - **Periodic branch deletion** to reset environments and restore sanity
 
-### Example of the Mess
+**Example of the Mess:**
 
 ```
 Developer M: feature/xyz → dev → qa → main
@@ -22,21 +79,21 @@ Developer S: feature/abc → dev
 Developer R: feature/lmp (branched from old main, now out of sync!)
 ```
 
-After a few iterations, `dev` and `qa` have different histories than `main`, feature branches are stale, and the team resorts to deleting and recreating integration branches.
+After a few iterations, `dev` and `qa` have different histories than `main`, feature branches are stale, and the team resorts to deleting and recreating environment branches.
 
-## The Hitch Solution
+### The Hitch Solution
 
-Hitch treats `dev` and `qa` as **computed integration branches**:
+Hitch treats `dev` and `qa` as **hitched branches** - branches that are "hitched" to a specific feature list:
 
 ```
 qa = main + feature/xyz + feature/lmp + bug/473
 dev = main + feature/xus + feature/lmp + bug/473
 ```
 
-Key principles:
+**Key principles:**
 
 1. **`main` is the source of truth** - all feature branches originate from main
-2. **Integration branches are rebuilt** - `dev` and `qa` are reconstructed on-demand
+2. **Hitched branches are rebuilt** - `dev` and `qa` are reconstructed on-demand from their feature lists
 3. **Metadata tracks state** - a special `hitch-metadata` branch stores which features are in each environment
 4. **Automatic locking** - prevents concurrent modifications during rebuilds
 5. **Lifecycle management** - identifies and cleans up stale branches
@@ -49,20 +106,6 @@ Key principles:
 - 📊 **Status overview**: See which features are in each environment
 - 🎯 **Merge conflict detection**: Alerts when features conflict
 - 🪝 **Git hook integration**: Optional `hitch hook` commands for your existing hooks
-
-## Installation
-
-```bash
-# Download pre-built binary (coming soon)
-curl -sSL https://github.com/DoomedRamen/hitch/releases/latest/download/hitch-$(uname -s)-$(uname -m) -o /usr/local/bin/hitch
-chmod +x /usr/local/bin/hitch
-
-# Or build from source
-git clone https://github.com/DoomedRamen/hitch.git
-cd hitch
-go build -o hitch ./cmd/hitch
-mv hitch /usr/local/bin/
-```
 
 ## Quick Start
 
@@ -105,8 +148,6 @@ hitch cleanup
 - `hitch lock <env>` / `hitch unlock <env>` - Manual lock management
 - `hitch hook pre-push` - Git hook integration (optional)
 
-See [COMMANDS.md](./COMMANDS.md) for full reference and [HOOKS.md](./HOOKS.md) for hook integration.
-
 ## How It Works
 
 Hitch maintains a special `hitch-metadata` orphan branch containing:
@@ -148,7 +189,15 @@ When you run `hitch promote feature/xyz to qa`, Hitch:
 5. Updates metadata
 6. Unlocks the environment
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details.
+## Documentation
+
+- [COMMANDS.md](./COMMANDS.md) - Complete command reference
+- [HOOKS.md](./HOOKS.md) - Git hook integration guide
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Technical architecture details
+- [WORKFLOWS.md](./WORKFLOWS.md) - Common workflow patterns
+- [TERMINOLOGY.md](./TERMINOLOGY.md) - Glossary of Hitch terminology
+- [SAFETY.md](./SAFETY.md) - Safety mechanisms and best practices
+- [RELEASING.md](./RELEASING.md) - Release process for maintainers
 
 ## Why "Hitch"?
 

@@ -17,11 +17,8 @@ var (
 
 // rootCmd represents the base command
 var rootCmd = &cobra.Command{
-	Use:   "hitch",
-	Short: "Hitch - Git workflow manager for multi-environment development",
-	Long: `Hitch simplifies managing feature branches across multiple deployment environments
-(dev, qa, production) by treating integration branches as ephemeral, reconstructible
-artifacts rather than permanent branches with independent histories.`,
+	Use:     "hitch",
+	Short:   "Git workflow manager for multi-environment development",
 	Version: version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if noColor {

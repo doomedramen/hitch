@@ -15,6 +15,7 @@ var (
 	initBaseBranch   string
 	initRetentionDays int
 	initStaleDays    int
+	initNoPush       bool
 )
 
 var initCmd = &cobra.Command{
@@ -37,6 +38,7 @@ func init() {
 	initCmd.Flags().StringVar(&initBaseBranch, "base", "main", "Base branch name")
 	initCmd.Flags().IntVar(&initRetentionDays, "retention-days", 7, "Days to keep branches after merge")
 	initCmd.Flags().IntVar(&initStaleDays, "stale-days", 30, "Days before warning about inactive branches")
+	initCmd.Flags().BoolVar(&initNoPush, "no-push", false, "Don't push hitch-metadata to remote (local only)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -89,7 +91,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// 6. Create hitch-metadata orphan branch using git command
 	// Note: go-git doesn't handle orphan branches well, so we use exec
-	if err := createOrphanBranch(repo, userName, userEmail, meta); err != nil {
+	if err := createOrphanBranch(repo, userName, userEmail, meta, initNoPush); err != nil {
 		errorMsg("Failed to create hitch-metadata branch")
 		return err
 	}
@@ -108,7 +110,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 }
 
 // createOrphanBranch creates the hitch-metadata orphan branch using git commands
-func createOrphanBranch(repo *hitchgit.Repo, userName, userEmail string, meta *metadata.Metadata) error {
+func createOrphanBranch(repo *hitchgit.Repo, userName, userEmail string, meta *metadata.Metadata, noPush bool) error {
 	// Remember current branch
 	currentBranch, err := repo.CurrentBranch()
 	if err != nil {
@@ -139,15 +141,24 @@ func createOrphanBranch(repo *hitchgit.Repo, userName, userEmail string, meta *m
 		return fmt.Errorf("failed to write initial metadata: %w", err)
 	}
 
-	// Push to remote
-	cmd = exec.Command("git", "push", "-u", "origin", metadata.MetadataBranch)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		warning("Failed to push hitch-metadata branch to remote")
-		fmt.Println("You may need to push manually:")
+	// Push to remote (unless --no-push specified)
+	if !noPush {
+		cmd = exec.Command("git", "push", "-u", "origin", metadata.MetadataBranch)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			warning("Failed to push hitch-metadata branch to remote")
+			fmt.Println("You may need to push manually:")
+			fmt.Printf("  git push -u origin %s\n", metadata.MetadataBranch)
+			fmt.Println()
+			fmt.Println("Error:", string(output))
+			// Don't fail, local init succeeded
+		} else {
+			success("Pushed hitch-metadata to origin")
+		}
+	} else {
+		info("Skipped push to remote (--no-push specified)")
+		fmt.Println("To push later, run:")
 		fmt.Printf("  git push -u origin %s\n", metadata.MetadataBranch)
 		fmt.Println()
-		fmt.Println("Error:", string(output))
-		// Don't fail, local init succeeded
 	}
 
 	// Return to original branch
