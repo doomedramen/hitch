@@ -379,12 +379,12 @@ func ValidateCleanState() error {
         }
     }
 
-    // 3. Check environment branches
+    // 3. Check hitched branches
     for _, env := range config.Environments {
         if git.BranchExists(env) && git.HasUncommittedChanges(env) {
             return Error{
                 Message: fmt.Sprintf("%s branch has uncommitted changes", env),
-                Details: "Direct commits to managed branches are not allowed",
+                Details: "Direct commits to hitched branches are not allowed",
             }
         }
     }
@@ -404,7 +404,7 @@ $ hitch promote feature/xyz to dev
 Error: dev branch has uncommitted changes
 
 The dev branch has uncommitted changes. This suggests someone
-committed directly to the managed branch, which breaks Hitch's workflow.
+committed directly to the hitched branch, which breaks Hitch's workflow.
 
 To preserve these changes:
   1. git checkout dev
@@ -604,7 +604,7 @@ To wait: retry this command in a few minutes
 
 ### Guarantee
 
-**Hitch-installed hooks prevent direct commits to managed branches.**
+**Hitch-installed hooks prevent direct commits to hitched branches.**
 
 ### Pre-Push Hook
 
@@ -614,7 +614,7 @@ To wait: retry this command in a few minutes
 
 current_branch=$(git rev-parse --abbrev-ref HEAD)
 
-# Check if pushing to managed branch
+# Check if pushing to hitched branch
 if [[ "$current_branch" == "dev" ]] || [[ "$current_branch" == "qa" ]]; then
     echo "ERROR: Direct commits to $current_branch are not allowed"
     echo ""
@@ -747,4 +747,4 @@ hitch init --force
 # Then manually re-promote features to environments
 ```
 
-**Remember:** Feature branches and `main` are never touched by Hitch. The worst case is rebuilding environment branches, which is always possible.
+**Remember:** Feature branches and `main` are never touched by Hitch. The worst case is rebuilding hitched branches, which is always possible.

@@ -22,7 +22,7 @@ This command:
 2. Acquires lock on environment
 3. Adds branch to environment's feature list
 4. Rebuilds environment from base + all features (using safe temp branch)
-5. Force-pushes rebuilt environment branch
+5. Force-pushes rebuilt hitched branch
 6. Updates metadata
 7. Releases lock
 8. Returns you to your original branch

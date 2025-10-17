@@ -154,7 +154,7 @@ hitch promote <branch> to <environment> [flags]
 2. Acquires lock on environment
 3. Adds branch to environment's feature list
 4. Rebuilds environment from base + all features (using safe temp branch)
-5. Force-pushes rebuilt environment branch
+5. Force-pushes rebuilt hitched branch
 6. Updates metadata
 7. Releases lock
 8. Returns you to your original branch
@@ -234,7 +234,7 @@ hitch demote <branch> from <environment> [flags]
 1. Acquires lock on environment
 2. Removes branch from environment's feature list
 3. Rebuilds environment without that branch
-4. Force-pushes rebuilt environment branch
+4. Force-pushes rebuilt hitched branch
 5. Updates metadata
 6. Releases lock
 
@@ -331,13 +331,13 @@ hitch rebuild <environment> [flags]
 2. Checks out fresh base branch (main)
 3. Creates temporary branch (e.g., `dev-hitch-temp`)
 4. Merges all features into temp branch
-5. **Only if ALL merges succeed:** swaps temp branch to become the new environment branch
-6. Force-pushes rebuilt environment branch
+5. **Only if ALL merges succeed:** swaps temp branch to become the new hitched branch
+6. Force-pushes rebuilt hitched branch
 7. Releases lock
 8. Returns you to your original branch
 
 **Safety (always enabled):**
-- Original environment branch is **never touched** until rebuild succeeds
+- Original hitched branch is **never touched** until rebuild succeeds
 - If ANY merge fails, temp branch is deleted and original is preserved
 - This is the ONLY way Hitch rebuilds - there is no "unsafe mode"
 
@@ -728,7 +728,7 @@ $ hitch hook pre-push
 **Output when warning:**
 ```bash
 $ hitch hook pre-push
-⚠️  Pushing directly to managed branch dev
+⚠️  Pushing directly to hitched branch dev
 This may be overwritten by: hitch rebuild dev
 # Exit code: 0 (allows push but warns)
 ```

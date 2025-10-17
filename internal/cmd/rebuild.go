@@ -24,13 +24,13 @@ This command:
 2. Checks out fresh base branch (main)
 3. Creates temporary branch for safety
 4. Merges all features into temp branch
-5. Only if ALL merges succeed: swaps temp branch to become the new environment branch
-6. Force-pushes rebuilt environment branch
+5. Only if ALL merges succeed: swaps temp branch to become the new hitched branch
+6. Force-pushes rebuilt hitched branch
 7. Releases lock
 8. Returns you to your original branch
 
 Safety (always enabled):
-- Original environment branch is never touched until rebuild succeeds
+- Original hitched branch is never touched until rebuild succeeds
 - If ANY merge fails, temp branch is deleted and original is preserved`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRebuild,
@@ -222,7 +222,7 @@ func performRebuild(repo *hitchgit.Repo, envName string, env metadata.Environmen
 		return err
 	}
 
-	// Delete old environment branch
+	// Delete old hitched branch
 	if repo.BranchExists(envName) {
 		if err := repo.DeleteBranch(envName, true); err != nil {
 			warning(fmt.Sprintf("Failed to delete old %s branch: %v", envName, err))

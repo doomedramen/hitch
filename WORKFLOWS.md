@@ -734,5 +734,5 @@ promote-to-dev:
 
 - Use branch protection on `hitch-metadata`
 - Require pull requests for main branch
-- Use hooks to prevent direct commits to managed branches
+- Use hooks to prevent direct commits to hitched branches
 - Audit lock usage with `hitch status`

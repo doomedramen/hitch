@@ -21,7 +21,7 @@ This command:
 1. Acquires lock on environment
 2. Removes branch from environment's feature list
 3. Rebuilds environment without that branch
-4. Force-pushes rebuilt environment branch
+4. Force-pushes rebuilt hitched branch
 5. Updates metadata
 6. Releases lock`,
 	Args: cobra.ExactArgs(3), // branch, "from", environment

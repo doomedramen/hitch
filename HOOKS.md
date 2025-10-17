@@ -41,8 +41,8 @@ Wait for unlock or contact dev-m@example.com
 # If locked by you:
 # (silent, exits 0)
 
-# If not locked but is managed branch:
-⚠️  Pushing directly to managed branch dev
+# If not locked but is hitched branch:
+⚠️  Pushing directly to hitched branch dev
 This may be overwritten by: hitch rebuild dev
 
 # Exit code: 0 (with warning)
@@ -286,10 +286,10 @@ echo $?
 # Should print 0 (pass) or 1 (fail)
 ```
 
-**Check if on a managed branch:**
+**Check if on a hitched branch:**
 ```bash
 git branch
-# * dev  ← Should show managed branch
+# * dev  ← Should show hitched branch
 
 hitch status
 # Should show dev as an environment
@@ -314,7 +314,7 @@ Hitch can provide additional hook commands in the future:
 ### `hitch hook pre-commit` (Future)
 
 Could check for:
-- Direct commits to managed branches
+- Direct commits to hitched branches
 - Large files being committed to hitch-metadata
 - Invalid metadata format
 

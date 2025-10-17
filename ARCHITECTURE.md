@@ -25,9 +25,9 @@ Hitch uses a special Git branch called `hitch-metadata` to store state. This bra
 - ✅ Isolated from working branches (won't appear in merge conflicts)
 - ✅ Can be accessed from any branch
 
-### 2. Ephemeral Integration Branches
+### 2. Hitched Branches
 
-`dev` and `qa` are **rebuilt** rather than merged into:
+`dev` and `qa` are **hitched branches** - they are "hitched" to a specific feature list and **rebuilt** rather than merged into:
 
 ```
 Traditional approach (problematic):
@@ -43,7 +43,7 @@ qa = fresh main + [feature/a, feature/b]
 main = source of truth
 ```
 
-Integration branches are **force-pushed** after every rebuild. This means:
+Hitched branches are **force-pushed** after every rebuild. This means:
 - ⚠️ Never commit directly to `dev` or `qa`
 - ⚠️ Never make feature branches from `dev` or `qa`
 - ✅ Always branch from `main`
@@ -120,7 +120,7 @@ hitch/
 │   │   ├── merge.go             # Merge operations
 │   │   └── remote.go            # Push/pull operations
 │   ├── environment/
-│   │   ├── builder.go           # Rebuild environment branches
+│   │   ├── builder.go           # Rebuild hitched branches
 │   │   ├── promote.go           # Promote feature to environment
 │   │   └── demote.go            # Remove feature from environment
 │   ├── release/
@@ -207,9 +207,9 @@ func ExecuteCommand() error {
 
 ### 3. Safe Environment Rebuilding with Temp Branches
 
-**CRITICAL: This is the DEFAULT and ONLY way Hitch rebuilds environments.**
+**CRITICAL: This is the DEFAULT and ONLY way Hitch rebuilds hitched branches.**
 
-Every rebuild uses a temporary branch to ensure the original environment stays intact until success:
+Every rebuild uses a temporary branch to ensure the original hitched branch stays intact until success:
 
 ```go
 func RebuildEnvironment(env string) error {
@@ -263,7 +263,7 @@ func RebuildEnvironment(env string) error {
 ```
 
 **Safety features:**
-- ✅ Original `dev`/`qa` branch untouched until rebuild succeeds
+- ✅ Original hitched branch (`dev`/`qa`) untouched until rebuild succeeds
 - ✅ If ANY merge fails, temp is deleted, original preserved
 - ✅ Temp branch can be inspected if needed for debugging
 - ✅ `--force-with-lease` prevents overwriting remote changes
@@ -465,7 +465,7 @@ Run: hitch unlock qa --force
 
 ## Security Considerations
 
-- **Force push**: Integration branches are force-pushed. Prevent accidental work loss via:
+- **Force push**: Hitched branches are force-pushed. Prevent accidental work loss via:
   - Clear documentation
   - Git hooks that warn on direct commits
   - Branch protection rules on server

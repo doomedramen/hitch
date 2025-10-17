@@ -2,7 +2,7 @@
 
 **A Git workflow manager for multi-environment development teams**
 
-Hitch simplifies managing feature branches across multiple deployment environments (dev, qa, production) by treating integration branches as ephemeral, reconstructible artifacts rather than permanent branches with independent histories.
+Hitch simplifies managing feature branches across multiple deployment environments (dev, qa, production) by treating environment branches as **hitched branches** - ephemeral, reconstructible branches that are "hitched" to a specific feature list rather than having permanent independent histories.
 
 ## The Problem
 
@@ -22,11 +22,11 @@ Developer S: feature/abc → dev
 Developer R: feature/lmp (branched from old main, now out of sync!)
 ```
 
-After a few iterations, `dev` and `qa` have different histories than `main`, feature branches are stale, and the team resorts to deleting and recreating integration branches.
+After a few iterations, `dev` and `qa` have different histories than `main`, feature branches are stale, and the team resorts to deleting and recreating environment branches.
 
 ## The Hitch Solution
 
-Hitch treats `dev` and `qa` as **computed integration branches**:
+Hitch treats `dev` and `qa` as **hitched branches** - branches that are "hitched" to a specific feature list:
 
 ```
 qa = main + feature/xyz + feature/lmp + bug/473
@@ -36,7 +36,7 @@ dev = main + feature/xus + feature/lmp + bug/473
 Key principles:
 
 1. **`main` is the source of truth** - all feature branches originate from main
-2. **Integration branches are rebuilt** - `dev` and `qa` are reconstructed on-demand
+2. **Hitched branches are rebuilt** - `dev` and `qa` are reconstructed on-demand from their feature lists
 3. **Metadata tracks state** - a special `hitch-metadata` branch stores which features are in each environment
 4. **Automatic locking** - prevents concurrent modifications during rebuilds
 5. **Lifecycle management** - identifies and cleans up stale branches

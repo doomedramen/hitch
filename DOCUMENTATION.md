@@ -104,7 +104,7 @@ Complete reference for the Hitch project.
 ### ARCHITECTURE.md
 **Purpose**: Technical design documentation
 **Contents**:
-- Core concepts (metadata branch, ephemeral integration branches, locking)
+- Core concepts (metadata branch, ephemeral hitched branches, locking)
 - Safety guarantees (always return to original branch, temp branches, clean state validation)
 - Data model and Git operations
 - Key algorithms (rebuild, promote, stale detection)
@@ -232,7 +232,7 @@ hitch cleanup                       # Delete stale branches
 
 ### Essential Concepts
 
-- **Environments**: Ephemeral integration branches (dev, qa)
+- **Environments**: Ephemeral hitched branches (dev, qa)
 - **Features**: Your actual work branches
 - **Metadata**: State stored in `hitch-metadata` branch
 - **Locking**: Prevents concurrent modifications
