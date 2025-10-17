@@ -279,6 +279,17 @@ func (r *Repo) DeleteBranch(name string, force bool) error {
 	return nil
 }
 
+// DeleteRemoteBranch deletes a branch from remote
+func (r *Repo) DeleteRemoteBranch(remoteName string, branchName string) error {
+	cmd := exec.Command("git", "push", remoteName, "--delete", branchName)
+	cmd.Dir = r.workdir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to delete remote branch %s: %s", branchName, string(output))
+	}
+	return nil
+}
+
 // Merge merges a branch into the current branch
 // Note: This uses git command as go-git's merge support is limited
 func (r *Repo) Merge(branch string, noFF bool) error {
