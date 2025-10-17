@@ -37,5 +37,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Note: GITHUB_TOKEN has permissions to push to homebrew branch in same repo
-          # If using separate tap repo, add: HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # GoReleaser will use HOMEBREW_TAP_GITHUB_TOKEN for pushing to homebrew-hitch repo
+          # Create a PAT with repo scope at https://github.com/settings/tokens/new
+          # Add it as HOMEBREW_TAP_TOKEN secret in repository settings
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
