@@ -28,14 +28,15 @@ func OpenRepo(path string) (*Repo, error) {
 		return nil, fmt.Errorf("not a git repository (or any parent): %w", err)
 	}
 
-	workdir, err := os.Getwd()
+	// Get the worktree path from go-git
+	worktree, err := repo.Worktree()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get working directory: %w", err)
+		return nil, fmt.Errorf("failed to get worktree: %w", err)
 	}
 
 	return &Repo{
 		Repository: repo,
-		workdir:    workdir,
+		workdir:    worktree.Filesystem.Root(),
 	}, nil
 }
 

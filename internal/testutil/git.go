@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	hitchgit "github.com/DoomedRamen/hitch/internal/git"
@@ -28,8 +29,8 @@ func NewTestRepo(t *testing.T) *TestRepo {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	// Initialize Git repository
-	cmd := exec.Command("git", "init")
+	// Initialize Git repository with main as default branch
+	cmd := exec.Command("git", "init", "--initial-branch=main")
 	cmd.Dir = tmpDir
 	if err := cmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
@@ -100,7 +101,9 @@ func (tr *TestRepo) CreateBranch(name string, createCommit bool) error {
 		}
 
 		// Create a file and commit it
-		filePath := filepath.Join(tr.Path, name+".txt")
+		// Replace slashes in branch name to avoid directory issues
+		fileName := strings.ReplaceAll(name, "/", "-") + ".txt"
+		filePath := filepath.Join(tr.Path, fileName)
 		if err := os.WriteFile(filePath, []byte("test content"), 0644); err != nil {
 			return err
 		}
