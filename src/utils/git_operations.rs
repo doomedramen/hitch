@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use colored::*;
-use git2::{ObjectType, Oid, Repository};
+use chrono::{DateTime, Utc};
+use git2::Repository;
 use std::process::Command;
 
 pub struct GitOperations {
@@ -202,5 +202,62 @@ impl GitOperations {
 
         let email = String::from_utf8(output.stdout).context("Failed to parse user email")?;
         Ok(email.trim().to_string())
+    }
+
+    /// Get the latest commit SHA for a branch
+    pub fn get_branch_commit_sha(&self, branch: &str) -> Result<String> {
+        let output = Command::new("git")
+            .args(&["rev-parse", &format!("refs/heads/{}", branch)])
+            .output()
+            .context(format!("Failed to get commit SHA for branch '{}'", branch))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Branch '{}' does not exist or is not accessible: {}",
+                branch,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let sha = String::from_utf8(output.stdout).context("Failed to parse commit SHA")?;
+        Ok(sha.trim().to_string())
+    }
+
+    /// Get the timestamp for a commit
+    pub fn get_commit_timestamp(&self, sha: &str) -> Result<DateTime<Utc>> {
+        let output = Command::new("git")
+            .args(&["show", "-s", "--format=%ct", sha])
+            .output()
+            .context(format!("Failed to get timestamp for commit '{}'", sha))?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to get timestamp for commit '{}': {}",
+                sha,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let timestamp_str = String::from_utf8(output.stdout).context("Failed to parse timestamp")?;
+        let timestamp_i64: i64 = timestamp_str.trim().parse()
+            .context("Failed to parse timestamp as integer")?;
+
+        Ok(DateTime::from_timestamp(timestamp_i64, 0).unwrap_or_else(|| Utc::now()))
+    }
+
+    /// Check if a branch exists (local or remote)
+    pub fn branch_exists_anywhere(&self, branch: &str) -> Result<bool> {
+        // Check local first
+        if self.branch_exists(branch)? {
+            return Ok(true);
+        }
+
+        // Check remote
+        let output = Command::new("git")
+            .args(&["ls-remote", "--heads", "origin", branch])
+            .output()
+            .context("Failed to check remote branches")?;
+
+        Ok(output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 }

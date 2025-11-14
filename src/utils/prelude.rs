@@ -1,7 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
 use anyhow::{Context, Result};
-use colored::*;
 
 /// Reusable pre-check function for all commands
 ///
