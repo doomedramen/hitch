@@ -211,6 +211,8 @@ access_metadata(Some(|metadata| {
 - Example: `hitch status`
 - Call `access_metadata(None)`
 - Display formatted environment information: name, source, branches, locked state, lockedBy, lockedAt, rebuiltAt.
+- should also let us know if there are any environments that need to be rebuilt due to there being changes in one of their branches since the last build.
+  _note_ we might need to (instead of access_metadata()) just make sure hitch-metadata is up to date and git show hitch-metadata:hitch.json as ideally the 'status' command would work even with unclean git state.
 
 ---
 

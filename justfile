@@ -66,8 +66,18 @@ test-coverage:
     @echo "🧪 Running tests with coverage..."
     @command -v cargo-tarpaulin >/dev/null 2>&1 || \
         (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
-    cargo tarpaulin --out Html
-    @echo "✅ Coverage report generated in tarpaulin-report.html"
+    cargo tarpaulin --out Stdout
+    @echo ""
+    @echo "✅ Coverage report completed"
+
+# Generate detailed coverage report in text files
+test-coverage-detailed:
+    @echo "🧪 Running tests with detailed coverage..."
+    @command -v cargo-tarpaulin >/dev/null 2>&1 || \
+        (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
+    cargo tarpaulin --out Json --output-dir coverage/
+    cargo tarpaulin --out Xml --output-dir coverage/
+    @echo "✅ Detailed coverage reports generated in coverage/ directory"
 
 # Clean build artifacts
 clean:
