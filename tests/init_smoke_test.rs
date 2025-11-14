@@ -2,7 +2,8 @@ use anyhow::Result;
 use std::process::Command;
 
 #[test]
-fn test_basic_init() -> Result<()> {
+fn test_init_smoke_test() -> Result<()> {
+    // Create a temporary directory for our test
     let temp_dir = tempfile::tempdir()?;
 
     // Initialize git repo
@@ -37,17 +38,18 @@ fn test_basic_init() -> Result<()> {
     // Get the path to our hitch binary
     let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
 
-    // Run hitch init with --no-push to avoid remote warnings
+    // Run hitch init
     let output = Command::new(&hitch_path)
-        .args(&["init", "--no-push"])
+        .args(&["init"])
         .current_dir(&temp_dir)
         .output()?;
-
-    assert!(output.status.success(), "hitch init should succeed");
 
     let stdout = String::from_utf8(output.stdout)?;
     let stderr = String::from_utf8(output.stderr)?;
     let full_output = format!("{}{}", stdout, stderr);
+
+    // Check that init succeeded
+    assert!(output.status.success(), "hitch init should succeed");
 
     // Check for success message
     assert!(
@@ -67,6 +69,37 @@ fn test_basic_init() -> Result<()> {
         branches.contains("hitch-metadata"),
         "hitch-metadata branch should exist. Got branches: {}",
         branches
+    );
+
+    // Check that .gitignore and hitch.json files exist in hitch-metadata branch
+    Command::new("git")
+        .args(&["checkout", "hitch-metadata"])
+        .current_dir(&temp_dir)
+        .output()?;
+
+    assert!(
+        temp_dir.path().join(".gitignore").exists(),
+        ".gitignore should exist in hitch-metadata branch"
+    );
+
+    assert!(
+        temp_dir.path().join("hitch.json").exists(),
+        "hitch.json should exist in hitch-metadata branch"
+    );
+
+    // Check .gitignore content
+    let gitignore_content = std::fs::read_to_string(temp_dir.path().join(".gitignore"))?;
+    assert!(
+        gitignore_content.contains("*"),
+        "gitignore should ignore all files"
+    );
+    assert!(
+        gitignore_content.contains("!.gitignore"),
+        "gitignore should keep .gitignore"
+    );
+    assert!(
+        gitignore_content.contains("!hitch.json"),
+        "gitignore should keep hitch.json"
     );
 
     Ok(())

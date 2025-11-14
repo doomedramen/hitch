@@ -1,12 +1,12 @@
 pub mod global_context;
 
-pub mod init;
 pub mod add;
-pub mod remove;
-pub mod promote;
 pub mod demote;
-pub mod rebuild;
-pub mod status;
-pub mod lock;
-pub mod unlock;
 pub mod guard;
+pub mod init;
+pub mod lock;
+pub mod promote;
+pub mod rebuild;
+pub mod remove;
+pub mod status;
+pub mod unlock;

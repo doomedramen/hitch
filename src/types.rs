@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Environment configuration as defined in hitch.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +93,8 @@ impl HitchConfig {
     }
 
     pub fn add_environment(&mut self, environment: Environment) {
-        self.environments.insert(environment.name.clone(), environment);
+        self.environments
+            .insert(environment.name.clone(), environment);
     }
 
     pub fn remove_environment(&mut self, name: &str) {

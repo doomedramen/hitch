@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::utils::git_operations::GitOperations;
 use colored::*;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct GlobalContext {

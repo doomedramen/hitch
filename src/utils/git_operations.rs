@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use colored::*;
-use git2::{Repository, ObjectType, Oid};
+use git2::{ObjectType, Oid, Repository};
 use std::process::Command;
 
 pub struct GitOperations {
@@ -9,8 +9,7 @@ pub struct GitOperations {
 
 impl GitOperations {
     pub fn new() -> Result<Self> {
-        let repo = Repository::discover(".")
-            .context("Not in a git repository")?;
+        let repo = Repository::discover(".").context("Not in a git repository")?;
         Ok(GitOperations { repo })
     }
 
@@ -30,8 +29,10 @@ impl GitOperations {
                 Err(anyhow::anyhow!("Not currently on any branch"))
             }
         } else {
-            Err(anyhow::anyhow!("Failed to get current branch: {}",
-                String::from_utf8_lossy(&output.stderr)))
+            Err(anyhow::anyhow!(
+                "Failed to get current branch: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 
@@ -112,7 +113,10 @@ impl GitOperations {
         let output = Command::new("git")
             .args(&["show", &format!("{}:{}", branch, file)])
             .output()
-            .context(format!("Failed to read '{}' from branch '{}'", file, branch))?;
+            .context(format!(
+                "Failed to read '{}' from branch '{}'",
+                file, branch
+            ))?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -122,15 +126,13 @@ impl GitOperations {
             ));
         }
 
-        let content = String::from_utf8(output.stdout)
-            .context("Failed to parse file content")?;
+        let content = String::from_utf8(output.stdout).context("Failed to parse file content")?;
 
         Ok(content)
     }
 
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
-        std::fs::write(file, content)
-            .context(format!("Failed to write file '{}'", file))?;
+        std::fs::write(file, content).context(format!("Failed to write file '{}'", file))?;
         Ok(())
     }
 
@@ -143,7 +145,9 @@ impl GitOperations {
         if !output.status.success() {
             // Don't fail if fetch fails (might not exist remotely)
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.contains("couldn't find remote ref") && !stderr.contains("no such remote ref") {
+            if !stderr.contains("couldn't find remote ref")
+                && !stderr.contains("no such remote ref")
+            {
                 return Err(anyhow::anyhow!("Fetch failed: {}", stderr));
             }
         }
@@ -196,8 +200,7 @@ impl GitOperations {
             return Err(anyhow::anyhow!("Git user.email not configured"));
         }
 
-        let email = String::from_utf8(output.stdout)
-            .context("Failed to parse user email")?;
+        let email = String::from_utf8(output.stdout).context("Failed to parse user email")?;
         Ok(email.trim().to_string())
     }
 }

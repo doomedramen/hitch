@@ -1,5 +1,5 @@
-use clap::Args;
 use crate::commands::global_context::GlobalContext;
+use clap::Args;
 
 #[derive(Args)]
 pub struct RemoveCommand {
@@ -9,7 +9,10 @@ pub struct RemoveCommand {
     pub force: bool,
 }
 
-pub fn run(_args: RemoveCommand, _context: &GlobalContext) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    _args: RemoveCommand,
+    _context: &GlobalContext,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Remove command not yet implemented");
     Ok(())
 }

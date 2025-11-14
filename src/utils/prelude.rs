@@ -1,7 +1,7 @@
-use anyhow::{Result, Context};
-use colored::*;
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
+use anyhow::{Context, Result};
+use colored::*;
 
 /// Reusable pre-check function for all commands
 ///
@@ -42,11 +42,7 @@ pub fn pre_check(context: &GlobalContext) -> Result<()> {
 /// - Checkout target branch
 /// - Execute the provided closure while on the target branch
 /// - Always attempt to switch back to the original branch after the closure runs, even if it fails
-pub fn switch_to<F, R>(
-    context: &GlobalContext,
-    target_branch: &str,
-    closure: F,
-) -> Result<R>
+pub fn switch_to<F, R>(context: &GlobalContext, target_branch: &str, closure: F) -> Result<R>
 where
     F: FnOnce() -> Result<R>,
 {
@@ -64,12 +60,21 @@ where
     let result = closure();
 
     // Always attempt to switch back to original branch
-    context.log_verbose(&format!("Switching back to original branch: {}", original_branch));
+    context.log_verbose(&format!(
+        "Switching back to original branch: {}",
+        original_branch
+    ));
     if let Err(e) = context.git().checkout_branch(&original_branch) {
-        context.log_error(&format!("Failed to return to original branch '{}': {}", original_branch, e));
+        context.log_error(&format!(
+            "Failed to return to original branch '{}': {}",
+            original_branch, e
+        ));
         context.log_warning("You may need to manually switch back to your original branch");
     } else {
-        context.log_verbose(&format!("Successfully returned to original branch: {}", original_branch));
+        context.log_verbose(&format!(
+            "Successfully returned to original branch: {}",
+            original_branch
+        ));
     }
 
     result
@@ -91,26 +96,41 @@ where
 {
     context.log_verbose("Accessing hitch metadata...");
 
-    // Fetch latest hitch-metadata from remote
-    context.log_verbose("Fetching latest hitch-metadata from remote...");
-    if let Err(e) = context.git().fetch_branch("hitch-metadata") {
-        context.log_warning(&format!("Failed to fetch hitch-metadata from remote: {}", e));
-        context.log_warning("Continuing with local metadata...");
+    // Check if we're already on hitch-metadata branch (for init case)
+    let current_branch = context.git().get_current_branch();
+    let already_on_metadata_branch =
+        current_branch.is_ok() && current_branch.unwrap() == "hitch-metadata";
+
+    if !already_on_metadata_branch {
+        // Fetch latest hitch-metadata from remote
+        context.log_verbose("Fetching latest hitch-metadata from remote...");
+        if let Err(e) = context.git().fetch_branch("hitch-metadata") {
+            context.log_warning(&format!(
+                "Failed to fetch hitch-metadata from remote: {}",
+                e
+            ));
+            context.log_warning("Continuing with local metadata...");
+        }
     }
 
-    switch_to(context, "hitch-metadata", || {
+    let modification_closure = || {
         // Load and parse hitch.json
         context.log_verbose("Loading hitch.json...");
-        let config_json = context.git().read_file_from_branch("hitch-metadata", "hitch.json")
+        let config_json = context
+            .git()
+            .read_file_from_branch("hitch-metadata", "hitch.json")
             .unwrap_or_else(|e| {
                 // If file doesn't exist, create default config
-                context.log_info(&format!("hitch.json not found or unreadable ({}), creating default configuration", e));
+                context.log_info(&format!(
+                    "hitch.json not found or unreadable ({}), creating default configuration",
+                    e
+                ));
                 let default_config = HitchConfig::new();
                 serde_json::to_string_pretty(&default_config).unwrap()
             });
 
-        let mut config: HitchConfig = serde_json::from_str(&config_json)
-            .context("Failed to parse hitch.json")?;
+        let mut config: HitchConfig =
+            serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
 
         context.log_verbose("✓ hitch.json loaded successfully");
 
@@ -120,11 +140,15 @@ where
 
         // Write updated config
         context.log_verbose("Writing updated hitch.json...");
-        context.git().write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        context
+            .git()
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
 
         // Commit changes
         context.log_verbose("Committing metadata changes...");
-        context.git().add_and_commit(&["hitch.json"], "Update hitch configuration")?;
+        context
+            .git()
+            .add_and_commit(&["hitch.json"], "Update hitch configuration")?;
 
         // Optionally push
         if context.should_push() {
@@ -139,7 +163,14 @@ where
         }
 
         Ok(())
-    })
+    };
+
+    if already_on_metadata_branch {
+        context.log_verbose("Already on hitch-metadata branch, proceeding with metadata access...");
+        modification_closure()
+    } else {
+        switch_to(context, "hitch-metadata", modification_closure)
+    }
 }
 
 /// Execute operations within a locked environment context
@@ -148,11 +179,7 @@ where
 /// - Calls lock(env_name) → executes closure → calls unlock(env_name) even if closure fails
 /// - Ensures environment is safely locked during modifications
 /// - Automatically handles warnings if push fails
-pub fn with_locked_env<F, R>(
-    context: &GlobalContext,
-    env_name: &str,
-    closure: F,
-) -> Result<R>
+pub fn with_locked_env<F, R>(context: &GlobalContext, env_name: &str, closure: F) -> Result<R>
 where
     F: FnOnce() -> Result<R>,
 {
@@ -167,10 +194,16 @@ where
     // Always unlock the environment, even if closure failed
     context.log_verbose(&format!("Unlocking environment '{}'...", env_name));
     if let Err(e) = unlock_environment(context, env_name) {
-        context.log_warning(&format!("Failed to unlock environment '{}': {}", env_name, e));
+        context.log_warning(&format!(
+            "Failed to unlock environment '{}': {}",
+            env_name, e
+        ));
         context.log_warning("You may need to manually unlock the environment");
     } else {
-        context.log_verbose(&format!("✓ Environment '{}' unlocked successfully", env_name));
+        context.log_verbose(&format!(
+            "✓ Environment '{}' unlocked successfully",
+            env_name
+        ));
     }
 
     result
@@ -179,21 +212,28 @@ where
 /// Lock an environment
 fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
     access_metadata(context, |config: &mut HitchConfig| {
-        let environment = config.get_environment_mut(env_name)
+        let environment = config
+            .get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
 
         if environment.is_locked() {
             return Err(anyhow::anyhow!(
                 "Environment '{}' is already locked by {}",
                 env_name,
-                environment.locked_by.as_ref().unwrap_or(&"unknown".to_string())
+                environment
+                    .locked_by
+                    .as_ref()
+                    .unwrap_or(&"unknown".to_string())
             ));
         }
 
         let user_email = context.git().get_user_email()?;
         environment.lock(user_email.clone());
 
-        context.log_info(&format!("Environment '{}' locked by {}", env_name, user_email));
+        context.log_info(&format!(
+            "Environment '{}' locked by {}",
+            env_name, user_email
+        ));
         Ok(())
     })
 }
@@ -201,7 +241,8 @@ fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
 /// Unlock an environment
 fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
     access_metadata(context, |config: &mut HitchConfig| {
-        let environment = config.get_environment_mut(env_name)
+        let environment = config
+            .get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
 
         if !environment.is_locked() {

@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 
+mod commands;
 mod types;
 mod utils;
-mod commands;
 
 use commands::global_context::GlobalContext;
 
