@@ -79,17 +79,57 @@ where
     result
 }
 
-/// Access metadata from hitch-metadata branch with optional modification
+/// Read-only access to hitch metadata without branch switching
+///
+/// According to the specification (status command note):
+/// - Make sure hitch-metadata is up to date (fetch)
+/// - Use git show hitch-metadata:hitch.json to read metadata
+/// - Works even with unclean git states
+/// - No branch switching required
+/// - Cannot modify metadata
+pub fn access_metadata_read_only<F, R>(context: &GlobalContext, closure: F) -> Result<R>
+where
+    F: FnOnce(&HitchConfig) -> Result<R>,
+{
+    context.log_verbose("Reading hitch metadata (read-only)...");
+
+    // Make sure hitch-metadata is up to date
+    context.log_verbose("Ensuring hitch-metadata is up to date...");
+    if let Err(e) = context.git().fetch_branch("hitch-metadata") {
+        context.log_warning(&format!(
+            "Failed to fetch hitch-metadata from remote: {}",
+            e
+        ));
+        context.log_warning("Continuing with local metadata...");
+    }
+
+    // Read hitch.json using git show (no branch switching needed)
+    context.log_verbose("Reading hitch.json from hitch-metadata branch...");
+    let config_json = context
+        .git()
+        .read_file_from_branch("hitch-metadata", "hitch.json")
+        .context("Failed to read hitch.json from hitch-metadata branch")?;
+
+    // Parse configuration
+    let config: HitchConfig = serde_json::from_str(&config_json)
+        .context("Failed to parse hitch.json")?;
+
+    context.log_verbose("✓ hitch.json loaded successfully (read-only)");
+
+    // Execute user closure with read-only access
+    closure(&config)
+}
+
+/// Modify hitch metadata with automatic branch management
 ///
 /// According to the specification:
 /// - Fetch latest hitch-metadata from remote: git fetch origin hitch-metadata
 /// - Temporarily switch to the hitch-metadata branch using switch-to
 /// - Load and parse hitch.json
-/// - If a closure is provided, execute it with the metadata object (for modification)
-/// - Any changes should be committed and optionally pushed (warn if push fails or skip with --no-push)
-/// - Return metadata (updated if modified, or original if read-only)
+/// - Execute closure with mutable metadata object (for modification)
+/// - Commit and optionally push changes (warn if push fails or skip with --no-push)
 /// - Always switch back to the original branch afterward
-pub fn access_metadata<F>(context: &GlobalContext, closure: F) -> Result<()>
+pub fn modify_metadata<F>(context: &GlobalContext, closure: F) -> Result<()>
 where
     F: FnOnce(&mut HitchConfig) -> Result<()>,
 {
@@ -210,7 +250,7 @@ where
 
 /// Lock an environment
 fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    access_metadata(context, |config: &mut HitchConfig| {
+    modify_metadata(context, |config: &mut HitchConfig| {
         let environment = config
             .get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
@@ -239,7 +279,7 @@ fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
 
 /// Unlock an environment
 fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    access_metadata(context, |config: &mut HitchConfig| {
+    modify_metadata(context, |config: &mut HitchConfig| {
         let environment = config
             .get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;

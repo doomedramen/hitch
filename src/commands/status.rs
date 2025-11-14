@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
-use anyhow::{Context, Result};
+use crate::utils::prelude::access_metadata_read_only;
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Args;
 use colored::*;
@@ -22,34 +23,19 @@ pub fn run(
 
     context.log_verbose("Starting status command...");
 
-    // For status command, always use git show approach to avoid modifying metadata
-    // This ensures status works even with unclean working directories and doesn't create unnecessary commits
-    context.log_verbose("Using git show approach for read-only status access");
-    let (config, access_method) = get_metadata_via_git_show(&context)?;
+    // Use read-only metadata access - works with unclean git states and doesn't create unnecessary commits
+    context.log_verbose("Using read-only metadata access");
+    let config = access_metadata_read_only(&context, |config: &HitchConfig| {
+        Ok(config.clone()) // Return a copy for use in display
+    })?;
 
-    context.log_verbose(&format!("Successfully retrieved metadata using: {}", access_method));
+    context.log_verbose("Successfully retrieved metadata using read-only access");
 
     // Display status
     display_status(&context, &config)?;
 
     context.log_verbose("Status command completed successfully");
     Ok(())
-}
-
-
-/// Get metadata using git show (works with unclean working tree)
-fn get_metadata_via_git_show(context: &GlobalContext) -> Result<(HitchConfig, String)> {
-    context.log_verbose("Attempting to read hitch.json from hitch-metadata branch...");
-
-    let config_json = context
-        .git()
-        .read_file_from_branch("hitch-metadata", "hitch.json")
-        .context("Failed to read hitch.json from hitch-metadata branch")?;
-
-    let config: HitchConfig = serde_json::from_str(&config_json)
-        .context("Failed to parse hitch.json from hitch-metadata branch")?;
-
-    Ok((config, "git_show".to_string()))
 }
 
 /// Display formatted status information

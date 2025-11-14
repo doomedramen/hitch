@@ -248,7 +248,7 @@ fn test_switch_to_function() -> Result<()> {
 }
 
 #[test]
-fn test_access_metadata_function() -> Result<()> {
+fn test_modify_metadata_function() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
 
     // Initialize git repo

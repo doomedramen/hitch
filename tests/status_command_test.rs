@@ -122,16 +122,17 @@ fn test_status_basic_display() -> Result<()> {
     let clean_stdout = strip_ansi_codes(&stdout);
     let clean_output = format!("{}{}", clean_stdout, stderr);
 
+    
     assert!(output.status.success(), "status command should succeed");
 
     // Verify basic status display elements (using cleaned text without ANSI codes)
     assert!(clean_output.contains("Environments (2 total):"));
-    assert!(clean_output.contains("dev  (main)"));
-    assert!(clean_output.contains("staging  (main)"));
-    assert!(clean_output.contains("Branches: None"));
+    assert!(clean_output.contains("┌─ dev (main)"));
+    assert!(clean_output.contains("┌─ staging (main)"));
+    assert!(clean_output.contains("• No branches promoted"));
     assert!(clean_output.contains("feature/test"));
-    assert!(clean_output.contains("Last rebuild: Never"));
-    assert!(clean_output.contains("Last rebuild: 2025-01-14 10:00 UTC"));
+    assert!(clean_output.contains("• Never"));
+    assert!(clean_output.contains("• 2025-01-14 10:00 UTC"));
 
     Ok(())
 }
@@ -226,11 +227,11 @@ fn test_status_locked_environment() -> Result<()> {
 
     // Verify locked environment display
     assert!(clean_output.contains("Environments (1 total):"));
-    assert!(clean_output.contains("prod  (main)"));
+    assert!(clean_output.contains("┌─ prod (main)"));
     assert!(clean_output.contains("Locked by admin@example.com"));
     assert!(clean_output.contains("feature/login"));
     assert!(clean_output.contains("feature/ui"));
-    assert!(clean_output.contains("Last rebuild: Never"));
+    assert!(clean_output.contains("• Never"));
     assert!(clean_output.contains("Never rebuilt"));
 
     Ok(())
@@ -374,8 +375,8 @@ fn test_status_verbose_output() -> Result<()> {
 
     // Verify verbose output (verbose messages go to stdout)
     assert!(stdout.contains("Starting status command"));
-    assert!(stdout.contains("Using git show approach for read-only status access"));
-    assert!(stdout.contains("Successfully retrieved metadata using: git_show"));
+    assert!(stdout.contains("Using read-only metadata access"));
+    assert!(stdout.contains("Successfully retrieved metadata using read-only access"));
     assert!(stdout.contains("Status command completed successfully"));
 
     Ok(())
@@ -459,9 +460,9 @@ fn test_status_unclean_working_directory() -> Result<()> {
 
     let stdout = String::from_utf8(output.stdout)?;
 
-    // Verify it uses git show approach (status command always uses this)
-    assert!(stdout.contains("Using git show approach for read-only status access"));
-    assert!(stdout.contains("Successfully retrieved metadata using: git_show"));
+    // Verify it uses read-only approach (status command always uses this)
+    assert!(stdout.contains("Using read-only metadata access"));
+    assert!(stdout.contains("Successfully retrieved metadata using read-only access"));
 
     Ok(())
 }
@@ -653,8 +654,10 @@ fn test_status_environmental_sorting() -> Result<()> {
     let mut env_order = Vec::new();
 
     for line in lines {
-        if line.contains("  (main)") {
-            let env_name = line.split("  (main)").next().unwrap().trim();
+        if line.contains(" (main)") {
+            // Extract just the environment name (remove box characters and spaces)
+            let env_line = line.split(" (main)").next().unwrap().trim();
+            let env_name = env_line.replace("┌─ ", "");
             env_order.push(env_name);
         }
     }

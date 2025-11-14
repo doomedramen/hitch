@@ -1,6 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
-use crate::utils::prelude::{access_metadata, pre_check};
+use crate::utils::prelude::{modify_metadata, pre_check};
 use clap::Args;
 
 #[derive(Args)]
@@ -28,8 +28,8 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
     context.git().create_orphan_branch("hitch-metadata")?;
     context.log_verbose("✓ Created orphan hitch-metadata branch");
 
-    // Step 4: access_metadata() - Create hitch.json skeleton and .gitignore
-    access_metadata(context, |config: &mut HitchConfig| {
+    // Step 4: modify_metadata() - Create hitch.json skeleton and .gitignore
+    modify_metadata(context, |config: &mut HitchConfig| {
         // Remove all files/folders except .git (this is already done by create_orphan_branch)
         context.log_verbose("Cleaning hitch-metadata branch...");
 

@@ -14,32 +14,38 @@
 - Ensure the current directory is a Git repository.
 - Ensure the working tree is clean (no unstaged or uncommitted changes).
 
-### access_metadata(closure = null)
+### access_metadata_read_only(closure)
+
+- Make sure `hitch-metadata` is up to date: `git fetch origin hitch-metadata`.
+- Use `git show hitch-metadata:hitch.json` to read metadata without branch switching.
+- Parse `hitch.json`.
+- Execute the provided closure with the metadata object.
+- Works even with unclean git states and doesn't create unnecessary commits.
+
+**Usage Example:**
+
+```rust
+let config = access_metadata_read_only(&context, |config: &HitchConfig| {
+    Ok(config.clone()) // Return a copy for use in display
+})?;
+```
+
+### modify_metadata(closure)
 
 - Fetch latest `hitch-metadata` from remote: `git fetch origin hitch-metadata`.
 - Temporarily switch to the `hitch-metadata` branch using `switch-to`.
 - Load and parse `hitch.json`.
-- If a closure is provided, execute it with the metadata object (for modification).
-  - Any changes should be committed and optionally pushed (warn if push fails or skip with `--no-push`).
-- Return metadata (updated if modified, or original if read-only).
+- Execute the provided closure with the metadata object (for modification).
+- Commit and optionally push metadata (warn if push fails or skip with `--no-push`).
 - Always switch back to the original branch afterward.
 
-**Usage Examples:**
-
-- Display metadata (read-only):
+**Usage Example:**
 
 ```rust
-let metadata = access_metadata(None);
-display(metadata);
-```
-
-- Modify metadata (add/remove/promote/demote/lock/unlock):
-
-```rust
-access_metadata(Some(|metadata| {
-    metadata.environments.push(new_env);
-    commit_and_push(metadata)?;
-}));
+modify_metadata(&context, |config: &mut HitchConfig| {
+    config.environments.push(new_env);
+    Ok(())
+})?;
 ```
 
 ### switch-to(branch, closure)
@@ -58,7 +64,7 @@ access_metadata(Some(|metadata| {
 
 ### lock(env_name)
 
-- `access_metadata(Some(|metadata| { ... }))`
+- `modify_metadata(|metadata| { ... })`
 
   - Mark `env_name` as locked in `hitch.json`.
   - Set `lockedBy` to `git config user.email`.
@@ -67,7 +73,7 @@ access_metadata(Some(|metadata| {
 
 ### unlock(env_name)
 
-- `access_metadata(Some(|metadata| { ... }))`
+- `modify_metadata(|metadata| { ... })`
 
   - Mark `env_name` as unlocked.
   - Clear `lockedBy` and `lockedAt`.
@@ -85,7 +91,7 @@ access_metadata(Some(|metadata| {
 
 - **Step 2: Prepare temp branch**
 
-  - Create a temporary branch named `hitch-tmp-${source}-${timestamp}` from the environment's source branch.
+  - Create a temporary branch named `hitch-tmp-${base}-${timestamp}` from the environment's base branch.
 
 - **Step 3: Merge branches into temp branch**
 
@@ -132,7 +138,7 @@ access_metadata(Some(|metadata| {
 1. `pre-check()`
 2. Ensure `hitch-metadata` branch does not exist.
 3. Create orphan branch `hitch-metadata`.
-4. `access_metadata(Some(|metadata| { ... }))`
+4. `modify_metadata(|metadata| { ... })`
 
    - Remove all files/folders except `.git`.
    - Create `.gitignore`:
@@ -148,13 +154,13 @@ access_metadata(Some(|metadata| {
 
 ---
 
-### add <env_name> [--source <branch>]
+### add <env_name> [--base <branch>]
 
-- Example: `hitch add staging --source main`
+- Example: `hitch add staging --base main`
 - `pre-check()`
-- `access_metadata(Some(|metadata| { ... }))`
+- `modify_metadata(|metadata| { ... })`
 
-  - Add environment to `hitch.json` with optional source.
+  - Add environment to `hitch.json` with optional base.
   - Initialize `locked = false`, `lockedBy = null`, `lockedAt = null`, `rebuiltAt = null`.
   - Commit and optionally push metadata (warn if push fails or skip with `--no-push`).
 
@@ -164,7 +170,7 @@ access_metadata(Some(|metadata| {
 
 - Example: `hitch remove staging --force`
 - `pre-check()`
-- `access_metadata(Some(|metadata| { ... }))`
+- `modify_metadata(|metadata| { ... })`
 
   - Confirm if `--force` not provided.
   - Remove environment from `hitch.json`.
@@ -201,7 +207,7 @@ access_metadata(Some(|metadata| {
 ### guard
 
 - Example: use in pre-commit hook: `hitch guard`
-- Read environment branch names from `access_metadata(None)`.
+- Read environment branch names from `access_metadata_read_only(|config| { ... })`.
 - Abort or warn if the current branch matches any environment branch.
 
 ---
@@ -209,10 +215,10 @@ access_metadata(Some(|metadata| {
 ### status
 
 - Example: `hitch status`
-- Call `access_metadata(None)`
-- Display formatted environment information: name, source, branches, locked state, lockedBy, lockedAt, rebuiltAt.
-- should also let us know if there are any environments that need to be rebuilt due to there being changes in one of their branches since the last build.
-  _note_ we might need to (instead of access_metadata()) just make sure hitch-metadata is up to date and git show hitch-metadata:hitch.json as ideally the 'status' command would work even with unclean git state.
+- Call `access_metadata_read_only(|config| { ... })`
+- Display formatted environment information: name, base, branches, locked state, lockedBy, lockedAt, rebuiltAt.
+- Also let us know if there are any environments that need to be rebuilt due to there being changes in one of their branches since the last build.
+- Works even with unclean git states since it uses `git show hitch-metadata:hitch.json` approach.
 
 ---
 
@@ -220,7 +226,8 @@ access_metadata(Some(|metadata| {
 
 - `pre-check()` – used by all commands.
 - `switch-to()` with closure – centralizes branch switching and automatic return.
-- `access_metadata()` – unified block for all metadata access, read-only or read-write.
+- `access_metadata_read_only()` – read-only metadata access without branch switching, works with unclean git states.
+- `modify_metadata()` – read-write metadata access with automatic branch switching and commit handling.
 - `with_locked_env()` – ensures environment is locked during modifications and rebuilds, unlocking even on failure.
 - `rebuild()` – triggered automatically by `promote` / `demote` and ensures environment is locked during operation with clear handling for temp branches, backup branches, success and failure scenarios.
 - `safe_branch_operation()` – optional wrapper to consolidate temp/backup branch handling logic inside `rebuild()`.
