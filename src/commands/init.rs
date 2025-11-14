@@ -28,33 +28,32 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
     context.git().create_orphan_branch("hitch-metadata")?;
     context.log_verbose("✓ Created orphan hitch-metadata branch");
 
-    // Step 4: access_metadata() - Create hitch.json skeleton and .gitignore
-    access_metadata(context, |config: &mut HitchConfig| {
-        // Remove all files/folders except .git (this is already done by create_orphan_branch)
-        context.log_verbose("Cleaning hitch-metadata branch...");
+    // Step 4: Create hitch.json skeleton and .gitignore directly
+    // (Since we're already on hitch-metadata branch from create_orphan_branch)
+    context.log_verbose("Creating metadata files...");
 
-        // Create .gitignore
-        context.log_verbose("Creating .gitignore...");
-        let gitignore_content = "*\n!.gitignore\n!hitch.json\n";
-        context.git().write_file(".gitignore", gitignore_content)?;
+    // Create .gitignore
+    context.log_verbose("Creating .gitignore...");
+    let gitignore_content = "*\n!.gitignore\n!hitch.json\n";
+    context.git().write_file(".gitignore", gitignore_content)?;
 
-        // Create or update hitch.json skeleton
-        context.log_verbose("Creating hitch.json configuration...");
+    // Create or update hitch.json skeleton
+    context.log_verbose("Creating hitch.json configuration...");
+    let mut config = HitchConfig::new();
 
-        // Add environments if specified
-        if let Some(env_names) = &args.environments {
-            context.log_info(&format!("Creating {} environment(s): {}", env_names.len(), env_names.join(", ")));
+    // Add environments if specified
+    if let Some(env_names) = &args.environments {
+        context.log_info(&format!("Creating {} environment(s): {}", env_names.len(), env_names.join(", ")));
 
-            for env_name in env_names {
-                let env = Environment::new(env_name.clone(), "main".to_string()); // Default to main as per spec
-                config.add_environment(env);
-            }
+        for env_name in env_names {
+            let env = Environment::new(env_name.clone(), "main".to_string()); // Default to main as per spec
+            config.add_environment(env);
         }
+    }
 
-        context.log_verbose("✓ Configuration skeleton created");
-
-        Ok(())
-    })?;
+    // Write hitch.json
+    context.git().write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+    context.log_verbose("✓ Configuration skeleton created");
 
     // Stage, commit, and optionally push .gitignore and hitch.json
     context.log_verbose("Committing initial Hitch metadata...");

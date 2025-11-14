@@ -15,10 +15,24 @@ impl GitOperations {
     }
 
     pub fn get_current_branch(&self) -> Result<String> {
-        let head = self.repo.head()?;
-        let name = head.shorthand()
-            .ok_or_else(|| anyhow::anyhow!("HEAD is not on a branch"))?;
-        Ok(name.to_string())
+        // Use git command to handle orphan branches properly
+        let output = Command::new("git")
+            .args(&["branch", "--show-current"])
+            .output()
+            .context("Failed to get current branch")?;
+
+        if output.status.success() {
+            let branch_name = String::from_utf8(output.stdout)?.trim().to_string();
+            if !branch_name.is_empty() {
+                Ok(branch_name)
+            } else {
+                // Handle detached HEAD or other states
+                Err(anyhow::anyhow!("Not currently on any branch"))
+            }
+        } else {
+            Err(anyhow::anyhow!("Failed to get current branch: {}",
+                String::from_utf8_lossy(&output.stderr)))
+        }
     }
 
     pub fn checkout_branch(&self, branch: &str) -> Result<()> {
@@ -55,7 +69,8 @@ impl GitOperations {
         // Clean working directory
         let _ = Command::new("git")
             .args(&["rm", "-rf", "."])
-            .output()?;
+            .output()
+            .context("Failed to clean working directory")?;
 
         Ok(())
     }

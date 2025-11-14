@@ -12,6 +12,11 @@ pub struct TestEnvironment {
 impl TestEnvironment {
     /// Create a fresh isolated git repository for testing
     pub fn new() -> Result<Self> {
+        Self::new_with_base(false)
+    }
+
+    /// Create a fresh isolated git repository with optional base structure
+    pub fn new_with_base(with_base_structure: bool) -> Result<Self> {
         let temp_dir = Builder::new()
             .prefix("hitch-test-")
             .tempdir()
@@ -53,15 +58,102 @@ impl TestEnvironment {
             .output()
             .context("Failed to create initial commit")?;
 
+        // Create base repository structure if requested
+        if with_base_structure {
+            Self::create_base_structure(&repo_path)?;
+        }
+
         Ok(TestEnvironment {
             temp_dir,
             repo_path,
         })
     }
 
+    /// Create a realistic base repository structure for testing
+    fn create_base_structure(repo_path: &PathBuf) -> Result<()> {
+        // Create some feature branches with realistic content
+        let branches = vec![
+            ("feature/login", "feat: Add login functionality\n- User authentication\n- Session management\n- Login form UI"),
+            ("feature/payment", "feat: Add payment processing\n- Credit card integration\n- Payment gateway API\n- Billing interface"),
+            ("feature/dashboard", "feat: Implement admin dashboard\n- User management\n- Analytics view\n- System settings"),
+            ("dev", "Development branch with integrated features\n- Latest feature merges\n- Development configurations\n- Testing setup"),
+            ("staging", "Staging environment preparation\n- Pre-production features\n- Performance optimizations\n- Security hardening"),
+        ];
+
+        for (branch_name, content) in branches {
+            // Create and checkout branch
+            Command::new("git")
+                .args(&["checkout", "-b", branch_name])
+                .current_dir(repo_path)
+                .output()
+                .context(format!("Failed to create branch: {}", branch_name))?;
+
+            // Create feature-specific file
+            let file_content = format!(
+                "# {}\n\n{}\n\n## Implementation Details\n\n- Added in this branch\n- Ready for deployment\n- Includes tests\n",
+                branch_name, content
+            );
+
+            let file_name = format!("{}.md", branch_name.replace("/", "_"));
+            std::fs::write(repo_path.join(&file_name), file_content)?;
+
+            // Also create a shared config file in some branches
+            if branch_name == "dev" || branch_name == "staging" {
+                let config_content = format!(
+                    "# Configuration for {}\n\nenvironment=\"{}\"\ndebug={}\ndatabase_url=\"localhost\"\n",
+                    branch_name,
+                    branch_name,
+                    if branch_name == "dev" { "true" } else { "false" }
+                );
+                std::fs::write(repo_path.join("config.toml"), config_content)?;
+            }
+
+            // Commit the changes
+            Command::new("git")
+                .args(&["add", "."])
+                .current_dir(repo_path)
+                .output()
+                .context("Failed to add files")?;
+
+            Command::new("git")
+                .args(&["commit", "-m", &format!("Add {} branch functionality", branch_name)])
+                .current_dir(repo_path)
+                .output()
+                .context("Failed to commit changes")?;
+        }
+
+        // Return to main branch
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(repo_path)
+            .output()
+            .context("Failed to return to main branch")?;
+
+        Ok(())
+    }
+
     /// Get the path to the test repository
     pub fn path(&self) -> &PathBuf {
         &self.repo_path
+    }
+
+    /// Create a non-git directory for testing error cases
+    pub fn new_non_git() -> Result<Self> {
+        let temp_dir = Builder::new()
+            .prefix("hitch-test-non-git-")
+            .tempdir()
+            .context("Failed to create temporary directory")?;
+
+        let repo_path = temp_dir.path().to_path_buf();
+
+        // Create some basic files but don't initialize git
+        std::fs::write(repo_path.join("README.md"), "# Test Repository\n")?;
+        std::fs::write(repo_path.join("some_file.txt"), "This is not a git repository\n")?;
+
+        Ok(TestEnvironment {
+            temp_dir,
+            repo_path,
+        })
     }
 
     /// Execute hitch command in the test environment

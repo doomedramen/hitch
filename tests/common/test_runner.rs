@@ -36,7 +36,9 @@ impl TestRunner {
     }
 
     /// Run a single test
-    pub fn test<F>(&self, test_name: &str, test_fn: F) -> Result<()> {
+    pub fn test<F>(&self, test_name: &str, test_fn: F) -> Result<()>
+    where
+        F: FnOnce() -> Result<()> + Send, {
         *self.test_count.lock() += 1;
 
         print!("  {} ... ", test_name);
@@ -112,7 +114,7 @@ impl TestRunner {
                 "SUCCESS".green().bold(), passed, total);
         } else {
             println!("❌ {} {} tests passed, {} failed ({}/{} total)",
-                "FAILED".red().bold(), passed, failed, total);
+                "FAILED".red().bold(), passed, failed, total, passed + failed);
             println!("See above for details");
         }
     }
