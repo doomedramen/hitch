@@ -1,6 +1,7 @@
 use colored::*;
 use anyhow::Result;
-use crate::testing::TestEnvironment;
+use std::io::Write;
+use super::TestEnvironment;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
@@ -36,18 +37,18 @@ impl TestRunner {
 
     /// Run a single test
     pub fn test<F>(&self, test_name: &str, test_fn: F) -> Result<()> {
-        *self.test_count.lock().unwrap() += 1;
+        *self.test_count.lock() += 1;
 
         print!("  {} ... ", test_name);
         std::io::stdout().flush()?;
 
         match test_fn() {
             Ok(()) => {
-                *self.passed_count.lock().unwrap() += 1;
+                *self.passed_count.lock() += 1;
                 println!("{}", "✓".green());
             }
             Err(e) => {
-                *self.failed_count.lock().unwrap() += 1;
+                *self.failed_count.lock() += 1;
                 println!("{} {}", "✗".red(), e);
                 return Err(e);
             }
@@ -94,11 +95,16 @@ impl TestRunner {
         }
     }
 
+    /// Assert a string contains another string with default message
+    pub fn assert_contains_simple(&self, haystack: &str, needle: &str) -> Result<()> {
+        self.assert_contains(haystack, needle, &format!("Expected '{}' to contain '{}'", haystack, needle))
+    }
+
     /// Print test summary
     fn print_summary(&self) {
-        let total = *self.test_count.lock().unwrap();
-        let passed = *self.passed_count.lock().unwrap();
-        let failed = *self.failed_count.lock().unwrap();
+        let total = *self.test_count.lock();
+        let passed = *self.passed_count.lock();
+        let failed = *self.failed_count.lock();
 
         println!("\n{}", "=".repeat(50));
         if failed == 0 {
@@ -114,15 +120,15 @@ impl TestRunner {
     /// Get test statistics
     pub fn stats(&self) -> (usize, usize, usize) {
         (
-            *self.test_count.lock().unwrap(),
-            *self.passed_count.lock().unwrap(),
-            *self.failed_count.lock().unwrap(),
+            *self.test_count.lock(),
+            *self.passed_count.lock(),
+            *self.failed_count.lock(),
         )
     }
 }
 
 impl Drop for TestRunner {
-    fn drop(&mut &mut self) {
+    fn drop(&mut self) {
         let (total, passed, failed) = self.stats();
         if failed > 0 {
             eprintln!("\n❌ Test suite completed with failures: {}/{} tests passed", passed, total);

@@ -12,5 +12,6 @@ pub struct AddCommand {
 }
 
 pub fn run(_args: AddCommand, _context: &GlobalContext) -> Result<(), Box<dyn std::error::Error>> {
-    todo!("Implement add command");
+    println!("Add command not yet implemented");
+    Ok(())
 }

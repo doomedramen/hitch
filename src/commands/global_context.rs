@@ -2,7 +2,7 @@ use std::sync::Arc;
 use crate::utils::git_operations::GitOperations;
 use colored::*;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GlobalContext {
     pub verbose: bool,
     pub no_push: bool,

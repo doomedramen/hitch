@@ -85,12 +85,9 @@ where
 /// - Any changes should be committed and optionally pushed (warn if push fails or skip with --no-push)
 /// - Return metadata (updated if modified, or original if read-only)
 /// - Always switch back to the original branch afterward
-pub fn access_metadata<F, R>(
-    context: &GlobalContext,
-    closure: Option<F>,
-) -> Result<R>
+pub fn access_metadata<F>(context: &GlobalContext, closure: F) -> Result<()>
 where
-    F: FnOnce(&mut HitchConfig) -> Result<R>,
+    F: FnOnce(&mut HitchConfig) -> Result<()>,
 {
     context.log_verbose("Accessing hitch metadata...");
 
@@ -105,9 +102,9 @@ where
         // Load and parse hitch.json
         context.log_verbose("Loading hitch.json...");
         let config_json = context.git().read_file_from_branch("hitch-metadata", "hitch.json")
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|e| {
                 // If file doesn't exist, create default config
-                context.log_info("hitch.json not found, creating default configuration");
+                context.log_info(&format!("hitch.json not found or unreadable ({}), creating default configuration", e));
                 let default_config = HitchConfig::new();
                 serde_json::to_string_pretty(&default_config).unwrap()
             });
@@ -117,38 +114,31 @@ where
 
         context.log_verbose("✓ hitch.json loaded successfully");
 
-        // Execute closure if provided (for modification)
-        if let Some(modification_fn) = closure {
-            context.log_verbose("Modifying metadata...");
-            let result = modification_fn(&mut config)?;
+        // Execute closure (for modification)
+        context.log_verbose("Modifying metadata...");
+        closure(&mut config)?;
 
-            // Write updated config
-            context.log_verbose("Writing updated hitch.json...");
-            context.git().write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        // Write updated config
+        context.log_verbose("Writing updated hitch.json...");
+        context.git().write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
 
-            // Commit changes
-            context.log_verbose("Committing metadata changes...");
-            context.git().add_and_commit(&["hitch.json"], "Update hitch configuration")?;
+        // Commit changes
+        context.log_verbose("Committing metadata changes...");
+        context.git().add_and_commit(&["hitch.json"], "Update hitch configuration")?;
 
-            // Optionally push
-            if context.should_push() {
-                context.log_verbose("Pushing metadata to remote...");
-                if let Err(e) = context.git().push_branch("hitch-metadata") {
-                    context.log_warning(&format!("Failed to push metadata to remote: {}", e));
-                } else {
-                    context.log_verbose("✓ Metadata pushed to remote");
-                }
+        // Optionally push
+        if context.should_push() {
+            context.log_verbose("Pushing metadata to remote...");
+            if let Err(e) = context.git().push_branch("hitch-metadata") {
+                context.log_warning(&format!("Failed to push metadata to remote: {}", e));
             } else {
-                context.log_verbose("Skipping push due to --no-push flag");
+                context.log_verbose("✓ Metadata pushed to remote");
             }
-
-            result
         } else {
-            // Read-only access
-            Ok(())
+            context.log_verbose("Skipping push due to --no-push flag");
         }
 
-        result
+        Ok(())
     })
 }
 
@@ -188,7 +178,7 @@ where
 
 /// Lock an environment
 fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    access_metadata(context, Some(|config| {
+    access_metadata(context, |config: &mut HitchConfig| {
         let environment = config.get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
 
@@ -201,16 +191,16 @@ fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
         }
 
         let user_email = context.git().get_user_email()?;
-        environment.lock(user_email);
+        environment.lock(user_email.clone());
 
         context.log_info(&format!("Environment '{}' locked by {}", env_name, user_email));
         Ok(())
-    }))
+    })
 }
 
 /// Unlock an environment
 fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    access_metadata(context, Some(|config| {
+    access_metadata(context, |config: &mut HitchConfig| {
         let environment = config.get_environment_mut(env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
 
@@ -223,5 +213,5 @@ fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
 
         context.log_info(&format!("Environment '{}' unlocked", env_name));
         Ok(())
-    }))
+    })
 }

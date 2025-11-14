@@ -269,6 +269,7 @@ dependencies = [
  "clap",
  "colored",
  "git2",
+ "parking_lot",
  "serde",
  "serde_json",
  "tempfile",

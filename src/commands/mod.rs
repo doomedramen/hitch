@@ -1,5 +1,4 @@
 pub mod global_context;
-pub mod git_operations;
 
 pub mod init;
 pub mod add;

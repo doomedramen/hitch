@@ -29,7 +29,7 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
     context.log_verbose("✓ Created orphan hitch-metadata branch");
 
     // Step 4: access_metadata() - Create hitch.json skeleton and .gitignore
-    access_metadata(context, Some(|config| {
+    access_metadata(context, |config: &mut HitchConfig| {
         // Remove all files/folders except .git (this is already done by create_orphan_branch)
         context.log_verbose("Cleaning hitch-metadata branch...");
 
@@ -54,7 +54,7 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
         context.log_verbose("✓ Configuration skeleton created");
 
         Ok(())
-    }))?;
+    })?;
 
     // Stage, commit, and optionally push .gitignore and hitch.json
     context.log_verbose("Committing initial Hitch metadata...");
