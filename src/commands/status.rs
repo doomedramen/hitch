@@ -68,67 +68,61 @@ fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 
     for env_name in env_names {
         let env = &config.environments[env_name];
-        display_environment_status(context, env)?;
+        display_environment_status(context, env_name, env)?;
     }
 
     Ok(())
 }
 
 /// Display status for a single environment
-fn display_environment_status(context: &GlobalContext, env: &Environment) -> Result<()> {
-    // Environment name with source branch
-    let name_line = if env.is_locked() {
-        format!(
-            "{}  ({})  🔒 {}{}",
-            env.name.bright_green().bold(),
-            env.source.bright_blue(),
-            "Locked by ".yellow(),
-            format!(
-                "{} at {}",
-                env.locked_by.as_ref().unwrap_or(&"unknown".to_string()),
-                format_timestamp(env.locked_at)
-            )
-            .yellow()
-        )
-    } else {
-        format!(
-            "{}  ({}){}",
-            env.name.bright_green().bold(),
-            env.source.bright_blue(),
-            if env.branches.is_empty() { " 🆕".bright_cyan().to_string() } else { "".to_string() }
-        )
-    };
+fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Environment) -> Result<()> {
+    // Environment header with visual separator
+    println!("┌─ {} {}", env_name.bright_green().bold(), format!("({})", env.base.bright_blue()));
 
-    println!("{}", name_line);
-
-    // Branches
-    if env.branches.is_empty() {
-        println!("    {}", "Branches: None".dimmed());
-    } else {
-        println!("    Branches: {}", env.branches.join(", ").bright_white());
+    // Lock status indicator
+    if env.is_locked() {
+        let lock_info = format!(
+            "🔒 Locked by {} at {}",
+            env.locked_by.as_ref().unwrap_or(&"unknown".to_string()),
+            format_timestamp(env.locked_at)
+        );
+        println!("│  {}", lock_info.yellow());
     }
 
-    // Last rebuild
-    let rebuild_info = match env.rebuilt_at {
-        Some(timestamp) => format!("Last rebuild: {}", format_timestamp(Some(timestamp))),
-        None => "Last rebuild: Never".bright_red().to_string(),
-    };
-    println!("    {}", rebuild_info);
+    // Branches section
+    println!("├─ Branches:");
+    if env.branches.is_empty() {
+        println!("│  {}", "• No branches promoted".dimmed());
+    } else {
+        for branch in &env.branches {
+            println!("│  {}", format!("• {}", branch).bright_white());
+        }
+    }
 
-    // Rebuild status
+    // Rebuilt information
+    println!("├─ Rebuilt:");
+    let rebuild_info = match env.rebuilt_at {
+        Some(timestamp) => format!("• {}", format_timestamp(Some(timestamp))),
+        None => "• Never".bright_red().to_string(),
+    };
+    println!("│  {}", rebuild_info);
+
+    // Status section
+    println!("└─ Status:");
     let rebuild_status = determine_rebuild_status(context, env)?;
     match rebuild_status {
         RebuildStatus::UpToDate => {
-            println!("    Status: {}", "Up to date".bright_green());
+            println!("   {}", "✅ Up to date".bright_green());
         }
         RebuildStatus::NeedsRebuild(reason) => {
-            println!("    Status: ⚠️  {}", reason.bright_yellow());
+            println!("   {} {}", "⚠️".bright_yellow(), reason.bright_yellow());
         }
         RebuildStatus::NeverRebuilt => {
-            println!("    Status: ⚠️  {}", "Never rebuilt".bright_red());
+            println!("   {} {}", "⚠️".bright_red(), "Never rebuilt".bright_red());
         }
     }
 
+    // Add spacing between environments
     println!();
     Ok(())
 }
@@ -150,13 +144,13 @@ fn determine_rebuild_status(context: &GlobalContext, env: &Environment) -> Resul
     let rebuilt_at = env.rebuilt_at.unwrap();
     let mut newer_branches = Vec::new();
 
-    // Check source branch
-    if let Ok(source_exists) = context.git().branch_exists_anywhere(&env.source) {
-        if source_exists {
-            if let Ok(source_sha) = context.git().get_branch_commit_sha(&env.source) {
-                if let Ok(source_timestamp) = context.git().get_commit_timestamp(&source_sha) {
-                    if source_timestamp > rebuilt_at {
-                        newer_branches.push(env.source.clone());
+    // Check base branch
+    if let Ok(base_exists) = context.git().branch_exists_anywhere(&env.base) {
+        if base_exists {
+            if let Ok(base_sha) = context.git().get_branch_commit_sha(&env.base) {
+                if let Ok(base_timestamp) = context.git().get_commit_timestamp(&base_sha) {
+                    if base_timestamp > rebuilt_at {
+                        newer_branches.push(env.base.clone());
                     }
                 }
             }

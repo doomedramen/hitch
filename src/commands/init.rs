@@ -50,8 +50,8 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
             ));
 
             for env_name in env_names {
-                let env = Environment::new(env_name.clone(), "main".to_string()); // Default to main as per spec
-                config.add_environment(env);
+                let env = Environment::new("main".to_string()); // Default to main as per spec
+                config.add_environment(env_name.clone(), env);
             }
         }
 

@@ -4,10 +4,9 @@ use chrono::Utc;
 
 #[test]
 fn test_environment_new() -> Result<()> {
-    let env = Environment::new("test".to_string(), "main".to_string());
+    let env = Environment::new("main".to_string());
 
-    assert_eq!(env.name, "test");
-    assert_eq!(env.source, "main");
+    assert_eq!(env.base, "main");
     assert!(env.branches.is_empty());
     assert!(!env.is_locked());
     assert!(env.locked_by.is_none());
@@ -19,7 +18,7 @@ fn test_environment_new() -> Result<()> {
 
 #[test]
 fn test_environment_locking() -> Result<()> {
-    let mut env = Environment::new("test".to_string(), "main".to_string());
+    let mut env = Environment::new("main".to_string());
     let user_email = "user@example.com".to_string();
 
     // Test initial state
@@ -42,7 +41,7 @@ fn test_environment_locking() -> Result<()> {
 
 #[test]
 fn test_environment_branch_management() -> Result<()> {
-    let mut env = Environment::new("test".to_string(), "main".to_string());
+    let mut env = Environment::new("main".to_string());
 
     // Test adding branches
     env.add_branch("feature1".to_string());
@@ -72,7 +71,7 @@ fn test_environment_branch_management() -> Result<()> {
 
 #[test]
 fn test_environment_rebuilt_timestamp() -> Result<()> {
-    let mut env = Environment::new("test".to_string(), "main".to_string());
+    let mut env = Environment::new("main".to_string());
 
     // Initially no rebuilt timestamp
     assert!(env.rebuilt_at.is_none());
@@ -104,17 +103,16 @@ fn test_hitch_config_new() -> Result<()> {
 #[test]
 fn test_hitch_config_add_environment() -> Result<()> {
     let mut config = HitchConfig::new();
-    let env = Environment::new("dev".to_string(), "main".to_string());
+    let env = Environment::new("main".to_string());
 
-    config.add_environment(env);
+    config.add_environment("dev".to_string(), env);
 
     assert_eq!(config.environments.len(), 1);
     assert!(config.environment_exists("dev"));
     assert!(!config.environment_exists("prod"));
 
     let retrieved_env = config.get_environment("dev").unwrap();
-    assert_eq!(retrieved_env.name, "dev");
-    assert_eq!(retrieved_env.source, "main");
+    assert_eq!(retrieved_env.base, "main");
 
     Ok(())
 }
@@ -122,11 +120,11 @@ fn test_hitch_config_add_environment() -> Result<()> {
 #[test]
 fn test_hitch_config_remove_environment() -> Result<()> {
     let mut config = HitchConfig::new();
-    let env1 = Environment::new("dev".to_string(), "main".to_string());
-    let env2 = Environment::new("prod".to_string(), "main".to_string());
+    let env1 = Environment::new("main".to_string());
+    let env2 = Environment::new("main".to_string());
 
-    config.add_environment(env1);
-    config.add_environment(env2);
+    config.add_environment("dev".to_string(), env1);
+    config.add_environment("prod".to_string(), env2);
 
     assert_eq!(config.environments.len(), 2);
 
@@ -146,9 +144,9 @@ fn test_hitch_config_remove_environment() -> Result<()> {
 #[test]
 fn test_hitch_config_get_environment_mut() -> Result<()> {
     let mut config = HitchConfig::new();
-    let env = Environment::new("dev".to_string(), "main".to_string());
+    let env = Environment::new("main".to_string());
 
-    config.add_environment(env);
+    config.add_environment("dev".to_string(), env);
 
     // Test getting mutable environment
     let env_mut = config.get_environment_mut("dev").unwrap();
@@ -172,9 +170,9 @@ fn test_hitch_config_environment_names() -> Result<()> {
     assert!(config.get_environment_names().is_empty());
 
     // Add environments
-    config.add_environment(Environment::new("dev".to_string(), "main".to_string()));
-    config.add_environment(Environment::new("prod".to_string(), "main".to_string()));
-    config.add_environment(Environment::new("staging".to_string(), "main".to_string()));
+    config.add_environment("dev".to_string(), Environment::new("main".to_string()));
+    config.add_environment("prod".to_string(), Environment::new("main".to_string()));
+    config.add_environment("staging".to_string(), Environment::new("main".to_string()));
 
     let names = config.get_environment_names();
     assert_eq!(names.len(), 3);
@@ -193,17 +191,15 @@ fn test_hitch_config_environment_names() -> Result<()> {
 
 #[test]
 fn test_environment_serialization() -> Result<()> {
-    let env = Environment::new("test".to_string(), "main".to_string());
+    let env = Environment::new("main".to_string());
 
     // Test serialization
     let json = serde_json::to_string_pretty(&env)?;
-    assert!(json.contains("test"));
     assert!(json.contains("main"));
 
     // Test deserialization
     let deserialized: Environment = serde_json::from_str(&json)?;
-    assert_eq!(deserialized.name, env.name);
-    assert_eq!(deserialized.source, env.source);
+    assert_eq!(deserialized.base, env.base);
 
     Ok(())
 }
@@ -211,7 +207,7 @@ fn test_environment_serialization() -> Result<()> {
 #[test]
 fn test_hitch_config_serialization() -> Result<()> {
     let mut config = HitchConfig::new();
-    config.add_environment(Environment::new("dev".to_string(), "main".to_string()));
+    config.add_environment("dev".to_string(), Environment::new("main".to_string()));
 
     // Test serialization
     let json = serde_json::to_string_pretty(&config)?;

@@ -71,8 +71,7 @@ fn test_status_basic_display() -> Result<()> {
   "version": "1.0",
   "environments": {
     "dev": {
-      "name": "dev",
-      "source": "main",
+      "base": "main",
       "branches": [],
       "locked": false,
       "locked_by": null,
@@ -80,8 +79,7 @@ fn test_status_basic_display() -> Result<()> {
       "rebuilt_at": null
     },
     "staging": {
-      "name": "staging",
-      "source": "main",
+      "base": "main",
       "branches": ["feature/test"],
       "locked": false,
       "locked_by": null,
@@ -182,8 +180,7 @@ fn test_status_locked_environment() -> Result<()> {
   "version": "1.0",
   "environments": {{
     "prod": {{
-      "name": "prod",
-      "source": "main",
+      "base": "main",
       "branches": ["feature/login", "feature/ui"],
       "locked": true,
       "locked_by": "admin@example.com",
@@ -333,8 +330,7 @@ fn test_status_verbose_output() -> Result<()> {
   "version": "1.0",
   "environments": {
     "dev": {
-      "name": "dev",
-      "source": "main",
+      "base": "main",
       "branches": [],
       "locked": false,
       "locked_by": null,
@@ -594,8 +590,7 @@ fn test_status_environmental_sorting() -> Result<()> {
   "version": "1.0",
   "environments": {
     "zebra": {
-      "name": "zebra",
-      "source": "main",
+      "base": "main",
       "branches": [],
       "locked": false,
       "locked_by": null,
@@ -603,8 +598,7 @@ fn test_status_environmental_sorting() -> Result<()> {
       "rebuilt_at": null
     },
     "alpha": {
-      "name": "alpha",
-      "source": "main",
+      "base": "main",
       "branches": [],
       "locked": false,
       "locked_by": null,
@@ -612,8 +606,7 @@ fn test_status_environmental_sorting() -> Result<()> {
       "rebuilt_at": null
     },
     "beta": {
-      "name": "beta",
-      "source": "main",
+      "base": "main",
       "branches": [],
       "locked": false,
       "locked_by": null,

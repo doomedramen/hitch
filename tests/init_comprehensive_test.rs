@@ -86,10 +86,10 @@ fn test_init_with_environments() -> Result<()> {
         "Config should contain staging environment"
     );
 
-    // Verify environments have correct default source (main)
+    // Verify environments have correct default base (main)
     assert!(
-        hitch_json_content.contains("\"source\": \"main\""),
-        "Environments should default to main source"
+        hitch_json_content.contains("\"base\": \"main\""),
+        "Environments should default to main base"
     );
 
     Ok(())

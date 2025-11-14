@@ -4,11 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Environment configuration as defined in hitch.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
-    /// Name of the environment
-    pub name: String,
-
-    /// Source branch used for rebuilding this environment
-    pub source: String,
+    /// Source branch used for rebuilding this environment (renamed from "source" to "base")
+    pub base: String,
 
     /// List of branches promoted to this environment
     pub branches: Vec<String>,
@@ -27,10 +24,9 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new(name: String, source: String) -> Self {
+    pub fn new(base: String) -> Self {
         Self {
-            name,
-            source,
+            base,
             branches: Vec::new(),
             locked: false,
             locked_by: None,
@@ -92,9 +88,8 @@ impl HitchConfig {
         }
     }
 
-    pub fn add_environment(&mut self, environment: Environment) {
-        self.environments
-            .insert(environment.name.clone(), environment);
+    pub fn add_environment(&mut self, name: String, environment: Environment) {
+        self.environments.insert(name, environment);
     }
 
     pub fn remove_environment(&mut self, name: &str) {

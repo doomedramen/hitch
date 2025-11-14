@@ -406,16 +406,12 @@ fn test_with_locked_env_function() -> Result<()> {
         "dev environment should exist"
     );
     assert!(
-        hitch_json_content.contains("\"source\""),
-        "environment should have source field"
+        hitch_json_content.contains("\"base\""),
+        "environment should have base field"
     );
 
     // Verify the environment has the lock-related fields (even if not currently locked)
     // The Environment struct should support locking functionality
-    assert!(
-        hitch_json_content.contains("\"name\""),
-        "environment should have name field"
-    );
 
     // The test demonstrates that the infrastructure for with_locked_env exists
     // When lock/unlock commands are implemented, they will use with_locked_env function
