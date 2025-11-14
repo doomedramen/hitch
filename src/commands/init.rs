@@ -1,0 +1,91 @@
+use clap::Args;
+use crate::types::{HitchConfig, Environment};
+use crate::commands::global_context::GlobalContext;
+use crate::utils::prelude::{pre_check, access_metadata};
+
+#[derive(Args)]
+pub struct InitCommand {
+    /// Optional comma-separated list of environments to create during initialization
+    #[arg(long, value_delimiter = ',')]
+    environments: Option<Vec<String>>,
+}
+
+pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std::error::Error>> {
+    context.log_info("Initializing Hitch in the current git repository...");
+
+    // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
+    pre_check(context)?;
+
+    // Step 2: Ensure hitch-metadata branch does not exist
+    context.log_verbose("Checking if hitch-metadata branch already exists...");
+    if context.git().branch_exists("hitch-metadata")? {
+        return Err("Hitch is already initialized in this repository. hitch-metadata branch already exists.".into());
+    }
+    context.log_verbose("✓ hitch-metadata branch does not exist");
+
+    // Step 3: Create orphan branch hitch-metadata
+    context.log_info("Creating hitch-metadata branch...");
+    context.git().create_orphan_branch("hitch-metadata")?;
+    context.log_verbose("✓ Created orphan hitch-metadata branch");
+
+    // Step 4: access_metadata() - Create hitch.json skeleton and .gitignore
+    access_metadata(context, Some(|config| {
+        // Remove all files/folders except .git (this is already done by create_orphan_branch)
+        context.log_verbose("Cleaning hitch-metadata branch...");
+
+        // Create .gitignore
+        context.log_verbose("Creating .gitignore...");
+        let gitignore_content = "*\n!.gitignore\n!hitch.json\n";
+        context.git().write_file(".gitignore", gitignore_content)?;
+
+        // Create or update hitch.json skeleton
+        context.log_verbose("Creating hitch.json configuration...");
+
+        // Add environments if specified
+        if let Some(env_names) = &args.environments {
+            context.log_info(&format!("Creating {} environment(s): {}", env_names.len(), env_names.join(", ")));
+
+            for env_name in env_names {
+                let env = Environment::new(env_name.clone(), "main".to_string()); // Default to main as per spec
+                config.add_environment(env);
+            }
+        }
+
+        context.log_verbose("✓ Configuration skeleton created");
+
+        Ok(())
+    }))?;
+
+    // Stage, commit, and optionally push .gitignore and hitch.json
+    context.log_verbose("Committing initial Hitch metadata...");
+    context.git().add_and_commit(&[".gitignore", "hitch.json"], "Initialize Hitch metadata")?;
+
+    if context.should_push() {
+        context.log_verbose("Pushing hitch-metadata branch to remote...");
+        if let Err(e) = context.git().push_branch("hitch-metadata") {
+            context.log_warning(&format!("Failed to push hitch-metadata to remote: {}", e));
+            context.log_warning("You can push manually later with: git push origin hitch-metadata");
+        } else {
+            context.log_success("hitch-metadata branch pushed to remote");
+        }
+    } else {
+        context.log_verbose("Skipping push due to --no-push flag");
+    }
+
+    // Return to original branch
+    let current_branch = context.git().get_current_branch()?;
+    if current_branch != "hitch-metadata" {
+        context.log_verbose("Already on original branch");
+    }
+
+    context.log_success("Hitch initialized successfully!");
+
+    if let Some(env_names) = &args.environments {
+        context.log_info(&format!("Created environments: {}", env_names.join(", ")));
+        context.log_info("You can now promote branches to these environments using 'hitch promote <branch> to <environment>'");
+    } else {
+        context.log_info("You can add environments using 'hitch add <environment-name>'");
+    }
+
+    Ok(())
+}
