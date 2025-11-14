@@ -105,7 +105,7 @@ modify_metadata(&context, |config: &mut HitchConfig| {
 
 - **Step 4: Merge temp branch into the real environment branch**
 
-  - Rename the current environment branch to `${env}_backup_${timestamp}` for safety.
+  - Rename the current environment branch to `hitch-backup-${env}-${timestamp}` for safety.
   - Create a new branch with the original environment name from the temp branch.
   - **If merging into the real environment branch fails:**
 
@@ -117,7 +117,7 @@ modify_metadata(&context, |config: &mut HitchConfig| {
   - **If merging into the real environment branch succeeds:**
 
     - Delete the temp branch.
-    - Delete the renamed backup branch `${env}_backup_${timestamp}` as it is no longer needed.
+    - Delete the renamed backup branch `hitch-backup-${env}-${timestamp}` as it is no longer needed.
     - Update `rebuiltAt` timestamp in `hitch.json`.
     - Commit and optionally push metadata (warn if push fails or skip with `--no-push`).
 
