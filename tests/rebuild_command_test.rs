@@ -1,7 +1,12 @@
 use anyhow::Result;
 use chrono::Utc;
 use std::process::Command;
-use tempfile::tempdir;
+use std::fs;
+use std::path::Path;
+
+// Import the proper test framework
+mod common;
+use common::{SetupLevel, with_test_env, TestEnv};
 
 /// Simple ANSI code stripper for test assertions
 fn strip_ansi_codes(text: &str) -> String {
@@ -28,365 +33,240 @@ fn strip_ansi_codes(text: &str) -> String {
     result
 }
 
+/// Helper extension trait for TestEnv to provide custom methods needed by rebuild tests
+trait TestEnvExt {
+    fn create_hitch_config_with_environment(&self, env_name: &str, base_branch: &str, branches: &[&str], locked: bool) -> Result<()>;
+    fn create_branch_with_content(&self, branch_name: &str, filename: &str, content: &str) -> Result<()>;
+    fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output>;
+    fn get_current_branch(&self) -> Result<String>;
+}
+
+impl TestEnvExt for TestEnv {
+    fn create_hitch_config_with_environment(&self, env_name: &str, base_branch: &str, branches: &[&str], locked: bool) -> Result<()> {
+        use std::collections::HashMap;
+
+        let mut environments = HashMap::new();
+        let branches_vec: Vec<String> = branches.iter().map(|s| s.to_string()).collect();
+
+        environments.insert(env_name.to_string(), serde_json::json!({
+            "base": base_branch,
+            "branches": branches_vec,
+            "locked": locked,
+            "locked_by": if locked { Some("admin@example.com".to_string()) } else { None },
+            "locked_at": if locked { Some(Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()) } else { None },
+            "rebuilt_at": None::<String>
+        }));
+
+        let config = serde_json::json!({
+            "version": "1.0",
+            "environments": environments
+        });
+
+        // Write to hitch-metadata branch
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(self.path())
+            .output()?;
+
+        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(self.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+
+        Command::new("git")
+            .args(&["add", "hitch.json", ".gitignore"])
+            .current_dir(self.path())
+            .output()?;
+
+        Command::new("git")
+            .args(&["commit", "-m", "Add hitch configuration"])
+            .current_dir(self.path())
+            .output()?;
+
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(self.path())
+            .output()?;
+
+        Ok(())
+    }
+
+    fn create_branch_with_content(&self, branch_name: &str, filename: &str, content: &str) -> Result<()> {
+        // Create branch
+        Command::new("git")
+            .args(&["checkout", "-b", branch_name])
+            .current_dir(self.path())
+            .output()?;
+
+        // Write content and commit
+        fs::write(self.path().join(filename), content)?;
+        Command::new("git")
+            .args(&["add", filename])
+            .current_dir(self.path())
+            .output()?;
+
+        Command::new("git")
+            .args(&["commit", "-m", &format!("Add {}", filename)])
+            .current_dir(self.path())
+            .output()?;
+
+        // Return to main
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(self.path())
+            .output()?;
+
+        Ok(())
+    }
+
+    fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
+        let output = Command::new(&self.hitch_binary())
+            .args(args)
+            .current_dir(self.path())
+            .output()?;
+
+        Ok(output)
+    }
+
+    fn get_current_branch(&self) -> Result<String> {
+        let output = Command::new("git")
+            .args(&["branch", "--show-current"])
+            .current_dir(self.path())
+            .output()?;
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
 #[test]
 fn test_rebuild_basic_success() -> Result<()> {
-    let temp_dir = tempdir()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Create feature branch with content
+        test_env.create_branch_with_content("feature/login", "login.md", "# Login feature\n")?;
 
-    // Initialize git repo
-    Command::new("git")
-        .args(&["init"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Initialize hitch with dev environment
+        test_env.create_hitch_config_with_environment("dev", "main", &["feature/login"], false)?;
 
-    // Configure git user
-    Command::new("git")
-        .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Run rebuild command
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
 
-    Command::new("git")
-        .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
-        .output()?;
+        let stdout = String::from_utf8(output.stdout.clone())?;
+        let stderr = String::from_utf8(output.stderr)?;
+        let full_output = format!("{}{}", stdout, stderr);
 
-    // Create initial commit on main
-    std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
-    Command::new("git")
-        .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(output.status.success(), "rebuild command should succeed. Output: {}", full_output);
 
-    Command::new("git")
-        .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Verify rebuild process steps
+        assert!(full_output.contains("Rebuilding environment 'dev'"));
+        assert!(full_output.contains("Creating temporary branch"));
+        assert!(full_output.contains("Merging promoted branches"));
+        assert!(full_output.contains("Replacing 'dev' branch"));
+        assert!(full_output.contains("Environment 'dev' rebuilt successfully"));
 
-    // Create feature branch with content
-    Command::new("git")
-        .args(&["checkout", "-b", "feature/login"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Verify dev branch exists and has the expected content
+        Command::new("git")
+            .args(&["checkout", "dev"])
+            .current_dir(temp_dir.path())
+            .output()?;
 
-    std::fs::write(temp_dir.path().join("login.md"), "# Login feature\n")?;
-    Command::new("git")
-        .args(&["add", "login.md"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(test_env.path().join("login.md").exists(), "dev branch should have login.md from feature branch");
+        assert!(test_env.path().join("README.md").exists(), "dev branch should have README.md from base branch");
 
-    Command::new("git")
-        .args(&["commit", "-m", "Add login feature"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Verify rebuiltAt timestamp was updated
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(temp_dir.path())
+            .output()?;
 
-    // Return to main branch
-    Command::new("git")
-        .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
-        .output()?;
+        let updated_config = std::fs::read_to_string(test_env.path().join("hitch.json"))?;
+        assert!(updated_config.contains("\"rebuilt_at\""), "rebuilt_at should be set after successful rebuild");
 
-    // Initialize hitch with dev environment
-    Command::new("git")
-        .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let hitch_config = r#"{
-  "version": "1.0",
-  "environments": {
-    "dev": {
-      "base": "main",
-      "branches": ["feature/login"],
-      "locked": false,
-      "locked_by": null,
-      "locked_at": null,
-      "rebuilt_at": null
-    }
-  }
-}"#;
-
-    std::fs::write(temp_dir.path().join("hitch.json"), hitch_config)?;
-    std::fs::write(temp_dir.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
-
-    Command::new("git")
-        .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Return to main branch
-    Command::new("git")
-        .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
-
-    // Run rebuild command
-    let output = Command::new(&hitch_path)
-        .args(&["rebuild", "dev", "--verbose"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let stdout = String::from_utf8(output.stdout.clone())?;
-    let stderr = String::from_utf8(output.stderr)?;
-    let full_output = format!("{}{}", stdout, stderr);
-
-    assert!(output.status.success(), "rebuild command should succeed. Output: {}", full_output);
-
-    // Verify rebuild process steps
-    assert!(full_output.contains("Rebuilding environment 'dev'"));
-    assert!(full_output.contains("Creating temporary branch"));
-    assert!(full_output.contains("Merging promoted branches"));
-    assert!(full_output.contains("Replacing 'dev' branch"));
-    assert!(full_output.contains("Environment 'dev' rebuilt successfully"));
-
-    // Verify dev branch exists and has the expected content
-    Command::new("git")
-        .args(&["checkout", "dev"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    assert!(temp_dir.path().join("login.md").exists(), "dev branch should have login.md from feature branch");
-    assert!(temp_dir.path().join("README.md").exists(), "dev branch should have README.md from base branch");
-
-    // Verify rebuiltAt timestamp was updated
-    Command::new("git")
-        .args(&["checkout", "hitch-metadata"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let updated_config = std::fs::read_to_string(temp_dir.path().join("hitch.json"))?;
-    assert!(updated_config.contains("\"rebuilt_at\""), "rebuilt_at should be set after successful rebuild");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[test]
 fn test_rebuild_empty_environment() -> Result<()> {
-    let temp_dir = tempdir()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Initialize hitch with empty environment
+        test_env.create_hitch_config_with_environment("staging", "main", &[], false)?;
 
-    // Initialize git repo
-    Command::new("git")
-        .args(&["init"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Run rebuild command
+        let output = test_env.run_hitch_command(&["rebuild", "staging", "--verbose"])?;
 
-    // Configure git user
-    Command::new("git")
-        .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(output.status.success(), "rebuild should succeed with empty environment");
 
-    Command::new("git")
-        .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
-        .output()?;
+        let stdout = String::from_utf8(output.stdout.clone())?;
+        let stderr = String::from_utf8(output.stderr)?;
+        let full_output = format!("{}{}", stdout, stderr);
 
-    // Create initial commit
-    std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
-    Command::new("git")
-        .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(full_output.contains("No branches promoted to this environment, using base branch only"));
 
-    Command::new("git")
-        .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Verify staging branch exists and matches main branch
+        Command::new("git")
+            .args(&["checkout", "staging"])
+            .current_dir(temp_dir.path())
+            .output()?;
 
-    // Initialize hitch with empty environment
-    Command::new("git")
-        .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(test_env.path().join("README.md").exists(), "staging branch should have base branch content");
 
-    let hitch_config = r#"{
-  "version": "1.0",
-  "environments": {
-    "staging": {
-      "base": "main",
-      "branches": [],
-      "locked": false,
-      "locked_by": null,
-      "locked_at": null,
-      "rebuilt_at": null
-    }
-  }
-}"#;
-
-    std::fs::write(temp_dir.path().join("hitch.json"), hitch_config)?;
-    std::fs::write(temp_dir.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
-
-    Command::new("git")
-        .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Return to main branch
-    Command::new("git")
-        .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
-
-    // Run rebuild command
-    let output = Command::new(&hitch_path)
-        .args(&["rebuild", "staging", "--verbose"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    assert!(output.status.success(), "rebuild should succeed with empty environment");
-
-    let stdout = String::from_utf8(output.stdout.clone())?;
-    let stderr = String::from_utf8(output.stderr)?;
-    let full_output = format!("{}{}", stdout, stderr);
-
-    assert!(full_output.contains("No branches promoted to this environment, using base branch only"));
-
-    // Verify staging branch exists and matches main branch
-    Command::new("git")
-        .args(&["checkout", "staging"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    assert!(temp_dir.path().join("README.md").exists(), "staging branch should have base branch content");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[test]
 fn test_rebuild_nonexistent_environment() -> Result<()> {
-    let temp_dir = tempdir()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Initialize hitch with dev environment only
+        test_env.create_hitch_config_with_environment("dev", "main", &[], false)?;
 
-    // Initialize git repo and hitch
-    Command::new("git")
-        .args(&["init"])
-        .current_dir(&temp_dir)
-        .output()?;
+        // Try to rebuild nonexistent environment
+        let output = test_env.run_hitch_command(&["rebuild", "production"])?;
 
-    Command::new("git")
-        .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
-        .output()?;
+        assert!(!output.status.success(), "rebuild should fail for nonexistent environment");
 
-    Command::new("git")
-        .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
-        .output()?;
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Environment 'production' does not exist"));
 
-    std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
-    Command::new("git")
-        .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Initialize hitch with dev environment only
-    Command::new("git")
-        .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let hitch_config = r#"{
-  "version": "1.0",
-  "environments": {
-    "dev": {
-      "base": "main",
-      "branches": [],
-      "locked": false,
-      "locked_by": null,
-      "locked_at": null,
-      "rebuilt_at": null
-    }
-  }
-}"#;
-
-    std::fs::write(temp_dir.path().join("hitch.json"), hitch_config)?;
-    std::fs::write(temp_dir.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
-
-    Command::new("git")
-        .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Return to main branch
-    Command::new("git")
-        .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
-
-    // Try to rebuild nonexistent environment
-    let output = Command::new(&hitch_path)
-        .args(&["rebuild", "production"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    assert!(!output.status.success(), "rebuild should fail for nonexistent environment");
-
-    let stderr = String::from_utf8(output.stderr)?;
-    assert!(stderr.contains("Environment 'production' does not exist"));
-
-    Ok(())
+        Ok(())
+    })
 }
 
 #[test]
 fn test_rebuild_locked_environment() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Initialize hitch with locked environment
     Command::new("git")
         .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let locked_time = Utc::now();
@@ -409,26 +289,26 @@ fn test_rebuild_locked_environment() -> Result<()> {
 
     Command::new("git")
         .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Try to rebuild locked environment (should fail)
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "production"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(!output.status.success(), "rebuild should fail for locked environment");
@@ -440,7 +320,7 @@ fn test_rebuild_locked_environment() -> Result<()> {
     // Try to rebuild with --force flag (should succeed)
     let force_output = Command::new(&hitch_path)
         .args(&["rebuild", "production", "--force"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(force_output.status.success(), "rebuild with --force should succeed for locked environment");
@@ -450,41 +330,41 @@ fn test_rebuild_locked_environment() -> Result<()> {
 
 #[test]
 fn test_rebuild_missing_branch() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Initialize hitch with environment that references non-existent branch
     Command::new("git")
         .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let hitch_config = r#"{
@@ -506,26 +386,26 @@ fn test_rebuild_missing_branch() -> Result<()> {
 
     Command::new("git")
         .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Try to rebuild environment with missing branch
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "dev", "--verbose"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(!output.status.success(), "rebuild should fail for missing branch");
@@ -538,41 +418,41 @@ fn test_rebuild_missing_branch() -> Result<()> {
 
 #[test]
 fn test_rebuild_missing_base_branch() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit on main (but environment references develop)
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Initialize hitch with environment that references non-existent base branch
     Command::new("git")
         .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let hitch_config = r#"{
@@ -594,26 +474,26 @@ fn test_rebuild_missing_base_branch() -> Result<()> {
 
     Command::new("git")
         .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Try to rebuild environment with missing base branch
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "dev", "--verbose"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(!output.status.success(), "rebuild should fail for missing base branch");
@@ -626,35 +506,35 @@ fn test_rebuild_missing_base_branch() -> Result<()> {
 
 #[test]
 fn test_rebuild_multiple_branches() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit on main
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create multiple feature branches
@@ -664,7 +544,7 @@ fn test_rebuild_multiple_branches() -> Result<()> {
         // Create branch
         Command::new("git")
             .args(&["checkout", "-b", branch])
-            .current_dir(&temp_dir)
+            .current_dir(temp_env.path())
             .output()?;
 
         // Add content to branch
@@ -674,25 +554,25 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
         Command::new("git")
             .args(&["add", &filename])
-            .current_dir(&temp_dir)
+            .current_dir(temp_env.path())
             .output()?;
 
         Command::new("git")
             .args(&["commit", "-m", &format!("Add {} feature", branch)])
-            .current_dir(&temp_dir)
+            .current_dir(temp_env.path())
             .output()?;
 
         // Return to main
         Command::new("git")
             .args(&["checkout", "main"])
-            .current_dir(&temp_dir)
+            .current_dir(temp_env.path())
             .output()?;
     }
 
     // Initialize hitch with environment that has multiple promoted branches
     Command::new("git")
         .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let hitch_config = format!(r#"{{
@@ -714,26 +594,26 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
     Command::new("git")
         .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Run rebuild command
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "dev", "--verbose"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(output.status.success(), "rebuild should succeed with multiple branches");
@@ -755,7 +635,7 @@ fn test_rebuild_multiple_branches() -> Result<()> {
     // Verify dev branch exists and has content from all feature branches
     Command::new("git")
         .args(&["checkout", "dev"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(temp_dir.path().join("README.md").exists(), "dev branch should have base branch content");
@@ -770,64 +650,64 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
 #[test]
 fn test_rebuild_with_git_hooks() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create feature branch
     Command::new("git")
         .args(&["checkout", "-b", "feature/test"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     std::fs::write(temp_dir.path().join("feature.txt"), "# Feature\n")?;
     Command::new("git")
         .args(&["add", "feature.txt"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add feature"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Initialize hitch with dev environment
     Command::new("git")
         .args(&["checkout", "--orphan", "hitch-metadata"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let hitch_config = r#"{
@@ -849,18 +729,18 @@ fn test_rebuild_with_git_hooks() -> Result<()> {
 
     Command::new("git")
         .args(&["add", "hitch.json", ".gitignore"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Add hitch configuration"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Return to main branch
     Command::new("git")
         .args(&["checkout", "main"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Set up a problematic pre-commit hook that would normally fail
@@ -884,12 +764,12 @@ exit 0
         std::fs::set_permissions(hooks_dir.join("pre-commit"), perms)?;
     }
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Run rebuild command - should succeed despite git hooks
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "dev", "--verbose"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -911,7 +791,7 @@ exit 0
     // Verify we returned to the original branch (not stuck on temp branch)
     let current_branch_output = Command::new("git")
         .args(&["branch", "--show-current"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     let current_branch_str = String::from_utf8(current_branch_output.stdout)?;
@@ -924,7 +804,7 @@ exit 0
         // Verify dev branch exists and has the expected content
         Command::new("git")
             .args(&["checkout", "dev"])
-            .current_dir(&temp_dir)
+            .current_dir(temp_env.path())
             .output()?;
 
         assert!(temp_dir.path().join("README.md").exists(), "dev branch should have base branch content");
@@ -936,7 +816,7 @@ exit 0
     // Verify dev branch exists and has the expected content
     Command::new("git")
         .args(&["checkout", "dev"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(temp_dir.path().join("README.md").exists(), "dev branch should have base branch content");
@@ -947,43 +827,43 @@ exit 0
 
 #[test]
 fn test_rebuild_not_initialized() -> Result<()> {
-    let temp_dir = tempdir()?;
+    let temp_dir = std::env::current_dir()?;
 
     // Initialize git repo but don't initialize hitch
     Command::new("git")
         .args(&["init"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Configure git user
     Command::new("git")
         .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     // Create initial commit
     std::fs::write(temp_dir.path().join("README.md"), "# Initial\n")?;
     Command::new("git")
         .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     Command::new("git")
         .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
+    let hitch_path = env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/hitch";
 
     // Try to rebuild without hitch being initialized
     let output = Command::new(&hitch_path)
         .args(&["rebuild", "dev"])
-        .current_dir(&temp_dir)
+        .current_dir(temp_env.path())
         .output()?;
 
     assert!(!output.status.success(), "rebuild should fail when hitch not initialized");
