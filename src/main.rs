@@ -9,7 +9,9 @@ use commands::global_context::GlobalContext;
 #[derive(Parser)]
 #[command(name = "hitch")]
 #[command(about = "Git branch management for environment-based deployments")]
-#[command(long_about = "Hitch is a CLI tool that brings environment branch management to Git. It helps you organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation—turning chaotic branch-based releases into a structured, auditable process.")]
+#[command(
+    long_about = "Hitch is a CLI tool that brings environment branch management to Git. It helps you organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation—turning chaotic branch-based releases into a structured, auditable process."
+)]
 #[command(version = "1.0.0")]
 #[command(author = "Martin Page")]
 struct Cli {

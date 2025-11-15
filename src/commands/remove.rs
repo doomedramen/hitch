@@ -1,8 +1,8 @@
 use crate::commands::global_context::GlobalContext;
 use crate::utils::command_helpers::{environment::get_locked_by_user, logging::validation_success};
 use crate::utils::validation::validate_name;
-use clap::Args;
 use anyhow::Result;
+use clap::Args;
 
 #[derive(Args)]
 pub struct RemoveCommand {
@@ -15,10 +15,7 @@ pub struct RemoveCommand {
     pub force: bool,
 }
 
-pub fn run(
-    args: RemoveCommand,
-    context: &GlobalContext,
-) -> Result<()> {
+pub fn run(args: RemoveCommand, context: &GlobalContext) -> Result<()> {
     context.log_info(&format!("Removing environment '{}'...", args.env_name));
 
     // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
@@ -30,17 +27,15 @@ pub fn run(
     // Step 3: Remove the environment
     remove_environment(context, &args.env_name)?;
 
-    context.log_success(&format!("Successfully removed environment '{}'!", args.env_name));
+    context.log_success(&format!(
+        "Successfully removed environment '{}'!",
+        args.env_name
+    ));
     Ok(())
 }
 
-
 /// Validate that environment is ready for removal
-fn validate_preconditions(
-    context: &GlobalContext,
-    env_name: &str,
-    force: bool,
-) -> Result<()> {
+fn validate_preconditions(context: &GlobalContext, env_name: &str, force: bool) -> Result<()> {
     context.log_verbose("Validating remove preconditions...");
 
     // Validate input name
@@ -49,9 +44,8 @@ fn validate_preconditions(
     // Check if environment exists
     crate::utils::command_helpers::ensure_environment_exists(context, env_name)?;
 
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = &config.environments[env_name];
 
     // Check if environment has branches (confirmation required unless force)
@@ -79,13 +73,19 @@ fn validate_preconditions(
 
 /// Remove an environment from the configuration
 fn remove_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    context.log_verbose(&format!("Removing environment '{}' from configuration...", env_name));
+    context.log_verbose(&format!(
+        "Removing environment '{}' from configuration...",
+        env_name
+    ));
 
     // Modify metadata to remove the environment
     crate::utils::prelude::modify_metadata(context, |config| {
         config.remove_environment(env_name);
 
-        context.log_verbose(&format!("✓ Removed environment '{}' from configuration", env_name));
+        context.log_verbose(&format!(
+            "✓ Removed environment '{}' from configuration",
+            env_name
+        ));
         Ok(())
     })
 }

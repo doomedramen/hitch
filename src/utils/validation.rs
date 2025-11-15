@@ -15,7 +15,10 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
     }
 
     if name.len() > 100 {
-        return Err(anyhow::anyhow!("{} name cannot exceed 100 characters", name_type));
+        return Err(anyhow::anyhow!(
+            "{} name cannot exceed 100 characters",
+            name_type
+        ));
     }
 
     // Check for invalid characters that would cause issues in git
@@ -54,9 +57,8 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
 
 /// Reusable environment existence validation
 pub fn validate_environment_exists(context: &GlobalContext, env_name: &str) -> Result<()> {
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
     if !config.environments.contains_key(env_name) {
         return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
@@ -67,9 +69,8 @@ pub fn validate_environment_exists(context: &GlobalContext, env_name: &str) -> R
 
 /// Reusable environment non-existence validation
 pub fn validate_environment_not_exists(context: &GlobalContext, env_name: &str) -> Result<()> {
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
     if config.environments.contains_key(env_name) {
         return Err(anyhow::anyhow!("Environment '{}' already exists", env_name));

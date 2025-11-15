@@ -86,7 +86,6 @@ where
         ));
     }
 
-    
     result
 }
 
@@ -122,8 +121,8 @@ where
         .context("Failed to read hitch.json from hitch-metadata branch")?;
 
     // Parse configuration
-    let config: HitchConfig = serde_json::from_str(&config_json)
-        .context("Failed to parse hitch.json")?;
+    let config: HitchConfig =
+        serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
 
     context.log_verbose("✓ hitch.json loaded successfully (read-only)");
 
@@ -259,7 +258,6 @@ where
     result
 }
 
-
 /// Lock an environment
 pub fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
     modify_metadata(context, |config: &mut HitchConfig| {
@@ -276,7 +274,10 @@ pub fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
         let user_email = context.git().get_user_email()?;
         environment.lock(user_email.clone());
 
-        context.log_info(&format!("Environment '{}' locked by '{}'", env_name, user_email));
+        context.log_info(&format!(
+            "Environment '{}' locked by '{}'",
+            env_name, user_email
+        ));
         Ok(())
     })
 }
@@ -312,18 +313,24 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
 /// - Step 5: Update rebuiltAt timestamp (handled automatically on success)
 /// - Automatic rollback on any failure
 pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    context.log_verbose(&format!("Starting rebuild process for environment '{}'", env_name));
+    context.log_verbose(&format!(
+        "Starting rebuild process for environment '{}'",
+        env_name
+    ));
 
     // Record original branch for cleanup - this is the branch the user was on when we started
     let user_original_branch = context.git().get_current_branch()?;
-    context.log_verbose(&format!("Recorded user's original branch: {}", user_original_branch));
+    context.log_verbose(&format!(
+        "Recorded user's original branch: {}",
+        user_original_branch
+    ));
     let mut cleanup_needed = false;
 
     // Get environment configuration
-    let config = access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
-    let environment = config.environments.get(env_name)
+    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
+    let environment = config
+        .environments
+        .get(env_name)
         .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
 
     // Step 2: Prepare temp branch
@@ -331,7 +338,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     let temp_branch = format!("hitch-tmp-{}-{}", environment.base, timestamp);
 
     let result = (|| -> Result<()> {
-        context.log_info(&format!("Creating temporary branch '{}' from '{}'", temp_branch, environment.base));
+        context.log_info(&format!(
+            "Creating temporary branch '{}' from '{}'",
+            temp_branch, environment.base
+        ));
         create_temp_branch_for_rebuild(context, &temp_branch, &environment.base)?;
         cleanup_needed = true;
 
@@ -344,8 +354,12 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         }
 
         // Step 4: Replace environment branch with temp branch
-        context.log_info(&format!("Replacing '{}' branch with rebuilt content", env_name));
-        let backup_branch = safe_replace_environment_branch_for_rebuild(context, env_name, &temp_branch)?;
+        context.log_info(&format!(
+            "Replacing '{}' branch with rebuilt content",
+            env_name
+        ));
+        let backup_branch =
+            safe_replace_environment_branch_for_rebuild(context, env_name, &temp_branch)?;
 
         // Update rebuiltAt timestamp on success
         update_rebuilt_timestamp_for_rebuild(context, env_name)?;
@@ -356,18 +370,25 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         if context.git().branch_exists(&backup_branch)? {
             context.log_verbose(&format!("Cleaning up backup branch '{}'", backup_branch));
             if let Err(e) = context.git().delete_branch(&backup_branch, true) {
-                let error_msg = format!("Failed to delete backup branch '{}': {}", backup_branch, e);
+                let error_msg =
+                    format!("Failed to delete backup branch '{}': {}", backup_branch, e);
                 context.log_warning(&error_msg);
                 cleanup_errors.push(error_msg);
             }
         } else {
-            context.log_verbose(&format!("No backup branch '{}' to clean up (first rebuild)", backup_branch));
+            context.log_verbose(&format!(
+                "No backup branch '{}' to clean up (first rebuild)",
+                backup_branch
+            ));
         }
 
         // Cleanup: delete temp branch (try regular delete first, then force if needed)
         context.log_verbose(&format!("Cleaning up temporary branch '{}'", temp_branch));
         if let Err(_e) = context.git().delete_branch(&temp_branch, false) {
-            context.log_verbose(&format!("Regular delete failed, trying force delete for '{}'", temp_branch));
+            context.log_verbose(&format!(
+                "Regular delete failed, trying force delete for '{}'",
+                temp_branch
+            ));
             if let Err(e2) = context.git().delete_branch(&temp_branch, true) {
                 let error_msg = format!("Failed to delete temp branch '{}': {}", temp_branch, e2);
                 context.log_warning(&error_msg);
@@ -377,9 +398,16 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
 
         // Report overall success/failure based on cleanup results
         if cleanup_errors.is_empty() {
-            context.log_verbose(&format!("✓ Successfully cleaned up all temporary branches for environment '{}'", env_name));
+            context.log_verbose(&format!(
+                "✓ Successfully cleaned up all temporary branches for environment '{}'",
+                env_name
+            ));
         } else {
-            context.log_warning(&format!("Cleanup completed with {} error(s) for environment '{}'", cleanup_errors.len(), env_name));
+            context.log_warning(&format!(
+                "Cleanup completed with {} error(s) for environment '{}'",
+                cleanup_errors.len(),
+                env_name
+            ));
             for error in &cleanup_errors {
                 context.log_warning(&format!("  {}", error));
             }
@@ -403,7 +431,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         };
 
         if current_branch != user_original_branch {
-            context.log_info(&format!("Returning to user's original branch '{}'", user_original_branch));
+            context.log_info(&format!(
+                "Returning to user's original branch '{}'",
+                user_original_branch
+            ));
 
             // Handle detached HEAD case specially
             let checkout_result = if user_original_branch.starts_with("detached-HEAD-") {
@@ -415,7 +446,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             };
 
             if let Err(e) = checkout_result {
-                context.log_error(&format!("Failed to return to user's original branch '{}': {}", user_original_branch, e));
+                context.log_error(&format!(
+                    "Failed to return to user's original branch '{}': {}",
+                    user_original_branch, e
+                ));
             }
         }
 
@@ -423,7 +457,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         if context.git().branch_exists(&temp_branch)? {
             context.log_info(&format!("Cleaning up failed temp branch '{}'", temp_branch));
             if let Err(e) = context.git().delete_branch(&temp_branch, true) {
-                context.log_warning(&format!("Failed to delete temp branch '{}': {}", temp_branch, e));
+                context.log_warning(&format!(
+                    "Failed to delete temp branch '{}': {}",
+                    temp_branch, e
+                ));
             }
         }
     }
@@ -441,7 +478,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     };
 
     if current_branch != user_original_branch {
-        context.log_info(&format!("Returning to user's original branch '{}'", user_original_branch));
+        context.log_info(&format!(
+            "Returning to user's original branch '{}'",
+            user_original_branch
+        ));
 
         // Handle detached HEAD case specially
         let checkout_result = if user_original_branch.starts_with("detached-HEAD-") {
@@ -453,32 +493,55 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         };
 
         if let Err(e) = checkout_result {
-            context.log_warning(&format!("Failed to return to user's original branch '{}': {}", user_original_branch, e));
+            context.log_warning(&format!(
+                "Failed to return to user's original branch '{}': {}",
+                user_original_branch, e
+            ));
         } else {
-            context.log_verbose(&format!("✓ Returned to user's original branch '{}'", user_original_branch));
+            context.log_verbose(&format!(
+                "✓ Returned to user's original branch '{}'",
+                user_original_branch
+            ));
         }
     }
 
-    context.log_verbose(&format!("✓ Rebuild process completed for environment '{}'", env_name));
+    context.log_verbose(&format!(
+        "✓ Rebuild process completed for environment '{}'",
+        env_name
+    ));
     Ok(())
 }
 
 /// Create a temporary branch from the base branch for rebuilding
-fn create_temp_branch_for_rebuild(context: &GlobalContext, temp_branch: &str, base_branch: &str) -> Result<()> {
+fn create_temp_branch_for_rebuild(
+    context: &GlobalContext,
+    temp_branch: &str,
+    base_branch: &str,
+) -> Result<()> {
     // Ensure base branch exists
     if !context.git().branch_exists_anywhere(base_branch)? {
-        return Err(anyhow::anyhow!("Base branch '{}' does not exist", base_branch));
+        return Err(anyhow::anyhow!(
+            "Base branch '{}' does not exist",
+            base_branch
+        ));
     }
 
     // Create temp branch from base branch
     context.git().create_branch_from(temp_branch, base_branch)?;
-    context.log_verbose(&format!("✓ Created temporary branch '{}' from '{}'", temp_branch, base_branch));
+    context.log_verbose(&format!(
+        "✓ Created temporary branch '{}' from '{}'",
+        temp_branch, base_branch
+    ));
 
     Ok(())
 }
 
 /// Perform squash merges of promoted branches into temp branch for rebuilding
-fn perform_squash_merges_for_rebuild(context: &GlobalContext, temp_branch: &str, branches: &[String]) -> Result<()> {
+fn perform_squash_merges_for_rebuild(
+    context: &GlobalContext,
+    temp_branch: &str,
+    branches: &[String],
+) -> Result<()> {
     // Record original branch
     let original_branch = context.git().get_current_branch()?;
 
@@ -528,12 +591,18 @@ fn safe_replace_environment_branch_for_rebuild(
 
     // Step 4a: Rename current environment branch to backup
     if context.git().branch_exists(env_name)? {
-        context.log_verbose(&format!("Backing up '{}' branch to '{}'", env_name, backup_branch));
+        context.log_verbose(&format!(
+            "Backing up '{}' branch to '{}'",
+            env_name, backup_branch
+        ));
         context.git().rename_branch(env_name, &backup_branch)?;
     }
 
     // Step 4b: Create new environment branch from temp branch
-    context.log_verbose(&format!("Creating new '{}' branch from temp branch", env_name));
+    context.log_verbose(&format!(
+        "Creating new '{}' branch from temp branch",
+        env_name
+    ));
     context.git().create_branch_from(env_name, temp_branch)?;
 
     // Return to original branch

@@ -4,7 +4,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 /// Helper functions for git operations using the test environment
 impl common::TestEnv {
@@ -35,14 +35,18 @@ fn test_git_operations_create_orphan_branch() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create orphan branch
         git_ops.create_orphan_branch("orphan-test")?;
 
         // Verify we're on the orphan branch
         let current_branch = git_ops.get_current_branch()?;
-        assert_eq!(current_branch, "orphan-test", "Should be on the newly created orphan branch");
+        assert_eq!(
+            current_branch, "orphan-test",
+            "Should be on the newly created orphan branch"
+        );
 
         // Verify the branch has no commits
         let output = Command::new("git")
@@ -50,7 +54,10 @@ fn test_git_operations_create_orphan_branch() -> Result<()> {
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);
-        assert!(log_output.trim().is_empty(), "Orphan branch should have no commits");
+        assert!(
+            log_output.trim().is_empty(),
+            "Orphan branch should have no commits"
+        );
 
         Ok(())
     })
@@ -63,11 +70,16 @@ fn test_git_operations_new_at_path() -> Result<()> {
         let test_path = test_env.path();
 
         // Create GitOperations instance with explicit path
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Test basic functionality (handle both main and master branch names)
         let current_branch = git_ops.get_current_branch()?;
-        assert!(current_branch == "main" || current_branch == "master", "Should detect main or master branch, got: {}", current_branch);
+        assert!(
+            current_branch == "main" || current_branch == "master",
+            "Should detect main or master branch, got: {}",
+            current_branch
+        );
 
         // Test with non-existent directory
         let result = hitch::utils::git_operations::GitOperations::new_at_path("/nonexistent/path");
@@ -83,7 +95,8 @@ fn test_git_operations_add_and_commit() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a file
         fs::write(test_path.join("test.txt"), "Test content")?;
@@ -97,7 +110,10 @@ fn test_git_operations_add_and_commit() -> Result<()> {
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);
-        assert!(log_output.contains("Add test file"), "Commit message should be in log");
+        assert!(
+            log_output.contains("Add test file"),
+            "Commit message should be in log"
+        );
 
         Ok(())
     })
@@ -109,14 +125,18 @@ fn test_git_operations_file_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Write a file and commit it so it's in the branch
         git_ops.write_file("test.txt", "Test content")?;
         git_ops.add_and_commit(&["test.txt"], "Add test file")?;
 
         // Verify file exists
-        assert!(fs::metadata(test_path.join("test.txt")).is_ok(), "File should exist after writing");
+        assert!(
+            fs::metadata(test_path.join("test.txt")).is_ok(),
+            "File should exist after writing"
+        );
 
         // Test read_file_from_branch on current branch
         let content = git_ops.read_file_from_branch("main", "test.txt")?;
@@ -136,7 +156,8 @@ fn test_git_operations_branch_exists() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a test branch
         Command::new("git")
@@ -158,13 +179,28 @@ fn test_git_operations_branch_exists() -> Result<()> {
             .output()?;
 
         // Test branch_exists (local branches only)
-        assert!(git_ops.branch_exists("main")?, "Main branch should exist locally");
-        assert!(git_ops.branch_exists("test-branch")?, "Test branch should exist locally");
-        assert!(!git_ops.branch_exists("nonexistent")?, "Nonexistent branch should not exist");
+        assert!(
+            git_ops.branch_exists("main")?,
+            "Main branch should exist locally"
+        );
+        assert!(
+            git_ops.branch_exists("test-branch")?,
+            "Test branch should exist locally"
+        );
+        assert!(
+            !git_ops.branch_exists("nonexistent")?,
+            "Nonexistent branch should not exist"
+        );
 
         // Test branch_exists_anywhere (both local and remote)
-        assert!(git_ops.branch_exists_anywhere("main")?, "Main should exist anywhere");
-        assert!(git_ops.branch_exists_anywhere("test-branch")?, "Test branch should exist anywhere");
+        assert!(
+            git_ops.branch_exists_anywhere("main")?,
+            "Main should exist anywhere"
+        );
+        assert!(
+            git_ops.branch_exists_anywhere("test-branch")?,
+            "Test branch should exist anywhere"
+        );
 
         Ok(())
     })
@@ -176,18 +212,28 @@ fn test_git_operations_branch_management() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a test branch first
         git_ops.create_branch_from("feature-test", "main")?;
 
         // Verify branch was created
-        assert!(git_ops.branch_exists_anywhere("feature-test")?, "New branch should exist");
+        assert!(
+            git_ops.branch_exists_anywhere("feature-test")?,
+            "New branch should exist"
+        );
 
         // Test rename branch
         git_ops.rename_branch("feature-test", "renamed-branch")?;
-        assert!(!git_ops.branch_exists_anywhere("feature-test")?, "Old name should not exist");
-        assert!(git_ops.branch_exists_anywhere("renamed-branch")?, "New name should exist");
+        assert!(
+            !git_ops.branch_exists_anywhere("feature-test")?,
+            "Old name should not exist"
+        );
+        assert!(
+            git_ops.branch_exists_anywhere("renamed-branch")?,
+            "New name should exist"
+        );
 
         // Test delete branch
         Command::new("git")
@@ -195,7 +241,10 @@ fn test_git_operations_branch_management() -> Result<()> {
             .current_dir(test_path)
             .output()?; // Switch off branch first
         git_ops.delete_branch("renamed-branch", false)?;
-        assert!(!git_ops.branch_exists_anywhere("renamed-branch")?, "Deleted branch should not exist");
+        assert!(
+            !git_ops.branch_exists_anywhere("renamed-branch")?,
+            "Deleted branch should not exist"
+        );
 
         // Test force delete (with unmerged changes)
         git_ops.create_branch_from("temp-branch", "main")?;
@@ -218,7 +267,10 @@ fn test_git_operations_branch_management() -> Result<()> {
             .output()?;
 
         git_ops.delete_branch("temp-branch", true)?;
-        assert!(!git_ops.branch_exists_anywhere("temp-branch")?, "Force deleted branch should not exist");
+        assert!(
+            !git_ops.branch_exists_anywhere("temp-branch")?,
+            "Force deleted branch should not exist"
+        );
 
         Ok(())
     })
@@ -230,7 +282,8 @@ fn test_git_operations_commit_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Test get_branch_commit_sha
         let commit_sha = git_ops.get_branch_commit_sha("main")?;
@@ -240,7 +293,10 @@ fn test_git_operations_commit_operations() -> Result<()> {
         // Test get_commit_timestamp
         let timestamp = git_ops.get_commit_timestamp(&commit_sha)?;
         let now = chrono::Utc::now();
-        assert!(timestamp <= now, "Commit timestamp should be in the past or now");
+        assert!(
+            timestamp <= now,
+            "Commit timestamp should be in the past or now"
+        );
 
         Ok(())
     })
@@ -254,7 +310,8 @@ fn test_git_operations_remote_operations() -> Result<()> {
 
         test_env.init_git_repo_with_remote()?;
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a branch and push it
         git_ops.create_branch_from("test-remote", "main")?;
@@ -293,7 +350,8 @@ fn test_git_operations_squash_merge() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a feature branch with multiple commits
         git_ops.create_branch_from("feature-branch", "main")?;
@@ -318,9 +376,18 @@ fn test_git_operations_squash_merge() -> Result<()> {
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);
-        assert!(log_output.contains("Squashed feature branch"), "Should have squash commit message");
-        assert!(fs::metadata(test_path.join("file1.txt")).is_ok(), "File1 should exist after merge");
-        assert!(fs::metadata(test_path.join("file2.txt")).is_ok(), "File2 should exist after merge");
+        assert!(
+            log_output.contains("Squashed feature branch"),
+            "Should have squash commit message"
+        );
+        assert!(
+            fs::metadata(test_path.join("file1.txt")).is_ok(),
+            "File1 should exist after merge"
+        );
+        assert!(
+            fs::metadata(test_path.join("file2.txt")).is_ok(),
+            "File2 should exist after merge"
+        );
 
         Ok(())
     })
@@ -336,18 +403,29 @@ fn test_git_operations_error_handling() -> Result<()> {
         use std::fs;
         let non_git_dir = test_env.path().join("non_git_temp");
         fs::create_dir_all(&non_git_dir)?;
-        let result = hitch::utils::git_operations::GitOperations::new_at_path(non_git_dir.to_str().unwrap());
-        assert!(result.is_err(), "Should fail to create GitOperations in non-git directory");
+        let result =
+            hitch::utils::git_operations::GitOperations::new_at_path(non_git_dir.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "Should fail to create GitOperations in non-git directory"
+        );
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Test checkout non-existent branch
         let result = git_ops.checkout_branch("nonexistent-branch");
-        assert!(result.is_err(), "Should fail to checkout non-existent branch");
+        assert!(
+            result.is_err(),
+            "Should fail to checkout non-existent branch"
+        );
 
         // Test create branch from non-existent source
         let result = git_ops.create_branch_from("new-branch", "nonexistent-source");
-        assert!(result.is_err(), "Should fail to create branch from non-existent source");
+        assert!(
+            result.is_err(),
+            "Should fail to create branch from non-existent source"
+        );
 
         // Test rename non-existent branch
         let result = git_ops.rename_branch("nonexistent", "newname");

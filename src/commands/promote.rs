@@ -1,8 +1,11 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::{environment::get_locked_by_user, ensure_environment_exists, logging::validation_success, validate_branch_for_promotion};
+use crate::utils::command_helpers::{
+    ensure_environment_exists, environment::get_locked_by_user, logging::validation_success,
+    validate_branch_for_promotion,
+};
 use crate::utils::validation::validate_name;
-use clap::Args;
 use anyhow::Result;
+use clap::Args;
 
 #[derive(Args)]
 pub struct PromoteCommand {
@@ -15,11 +18,11 @@ pub struct PromoteCommand {
     pub env_name: String,
 }
 
-pub fn run(
-    args: PromoteCommand,
-    context: &GlobalContext,
-) -> Result<()> {
-    context.log_info(&format!("Promoting branch '{}' to environment '{}'...", args.branch, args.env_name));
+pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
+    context.log_info(&format!(
+        "Promoting branch '{}' to environment '{}'...",
+        args.branch, args.env_name
+    ));
 
     // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
     crate::utils::prelude::pre_check(context)?;
@@ -33,10 +36,12 @@ pub fn run(
         promote_branch_to_environment(context, &args.branch, &args.env_name)
     })?;
 
-    context.log_success(&format!("Successfully promoted '{}' to environment '{}'!", args.branch, args.env_name));
+    context.log_success(&format!(
+        "Successfully promoted '{}' to environment '{}'!",
+        args.branch, args.env_name
+    ));
     Ok(())
 }
-
 
 /// Validate that branch and environment are ready for promotion
 fn validate_preconditions(
@@ -53,9 +58,8 @@ fn validate_preconditions(
     // Check if environment exists
     ensure_environment_exists(context, env_name)?;
 
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -71,14 +75,19 @@ fn validate_preconditions(
     if environment.branches.contains(&branch.to_string()) {
         return Err(anyhow::anyhow!(
             "Branch '{}' is already promoted to environment '{}'",
-            branch, env_name
+            branch,
+            env_name
         ));
     }
 
     // Check if branch exists and is valid for promotion
     validate_branch_for_promotion(context, branch)?;
 
-    validation_success(context, &format!("'{}' to '{}'", branch, env_name), "Promotion validation");
+    validation_success(
+        context,
+        &format!("'{}' to '{}'", branch, env_name),
+        "Promotion validation",
+    );
     Ok(())
 }
 
@@ -88,7 +97,10 @@ fn promote_branch_to_environment(
     branch: &str,
     env_name: &str,
 ) -> anyhow::Result<()> {
-    context.log_verbose(&format!("Adding '{}' to environment '{}'...", branch, env_name));
+    context.log_verbose(&format!(
+        "Adding '{}' to environment '{}'...",
+        branch, env_name
+    ));
 
     // Modify metadata to add the branch
     crate::utils::prelude::modify_metadata(context, |config| {
@@ -99,14 +111,23 @@ fn promote_branch_to_environment(
         // Add the branch to the environment's branches list
         environment.add_branch(branch.to_string());
 
-        context.log_verbose(&format!("✓ Added '{}' to environment '{}'", branch, env_name));
+        context.log_verbose(&format!(
+            "✓ Added '{}' to environment '{}'",
+            branch, env_name
+        ));
         Ok(())
     })?;
 
     // Trigger rebuild of the environment
-    context.log_info(&format!("Triggering rebuild for environment '{}'...", env_name));
+    context.log_info(&format!(
+        "Triggering rebuild for environment '{}'...",
+        env_name
+    ));
     crate::utils::prelude::rebuild_environment(context, env_name)?;
 
-    context.log_verbose(&format!("✓ Environment '{}' rebuilt successfully", env_name));
+    context.log_verbose(&format!(
+        "✓ Environment '{}' rebuilt successfully",
+        env_name
+    ));
     Ok(())
 }

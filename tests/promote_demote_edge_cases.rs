@@ -1,15 +1,19 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use std::path::Path;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env, TestEnv};
+use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()>;
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()>;
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()>;
     fn get_current_branch(&self) -> Result<String>;
     fn branch_exists(&self, branch: &str) -> Result<bool>;
@@ -19,7 +23,12 @@ trait TestEnvExt {
 }
 
 impl TestEnvExt for TestEnv {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()> {
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         let mut environments = HashMap::new();
@@ -28,14 +37,17 @@ impl TestEnvExt for TestEnv {
             branches_vec.push(branch.to_string());
         }
 
-        environments.insert(env_name.to_string(), serde_json::json!({
-            "base": base_branch,
-            "branches": branches_vec,
-            "locked": false,
-            "lockedBy": null,
-            "lockedAt": null,
-            "rebuiltAt": null
-        }));
+        environments.insert(
+            env_name.to_string(),
+            serde_json::json!({
+                "base": base_branch,
+                "branches": branches_vec,
+                "locked": false,
+                "lockedBy": null,
+                "lockedAt": null,
+                "rebuiltAt": null
+            }),
+        );
 
         let config = serde_json::json!({
             "version": "1.0.0",
@@ -49,7 +61,10 @@ impl TestEnvExt for TestEnv {
             .output()?;
 
         // Update hitch.json with the new environment configuration
-        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(
+            self.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(self.path())
@@ -152,9 +167,16 @@ fn test_promote_invalid_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Test missing arguments
         let output = test_env.run_hitch_command(&["promote"])?;
-        assert!(!output.status.success(), "Promote should fail with missing arguments");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with missing arguments"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("the following required arguments were not provided") || stderr.contains("missing required arguments") || stderr.contains("expected 2 arguments"));
+        assert!(
+            stderr.contains("the following required arguments were not provided")
+                || stderr.contains("missing required arguments")
+                || stderr.contains("expected 2 arguments")
+        );
 
         Ok(())
     })
@@ -166,9 +188,16 @@ fn test_demote_invalid_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Test missing arguments
         let output = test_env.run_hitch_command(&["demote"])?;
-        assert!(!output.status.success(), "Demote should fail with missing arguments");
+        assert!(
+            !output.status.success(),
+            "Demote should fail with missing arguments"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("the following required arguments were not provided") || stderr.contains("missing required arguments") || stderr.contains("expected 2 arguments"));
+        assert!(
+            stderr.contains("the following required arguments were not provided")
+                || stderr.contains("missing required arguments")
+                || stderr.contains("expected 2 arguments")
+        );
 
         Ok(())
     })
@@ -180,7 +209,10 @@ fn test_promote_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Try to promote without hitch init
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail when hitch not initialized");
+        assert!(
+            !output.status.success(),
+            "Promote should fail when hitch not initialized"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not found") || stderr.contains("Failed to read hitch.json"));
 
@@ -194,7 +226,10 @@ fn test_demote_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Try to demote without hitch init
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Demote should fail when hitch not initialized");
+        assert!(
+            !output.status.success(),
+            "Demote should fail when hitch not initialized"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not found") || stderr.contains("Failed to read hitch.json"));
 
@@ -210,7 +245,10 @@ fn test_promote_nonexistent_environment() -> Result<()> {
 
         // Try to promote to non-existent environment
         let output = test_env.run_hitch_command(&["promote", "feature/test", "nonexistent"])?;
-        assert!(!output.status.success(), "Promote should fail with non-existent environment");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with non-existent environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("does not exist"));
 
@@ -226,7 +264,10 @@ fn test_demote_nonexistent_environment() -> Result<()> {
 
         // Try to demote from non-existent environment
         let output = test_env.run_hitch_command(&["demote", "feature/test", "nonexistent"])?;
-        assert!(!output.status.success(), "Demote should fail with non-existent environment");
+        assert!(
+            !output.status.success(),
+            "Demote should fail with non-existent environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("does not exist"));
 
@@ -241,14 +282,27 @@ fn test_promote_nonexistent_branch() -> Result<()> {
         test_env.create_environment_config("dev", "main", &[])?;
 
         // Ensure we're on main branch with clean working directory
-        Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["clean", "-fd"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["clean", "-fd"])
+            .current_dir(test_env.path())
+            .output()?;
 
         // Try to promote non-existent branch
         let output = test_env.run_hitch_command(&["promote", "nonexistent", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with non-existent branch");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with non-existent branch"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("does not exist"), "Expected error about non-existent branch, got: {}", stderr);
+        assert!(
+            stderr.contains("does not exist"),
+            "Expected error about non-existent branch, got: {}",
+            stderr
+        );
 
         Ok(())
     })
@@ -263,9 +317,16 @@ fn test_promote_already_promoted_branch() -> Result<()> {
 
         // Try to promote already promoted branch
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with already promoted branch");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with already promoted branch"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("already promoted"), "Expected error message about already promoted branch, got: {}", stderr);
+        assert!(
+            stderr.contains("already promoted"),
+            "Expected error message about already promoted branch, got: {}",
+            stderr
+        );
 
         Ok(())
     })
@@ -280,7 +341,10 @@ fn test_demote_not_promoted_branch() -> Result<()> {
 
         // Try to demote non-promoted branch
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Demote should fail with non-promoted branch");
+        assert!(
+            !output.status.success(),
+            "Demote should fail with non-promoted branch"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not promoted"));
 
@@ -296,17 +360,33 @@ fn test_promote_dirty_working_directory() -> Result<()> {
         test_env.create_environment_config("dev", "main", &[])?;
 
         // Ensure we're on main branch and clean any gitignore effects
-        Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["clean", "-fd"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["clean", "-fd"])
+            .current_dir(test_env.path())
+            .output()?;
 
         // Create untracked file that won't be ignored
         test_env.create_file("untracked.txt", "This should cause pre-check to fail")?;
 
         // Try to promote
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with dirty working directory");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with dirty working directory"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("Working tree is not clean") || stderr.contains("not clean") || stderr.contains("unclean") || stderr.contains("clean"), "Expected error about working directory not being clean, got: {}", stderr);
+        assert!(
+            stderr.contains("Working tree is not clean")
+                || stderr.contains("not clean")
+                || stderr.contains("unclean")
+                || stderr.contains("clean"),
+            "Expected error about working directory not being clean, got: {}",
+            stderr
+        );
 
         Ok(())
     })
@@ -320,17 +400,33 @@ fn test_demote_dirty_working_directory() -> Result<()> {
         test_env.create_environment_config("dev", "main", &["feature/test"])?;
 
         // Ensure we're on main branch and clean any gitignore effects
-        Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["clean", "-fd"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["clean", "-fd"])
+            .current_dir(test_env.path())
+            .output()?;
 
         // Create untracked file that won't be ignored
         test_env.create_file("untracked.txt", "This should cause pre-check to fail")?;
 
         // Try to demote
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Demote should fail with dirty working directory");
+        assert!(
+            !output.status.success(),
+            "Demote should fail with dirty working directory"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("Working tree is not clean") || stderr.contains("not clean") || stderr.contains("unclean") || stderr.contains("clean"), "Expected error about working directory not being clean, got: {}", stderr);
+        assert!(
+            stderr.contains("Working tree is not clean")
+                || stderr.contains("not clean")
+                || stderr.contains("unclean")
+                || stderr.contains("clean"),
+            "Expected error about working directory not being clean, got: {}",
+            stderr
+        );
 
         Ok(())
     })
@@ -348,14 +444,17 @@ fn test_promote_locked_environment() -> Result<()> {
         {
             use std::collections::HashMap;
             let mut environments = HashMap::new();
-            environments.insert("dev".to_string(), serde_json::json!({
-                "base": "main",
-                "branches": [],
-                "locked": true,
-                "lockedBy": "test@example.com",
-                "lockedAt": "2024-01-01T00:00:00Z",
-                "rebuiltAt": null
-            }));
+            environments.insert(
+                "dev".to_string(),
+                serde_json::json!({
+                    "base": "main",
+                    "branches": [],
+                    "locked": true,
+                    "lockedBy": "test@example.com",
+                    "lockedAt": "2024-01-01T00:00:00Z",
+                    "rebuiltAt": null
+                }),
+            );
 
             let config = serde_json::json!({
                 "version": "1.0.0",
@@ -366,15 +465,30 @@ fn test_promote_locked_environment() -> Result<()> {
         }
 
         // Update hitch.json with locked environment
-        Command::new("git").args(&["checkout", "hitch-metadata"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(test_env.path())
+            .output()?;
         fs::write(test_env.path().join("hitch.json"), config_content)?;
-        Command::new("git").args(&["add", "hitch.json"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["commit", "-m", "Lock environment"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["add", "hitch.json"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Lock environment"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
 
         // Try to promote to locked environment
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail to locked environment");
+        assert!(
+            !output.status.success(),
+            "Promote should fail to locked environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("locked") || stderr.contains("currently locked"));
 
@@ -394,14 +508,17 @@ fn test_demote_locked_environment() -> Result<()> {
         {
             use std::collections::HashMap;
             let mut environments = HashMap::new();
-            environments.insert("dev".to_string(), serde_json::json!({
-                "base": "main",
-                "branches": ["feature/test"],
-                "locked": true,
-                "lockedBy": "test@example.com",
-                "lockedAt": "2024-01-01T00:00:00Z",
-                "rebuiltAt": null
-            }));
+            environments.insert(
+                "dev".to_string(),
+                serde_json::json!({
+                    "base": "main",
+                    "branches": ["feature/test"],
+                    "locked": true,
+                    "lockedBy": "test@example.com",
+                    "lockedAt": "2024-01-01T00:00:00Z",
+                    "rebuiltAt": null
+                }),
+            );
 
             let config = serde_json::json!({
                 "version": "1.0.0",
@@ -412,15 +529,30 @@ fn test_demote_locked_environment() -> Result<()> {
         }
 
         // Update hitch.json with locked environment
-        Command::new("git").args(&["checkout", "hitch-metadata"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(test_env.path())
+            .output()?;
         fs::write(test_env.path().join("hitch.json"), config_content)?;
-        Command::new("git").args(&["add", "hitch.json"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["commit", "-m", "Lock environment"]).current_dir(test_env.path()).output()?;
-        Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
+        Command::new("git")
+            .args(&["add", "hitch.json"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Lock environment"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
 
         // Try to demote from locked environment
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Demote should fail to locked environment");
+        assert!(
+            !output.status.success(),
+            "Demote should fail to locked environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("locked") || stderr.contains("currently locked"));
 
@@ -434,7 +566,10 @@ fn test_promote_non_git_repository() -> Result<()> {
     with_test_env(SetupLevel::Basic, |test_env| {
         // Don't initialize git, just try to promote
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail in non-git repository");
+        assert!(
+            !output.status.success(),
+            "Promote should fail in non-git repository"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("Not in a Git repository") || stderr.contains("git repository"));
 
@@ -448,7 +583,10 @@ fn test_demote_non_git_repository() -> Result<()> {
     with_test_env(SetupLevel::Basic, |test_env| {
         // Don't initialize git, just try to demote
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Demote should fail in non-git repository");
+        assert!(
+            !output.status.success(),
+            "Demote should fail in non-git repository"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("Not in a Git repository") || stderr.contains("git repository"));
 
@@ -474,10 +612,16 @@ fn test_promote_demote_integration_workflow() -> Result<()> {
 
         // Verify we're back on main branch
         let current_branch = test_env.get_current_branch()?;
-        assert_eq!(current_branch, "main", "Should be back on main branch after promote");
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after promote"
+        );
 
         // Verify dev branch was rebuilt
-        assert!(test_env.branch_exists("dev")?, "Dev branch should exist after promote");
+        assert!(
+            test_env.branch_exists("dev")?,
+            "Dev branch should exist after promote"
+        );
 
         // 2. Demote the branch
         let output = test_env.run_hitch_command(&["demote", "feature/test", "dev"])?;
@@ -485,10 +629,16 @@ fn test_promote_demote_integration_workflow() -> Result<()> {
 
         // Verify we're back on main branch
         let current_branch = test_env.get_current_branch()?;
-        assert_eq!(current_branch, "main", "Should be back on main branch after demote");
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after demote"
+        );
 
         // Verify dev branch was rebuilt again
-        assert!(test_env.branch_exists("dev")?, "Dev branch should still exist after demote");
+        assert!(
+            test_env.branch_exists("dev")?,
+            "Dev branch should still exist after demote"
+        );
 
         Ok(())
     })
@@ -505,7 +655,10 @@ fn test_promote_environment_missing_base_branch() -> Result<()> {
 
         // Try to promote
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail when environment has missing base branch");
+        assert!(
+            !output.status.success(),
+            "Promote should fail when environment has missing base branch"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("does not exist") || stderr.contains("Base branch"));
 
@@ -529,7 +682,10 @@ fn test_concurrent_operations_simulation() -> Result<()> {
 
         // Second promote should fail because branch is already promoted
         let output2 = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output2.status.success(), "Second promote should fail because branch is already promoted");
+        assert!(
+            !output2.status.success(),
+            "Second promote should fail because branch is already promoted"
+        );
 
         Ok(())
     })

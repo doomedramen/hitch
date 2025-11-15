@@ -1,8 +1,8 @@
 use crate::commands::global_context::GlobalContext;
 use crate::utils::command_helpers::logging::validation_success;
-use crate::utils::validation::{validate_name, validate_environment_exists};
-use clap::Args;
+use crate::utils::validation::{validate_environment_exists, validate_name};
 use anyhow::Result;
+use clap::Args;
 
 #[derive(Args)]
 pub struct UnlockCommand {
@@ -11,10 +11,7 @@ pub struct UnlockCommand {
     pub env_name: String,
 }
 
-pub fn run(
-    args: UnlockCommand,
-    context: &GlobalContext,
-) -> Result<()> {
+pub fn run(args: UnlockCommand, context: &GlobalContext) -> Result<()> {
     context.log_info(&format!("Unlocking environment '{}'...", args.env_name));
 
     // Step 1: Precondition checks
@@ -23,16 +20,15 @@ pub fn run(
     // Step 2: Unlock the environment
     unlock_environment(context, &args.env_name)?;
 
-    context.log_success(&format!("Successfully unlocked environment '{}'!", args.env_name));
+    context.log_success(&format!(
+        "Successfully unlocked environment '{}'!",
+        args.env_name
+    ));
     Ok(())
 }
 
-
 /// Validate that environment exists and is ready for unlocking
-fn validate_preconditions(
-    context: &GlobalContext,
-    env_name: &str,
-) -> Result<()> {
+fn validate_preconditions(context: &GlobalContext, env_name: &str) -> Result<()> {
     context.log_verbose("Validating unlock preconditions...");
 
     // Validate input name
@@ -41,9 +37,8 @@ fn validate_preconditions(
     // Check if environment exists
     validate_environment_exists(context, env_name)?;
 
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -60,7 +55,8 @@ fn validate_preconditions(
         if locked_by != &current_user {
             return Err(anyhow::anyhow!(
                 "Environment '{}' is locked by '{}'. Only the locker can unlock it.",
-                env_name, locked_by
+                env_name,
+                locked_by
             ));
         }
     }

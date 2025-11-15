@@ -1,8 +1,8 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
 use crate::utils::prelude::{modify_metadata, pre_check};
-use clap::Args;
 use anyhow::Result;
+use clap::Args;
 
 #[derive(Args)]
 pub struct InitCommand {

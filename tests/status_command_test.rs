@@ -1,10 +1,10 @@
 use anyhow::Result;
-use std::process::Command;
 use chrono::Utc;
+use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 /// Simple ANSI code stripper for test assertions
 fn strip_ansi_codes(text: &str) -> String {
@@ -63,7 +63,10 @@ fn test_status_basic_display() -> Result<()> {
 }"#;
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -93,7 +96,6 @@ fn test_status_basic_display() -> Result<()> {
         let clean_stdout = strip_ansi_codes(&stdout);
         let clean_output = format!("{}{}", clean_stdout, stderr);
 
-
         assert!(output.status.success(), "status command should succeed");
 
         // Verify basic status display elements (using cleaned text without ANSI codes)
@@ -120,7 +122,8 @@ fn test_status_locked_environment() -> Result<()> {
             .output()?;
 
         let locked_time = Utc::now();
-        let hitch_config = format!(r#"{{
+        let hitch_config = format!(
+            r#"{{
   "version": "1.0",
   "environments": {{
     "prod": {{
@@ -132,10 +135,15 @@ fn test_status_locked_environment() -> Result<()> {
       "rebuilt_at": null
     }}
   }}
-}}"#, locked_time.format("%Y-%m-%dT%H:%M:%SZ"));
+}}"#,
+            locked_time.format("%Y-%m-%dT%H:%M:%SZ")
+        );
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -189,12 +197,17 @@ fn test_status_not_initialized() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(!output.status.success(), "status command should fail when hitch not initialized");
+        assert!(
+            !output.status.success(),
+            "status command should fail when hitch not initialized"
+        );
 
         let stderr = String::from_utf8(output.stderr)?;
-        assert!(stderr.contains("Failed to read hitch.json") ||
-                stderr.contains("Failed to access hitch metadata") ||
-                stderr.contains("Failed to checkout branch"));
+        assert!(
+            stderr.contains("Failed to read hitch.json")
+                || stderr.contains("Failed to access hitch metadata")
+                || stderr.contains("Failed to checkout branch")
+        );
 
         Ok(())
     })
@@ -224,7 +237,10 @@ fn test_status_verbose_output() -> Result<()> {
 }"#;
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -278,7 +294,10 @@ fn test_status_unclean_working_directory() -> Result<()> {
 }"#;
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -305,7 +324,10 @@ fn test_status_unclean_working_directory() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(output.status.success(), "status command should succeed even with unclean working directory");
+        assert!(
+            output.status.success(),
+            "status command should succeed even with unclean working directory"
+        );
 
         let stdout = String::from_utf8(output.stdout)?;
 
@@ -332,7 +354,10 @@ fn test_status_empty_environments() -> Result<()> {
 }"#;
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -407,7 +432,10 @@ fn test_status_environmental_sorting() -> Result<()> {
 }"#;
 
         std::fs::write(test_env.path().join("hitch.json"), hitch_config)?;
-        std::fs::write(test_env.path().join(".gitignore"), "*\n!.gitignore\n!hitch.json\n")?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
 
         Command::new("git")
             .args(&["add", "hitch.json", ".gitignore"])
@@ -444,12 +472,19 @@ fn test_status_environmental_sorting() -> Result<()> {
             if line.contains("base: main") {
                 // Extract just the environment name (remove box characters, spaces, and lock emoji)
                 let env_line = line.split(" base: main").next().unwrap().trim();
-                let env_name = env_line.replace("┌─ ", "").replace(" 🔓", "").replace(" 🔒", "");
+                let env_name = env_line
+                    .replace("┌─ ", "")
+                    .replace(" 🔓", "")
+                    .replace(" 🔒", "");
                 env_order.push(env_name);
             }
         }
 
-        assert_eq!(env_order, vec!["alpha", "beta", "zebra"], "Environments should be displayed in alphabetical order");
+        assert_eq!(
+            env_order,
+            vec!["alpha", "beta", "zebra"],
+            "Environments should be displayed in alphabetical order"
+        );
 
         Ok(())
     })

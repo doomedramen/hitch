@@ -4,7 +4,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_init_already_initialized_error() -> Result<()> {
@@ -57,15 +57,21 @@ fn test_init_already_initialized_error() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(!output.status.success(), "init should fail when hitch-metadata exists");
+        assert!(
+            !output.status.success(),
+            "init should fail when hitch-metadata exists"
+        );
 
         let stdout = String::from_utf8(output.stdout)?;
         let stderr = String::from_utf8(output.stderr)?;
         let full_output = format!("{}{}", stdout, stderr);
 
-        assert!(full_output.contains("hitch-metadata branch already exists") ||
-                full_output.contains("already initialized"),
-            "Should mention branch already exists. Got: {}", full_output);
+        assert!(
+            full_output.contains("hitch-metadata branch already exists")
+                || full_output.contains("already initialized"),
+            "Should mention branch already exists. Got: {}",
+            full_output
+        );
 
         Ok(())
     })
@@ -95,7 +101,12 @@ fn test_init_remote_push_success() -> Result<()> {
 
         // Set up a fake remote
         Command::new("git")
-            .args(&["remote", "add", "origin", "https://github.com/example/repo.git"])
+            .args(&[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/example/repo.git",
+            ])
             .current_dir(test_env.path())
             .output()?;
 
@@ -106,16 +117,22 @@ fn test_init_remote_push_success() -> Result<()> {
             .output()?;
 
         // Init should succeed even if remote push fails
-        assert!(output.status.success(), "init should succeed even if remote push fails");
+        assert!(
+            output.status.success(),
+            "init should succeed even if remote push fails"
+        );
 
         let stdout = String::from_utf8(output.stdout)?;
         let stderr = String::from_utf8(output.stderr)?;
         let full_output = format!("{}{}", stdout, stderr);
 
         // Should try to push and either succeed or show warning
-        assert!(full_output.contains("hitch-metadata branch pushed to remote") ||
-                    full_output.contains("Failed to push metadata to remote"),
-            "Should contain push result message. Got: {}", full_output);
+        assert!(
+            full_output.contains("hitch-metadata branch pushed to remote")
+                || full_output.contains("Failed to push metadata to remote"),
+            "Should contain push result message. Got: {}",
+            full_output
+        );
 
         Ok(())
     })
@@ -162,8 +179,11 @@ fn test_init_original_branch_check() -> Result<()> {
         let full_output = format!("{}{}", stdout, stderr);
 
         // Should show branch checking and return to original branch
-        assert!(full_output.contains("Creating hitch-metadata branch"),
-            "Should mention creating hitch-metadata branch. Got: {}", full_output);
+        assert!(
+            full_output.contains("Creating hitch-metadata branch"),
+            "Should mention creating hitch-metadata branch. Got: {}",
+            full_output
+        );
 
         // Check current branch - the init command leaves us on hitch-metadata branch
         let current_branch_output = Command::new("git")
@@ -171,12 +191,20 @@ fn test_init_original_branch_check() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        let current_branch = String::from_utf8(current_branch_output.stdout)?.trim().to_string();
-        assert_eq!(current_branch, "hitch-metadata", "Should be on hitch-metadata branch after init");
+        let current_branch = String::from_utf8(current_branch_output.stdout)?
+            .trim()
+            .to_string();
+        assert_eq!(
+            current_branch, "hitch-metadata",
+            "Should be on hitch-metadata branch after init"
+        );
 
         // The verbose output should mention branch checking
-        assert!(full_output.contains("Creating hitch-metadata branch"),
-            "Should mention creating hitch-metadata branch. Got: {}", full_output);
+        assert!(
+            full_output.contains("Creating hitch-metadata branch"),
+            "Should mention creating hitch-metadata branch. Got: {}",
+            full_output
+        );
 
         Ok(())
     })

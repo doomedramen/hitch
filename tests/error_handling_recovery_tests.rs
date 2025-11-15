@@ -1,16 +1,20 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use std::path::Path;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env, TestEnv};
+use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
     fn run_hitch_init(&self) -> Result<()>;
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()>;
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()>;
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()>;
     fn get_current_branch(&self) -> Result<String>;
     fn branch_exists(&self, branch: &str) -> Result<bool>;
@@ -25,13 +29,21 @@ impl TestEnvExt for TestEnv {
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to run hitch init: {}", String::from_utf8_lossy(&output.stderr)));
+            return Err(anyhow::anyhow!(
+                "Failed to run hitch init: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
 
         Ok(())
     }
 
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()> {
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         let mut environments = HashMap::new();
@@ -40,14 +52,17 @@ impl TestEnvExt for TestEnv {
             branches_vec.push(branch.to_string());
         }
 
-        environments.insert(env_name.to_string(), serde_json::json!({
-            "base": base_branch,
-            "branches": branches_vec,
-            "locked": false,
-            "lockedBy": null,
-            "lockedAt": null,
-            "rebuiltAt": null
-        }));
+        environments.insert(
+            env_name.to_string(),
+            serde_json::json!({
+                "base": base_branch,
+                "branches": branches_vec,
+                "locked": false,
+                "lockedBy": null,
+                "lockedAt": null,
+                "rebuiltAt": null
+            }),
+        );
 
         let config = serde_json::json!({
             "version": "1.0.0",
@@ -59,7 +74,10 @@ impl TestEnvExt for TestEnv {
             .args(&["checkout", "--orphan", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
-        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(
+            self.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(self.path())
@@ -138,7 +156,10 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
         fs::create_dir_all(&hooks_dir)?;
 
         let pre_commit_hook = hooks_dir.join("pre-commit");
-        fs::write(&pre_commit_hook, "#!/bin/sh\necho 'Simulated hook failure'\nexit 1")?;
+        fs::write(
+            &pre_commit_hook,
+            "#!/bin/sh\necho 'Simulated hook failure'\nexit 1",
+        )?;
 
         // Make the hook executable
         #[cfg(unix)]
@@ -173,11 +194,17 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
         println!("=== End Output ===");
 
         // The rebuild should succeed despite the failing hook
-        assert!(output.status.success(), "Rebuild should succeed even with failing git hooks");
+        assert!(
+            output.status.success(),
+            "Rebuild should succeed even with failing git hooks"
+        );
 
         // Verify we're back on the original branch
         let current_branch = test_env.get_current_branch()?;
-        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after rebuild"
+        );
 
         // Verify the environment was actually rebuilt (dev branch should be updated)
         let dev_exists = test_env.branch_exists("dev")?;
@@ -216,11 +243,17 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
         println!("=== End Output ===");
 
         // The rebuild should succeed even when there's nothing to commit
-        assert!(output.status.success(), "Rebuild should succeed when there's nothing to commit");
+        assert!(
+            output.status.success(),
+            "Rebuild should succeed when there's nothing to commit"
+        );
 
         // Verify we're back on the original branch
         let current_branch = test_env.get_current_branch()?;
-        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after rebuild"
+        );
 
         // Verify the environment branch exists
         let dev_exists = test_env.branch_exists("dev")?;
@@ -269,14 +302,20 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
 
         // Verify we're back on the original branch
         let current_branch = test_env.get_current_branch()?;
-        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after rebuild"
+        );
 
         // Verify no temp or backup branches remain
         let branch_lines: Vec<&str> = branches_after_str.lines().collect();
         for line in branch_lines {
             let clean_line = line.trim().replace("* ", "").replace("  ", "");
             if clean_line.starts_with("hitch-tmp-") || clean_line.starts_with("hitch-backup-") {
-                panic!("Found leftover temporary branch after rebuild: {}", clean_line);
+                panic!(
+                    "Found leftover temporary branch after rebuild: {}",
+                    clean_line
+                );
             }
         }
 
@@ -289,8 +328,9 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
         let stdout_str = String::from_utf8_lossy(&output.stdout);
         let combined_output = format!("{}{}", stderr_str, stdout_str);
 
-        if combined_output.contains("Failed to delete backup branch") ||
-           combined_output.contains("Failed to delete temp branch") {
+        if combined_output.contains("Failed to delete backup branch")
+            || combined_output.contains("Failed to delete temp branch")
+        {
             panic!("Rebuild output contains cleanup failure warnings, which indicates cleanup problems");
         }
 

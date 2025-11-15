@@ -13,10 +13,7 @@ pub struct StatusCommand {
     pub verbose: bool,
 }
 
-pub fn run(
-    args: StatusCommand,
-    context: &GlobalContext,
-) -> Result<()> {
+pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
     // Create a new context with the verbose flag
     let mut context = context.clone();
     context.verbose = args.verbose;
@@ -70,7 +67,11 @@ fn display_overall_summary(context: &GlobalContext, config: &HitchConfig) -> Res
 
     // Count different states
     let total_envs = config.environments.len();
-    let locked_envs = config.environments.values().filter(|e| e.is_locked()).count();
+    let locked_envs = config
+        .environments
+        .values()
+        .filter(|e| e.is_locked())
+        .count();
     let mut needs_rebuild = 0;
     let mut never_rebuilt = 0;
 
@@ -85,7 +86,8 @@ fn display_overall_summary(context: &GlobalContext, config: &HitchConfig) -> Res
     }
 
     // Display summary line
-    println!("📊 {} environments: {} total, {} locked, {} need rebuild, {} never rebuilt",
+    println!(
+        "📊 {} environments: {} total, {} locked, {} need rebuild, {} never rebuilt",
         total_envs,
         total_envs.to_string().bright_cyan(),
         locked_envs.to_string().bright_yellow(),
@@ -119,10 +121,18 @@ fn display_status_summary(context: &GlobalContext, config: &HitchConfig) -> Resu
         if let Ok(status) = determine_rebuild_status(context, env) {
             match status {
                 RebuildStatus::NeedsRebuild(_) => {
-                    suggestions.push(format!("• Rebuild {}: 'hitch rebuild {}'", env_name.bright_green(), env_name));
+                    suggestions.push(format!(
+                        "• Rebuild {}: 'hitch rebuild {}'",
+                        env_name.bright_green(),
+                        env_name
+                    ));
                 }
                 RebuildStatus::NeverRebuilt => {
-                    suggestions.push(format!("• Initial rebuild {}: 'hitch rebuild {}'", env_name.bright_green(), env_name));
+                    suggestions.push(format!(
+                        "• Initial rebuild {}: 'hitch rebuild {}'",
+                        env_name.bright_green(),
+                        env_name
+                    ));
                 }
                 RebuildStatus::UpToDate => {}
             }
@@ -149,7 +159,11 @@ fn display_status_summary(context: &GlobalContext, config: &HitchConfig) -> Resu
 }
 
 /// Display status for a single environment
-fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Environment) -> Result<()> {
+fn display_environment_status(
+    context: &GlobalContext,
+    env_name: &str,
+    env: &Environment,
+) -> Result<()> {
     // Environment header with visual separator and more info
     let status_indicator = if env.is_locked() {
         "🔒".bright_yellow()
@@ -157,10 +171,11 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
         "🔓".bright_green()
     };
 
-    println!("┌─ {} {} {}",
+    println!(
+        "┌─ {} {} base: {}",
         env_name.bright_green().bold(),
         status_indicator,
-        format!("base: {}", env.base.bright_blue())
+        env.base.bright_blue()
     );
 
     // Lock status indicator with more details
@@ -173,7 +188,10 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
         println!("│  {}", lock_info.yellow());
 
         // Add lock warning
-        println!("│  {}", "⚠️ Environment is locked - no changes allowed".bright_red());
+        println!(
+            "│  {}",
+            "⚠️ Environment is locked - no changes allowed".bright_red()
+        );
     } else {
         println!("│  {}", "🔓 Environment is unlocked".bright_green());
     }
@@ -182,7 +200,14 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
     println!("├─ Branches ({} promoted):", env.branches.len());
     if env.branches.is_empty() {
         println!("│  {}", "• No branches promoted".dimmed());
-        println!("│  {}", format!("  Use 'hitch promote <branch> {}' to add branches", env_name).dimmed());
+        println!(
+            "│  {}",
+            format!(
+                "  Use 'hitch promote <branch> {}' to add branches",
+                env_name
+            )
+            .dimmed()
+        );
     } else {
         for (i, branch) in env.branches.iter().enumerate() {
             // Check if branch exists locally or remotely
@@ -197,12 +222,13 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
             };
 
             let extra_info = if branch.contains(env_name) {
-                format!("(matches env name)").dimmed()
+                "(matches env name)".to_string().dimmed()
             } else {
                 "".to_string().normal()
             };
 
-            println!("│  {} {} {}",
+            println!(
+                "│  {} {} {}",
                 branch_status,
                 format!("{}. {}", i + 1, branch).bright_white(),
                 extra_info
@@ -217,7 +243,7 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
             let formatted = format_timestamp(Some(timestamp));
             let relative = format_relative_time(timestamp);
             format!("• {} ({})", formatted.bright_white(), relative.dimmed())
-        },
+        }
         None => "• Never".bright_red().to_string(),
     };
     println!("│  {}", rebuild_info);
@@ -231,11 +257,17 @@ fn display_environment_status(context: &GlobalContext, env_name: &str, env: &Env
         }
         RebuildStatus::NeedsRebuild(reason) => {
             println!("   {} {}", "⚠️".bright_yellow(), reason.bright_yellow());
-            println!("   {}", format!("💡 Run 'hitch rebuild {}' to update", env_name).dimmed());
+            println!(
+                "   {}",
+                format!("💡 Run 'hitch rebuild {}' to update", env_name).dimmed()
+            );
         }
         RebuildStatus::NeverRebuilt => {
             println!("   {} {}", "⚠️".bright_red(), "Never rebuilt".bright_red());
-            println!("   {}", format!("💡 Run 'hitch rebuild {}' to initialize", env_name).dimmed());
+            println!(
+                "   {}",
+                format!("💡 Run 'hitch rebuild {}' to initialize", env_name).dimmed()
+            );
         }
     }
 

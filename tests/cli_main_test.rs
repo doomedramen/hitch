@@ -3,7 +3,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 /// Test CLI argument parsing and basic functionality
 #[test]
@@ -15,7 +15,9 @@ fn test_cli_basic_functionality() -> Result<()> {
         let output = Command::new(&binary_path).args(&["--help"]).output()?;
         assert!(output.status.success(), "Help should succeed");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("Hitch is a CLI tool that brings environment branch management to Git"));
+        assert!(
+            stdout.contains("Hitch is a CLI tool that brings environment branch management to Git")
+        );
         assert!(stdout.contains("Print detailed step-by-step logs"));
         assert!(stdout.contains("Skip automatic pushes"));
 
@@ -44,10 +46,14 @@ fn test_cli_invalid_command() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let binary_path = test_env.hitch_binary();
 
-        let output = Command::new(&binary_path).args(&["invalid-command"]).output()?;
+        let output = Command::new(&binary_path)
+            .args(&["invalid-command"])
+            .output()?;
         assert!(!output.status.success(), "Invalid command should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("unrecognized subcommand") || stderr.contains("unexpected argument"));
+        assert!(
+            stderr.contains("unrecognized subcommand") || stderr.contains("unexpected argument")
+        );
 
         Ok(())
     })
@@ -108,10 +114,21 @@ fn test_cli_no_git_repository() -> Result<()> {
         let binary_path = test_env.hitch_binary();
 
         // Test status command without hitch.json
-        let output = Command::new(&binary_path).args(&["status"]).current_dir(test_env.path()).output()?;
-        assert!(!output.status.success(), "Status should fail without hitch.json");
+        let output = Command::new(&binary_path)
+            .args(&["status"])
+            .current_dir(test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Status should fail without hitch.json"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("hitch.json") || stderr.contains("Failed to read") || stderr.contains("git") || stderr.contains("repository"));
+        assert!(
+            stderr.contains("hitch.json")
+                || stderr.contains("Failed to read")
+                || stderr.contains("git")
+                || stderr.contains("repository")
+        );
 
         Ok(())
     })
@@ -124,11 +141,16 @@ fn test_cli_error_handling() -> Result<()> {
         let binary_path = test_env.hitch_binary();
 
         // Test invalid flag
-        let output = Command::new(&binary_path).args(&["--invalid-flag"]).output()?;
+        let output = Command::new(&binary_path)
+            .args(&["--invalid-flag"])
+            .output()?;
         assert!(!output.status.success(), "Invalid flag should fail");
 
-            // Test command that requires hitch init
-        let output = Command::new(&binary_path).args(&["unlock", "test"]).current_dir(test_env.path()).output()?;
+        // Test command that requires hitch init
+        let output = Command::new(&binary_path)
+            .args(&["unlock", "test"])
+            .current_dir(test_env.path())
+            .output()?;
         assert!(!output.status.success(), "Unlock without init should fail");
 
         Ok(())
@@ -139,44 +161,79 @@ fn test_cli_error_handling() -> Result<()> {
 #[test]
 fn test_cli_complete_workflow() -> Result<()> {
     with_test_env(SetupLevel::Complete, |_test_env| {
+        let binary_path = _test_env.hitch_binary();
 
-    let binary_path = _test_env.hitch_binary();
+        // Complete workflow test
+        println!("Testing environment lifecycle: add -> lock -> unlock -> remove");
 
-    // Complete workflow test
-    println!("Testing environment lifecycle: add -> lock -> unlock -> remove");
+        // Step 1: Add environment
+        let output = Command::new(&binary_path)
+            .args(&["add", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Add command should succeed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Successfully added environment 'test'"),
+            "Should confirm environment addition"
+        );
 
-    // Step 1: Add environment
-    let output = Command::new(&binary_path).args(&["add", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Add command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Successfully added environment 'test'"), "Should confirm environment addition");
+        // Step 2: Lock environment
+        let output = Command::new(&binary_path)
+            .args(&["lock", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Lock command should succeed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Successfully locked environment 'test'"),
+            "Should confirm environment lock"
+        );
 
-    // Step 2: Lock environment
-    let output = Command::new(&binary_path).args(&["lock", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Lock command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Successfully locked environment 'test'"), "Should confirm environment lock");
+        // Step 3: Try to lock again (should fail)
+        let output = Command::new(&binary_path)
+            .args(&["lock", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Lock command should fail for already locked environment"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("already locked"),
+            "Should mention environment already locked"
+        );
 
-    // Step 3: Try to lock again (should fail)
-    let output = Command::new(&binary_path).args(&["lock", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(!output.status.success(), "Lock command should fail for already locked environment");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("already locked"), "Should mention environment already locked");
+        // Step 4: Unlock environment
+        let output = Command::new(&binary_path)
+            .args(&["unlock", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Unlock command should succeed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Successfully unlocked environment 'test'"),
+            "Should confirm environment unlock"
+        );
 
-    // Step 4: Unlock environment
-    let output = Command::new(&binary_path).args(&["unlock", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Unlock command should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Successfully unlocked environment 'test'"), "Should confirm environment unlock");
+        // Step 5: Remove environment
+        let output = Command::new(&binary_path)
+            .args(&["remove", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Remove command should succeed for unlocked environment"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Successfully removed environment 'test'"),
+            "Should confirm environment removal"
+        );
 
-    // Step 5: Remove environment
-    let output = Command::new(&binary_path).args(&["remove", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Remove command should succeed for unlocked environment");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Successfully removed environment 'test'"), "Should confirm environment removal");
-
-    println!("✅ Environment lifecycle test passed");
-    Ok(())
+        println!("✅ Environment lifecycle test passed");
+        Ok(())
     })
 }
 
@@ -184,31 +241,64 @@ fn test_cli_complete_workflow() -> Result<()> {
 #[test]
 fn test_cli_error_validation() -> Result<()> {
     with_test_env(SetupLevel::Complete, |_test_env| {
-    let binary_path = _test_env.hitch_binary();
+        let binary_path = _test_env.hitch_binary();
 
-    // Test duplicate environment addition
-    let output = Command::new(&binary_path).args(&["add", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "First add should succeed");
+        // Test duplicate environment addition
+        let output = Command::new(&binary_path)
+            .args(&["add", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "First add should succeed");
 
-    let output = Command::new(&binary_path).args(&["add", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(!output.status.success(), "Add command should fail for duplicate environment");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("already exists"), "Should mention environment already exists");
+        let output = Command::new(&binary_path)
+            .args(&["add", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Add command should fail for duplicate environment"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("already exists"),
+            "Should mention environment already exists"
+        );
 
-    // Test operations on non-existent environment
-    let output = Command::new(&binary_path).args(&["remove", "nonexistent"]).current_dir(_test_env.path()).output()?;
-    assert!(!output.status.success(), "Remove command should fail for non-existent environment");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("does not exist"), "Should mention environment doesn't exist");
+        // Test operations on non-existent environment
+        let output = Command::new(&binary_path)
+            .args(&["remove", "nonexistent"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Remove command should fail for non-existent environment"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("does not exist"),
+            "Should mention environment doesn't exist"
+        );
 
-    let output = Command::new(&binary_path).args(&["lock", "nonexistent"]).current_dir(_test_env.path()).output()?;
-    assert!(!output.status.success(), "Lock command should fail for non-existent environment");
+        let output = Command::new(&binary_path)
+            .args(&["lock", "nonexistent"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Lock command should fail for non-existent environment"
+        );
 
-    let output = Command::new(&binary_path).args(&["unlock", "nonexistent"]).current_dir(_test_env.path()).output()?;
-    assert!(!output.status.success(), "Unlock command should fail for non-existent environment");
+        let output = Command::new(&binary_path)
+            .args(&["unlock", "nonexistent"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "Unlock command should fail for non-existent environment"
+        );
 
-    println!("✅ Error validation test passed");
-    Ok(())
+        println!("✅ Error validation test passed");
+        Ok(())
     })
 }
 
@@ -216,20 +306,35 @@ fn test_cli_error_validation() -> Result<()> {
 #[test]
 fn test_cli_guard_functionality() -> Result<()> {
     with_test_env(SetupLevel::Complete, |_test_env| {
-    let binary_path = _test_env.hitch_binary();
+        let binary_path = _test_env.hitch_binary();
 
-    // Test guard when not on environment branch
-    let output = Command::new(&binary_path).args(&["guard"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Guard should succeed when not on environment branch");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("is not an environment branch"), "Should confirm not on environment branch");
+        // Test guard when not on environment branch
+        let output = Command::new(&binary_path)
+            .args(&["guard"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Guard should succeed when not on environment branch"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("is not an environment branch"),
+            "Should confirm not on environment branch"
+        );
 
-    // Test guard for specific environment
-    let output = Command::new(&binary_path).args(&["guard", "test"]).current_dir(_test_env.path()).output()?;
-    assert!(output.status.success(), "Guard should succeed for specific environment check");
+        // Test guard for specific environment
+        let output = Command::new(&binary_path)
+            .args(&["guard", "test"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Guard should succeed for specific environment check"
+        );
 
-    println!("✅ Guard functionality test passed");
-    Ok(())
+        println!("✅ Guard functionality test passed");
+        Ok(())
     })
 }
 
@@ -237,40 +342,59 @@ fn test_cli_guard_functionality() -> Result<()> {
 #[test]
 fn test_cli_promote_workflow() -> Result<()> {
     with_test_env(SetupLevel::Complete, |_test_env| {
-    let binary_path = _test_env.hitch_binary();
-    println!("Hitch binary path: {:?}", binary_path);
+        let binary_path = _test_env.hitch_binary();
+        println!("Hitch binary path: {:?}", binary_path);
 
-    // Add environment for testing
-    let output = Command::new(&binary_path).args(&["add", "dev"]).current_dir(_test_env.path()).output()?;
-    if !output.status.success() {
-        println!("Add dev failed: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    assert!(output.status.success(), "Add dev environment should succeed");
+        // Add environment for testing
+        let output = Command::new(&binary_path)
+            .args(&["add", "dev"])
+            .current_dir(_test_env.path())
+            .output()?;
+        if !output.status.success() {
+            println!(
+                "Add dev failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(
+            output.status.success(),
+            "Add dev environment should succeed"
+        );
 
-    // Create a simple test branch manually (from main to avoid conflicts)
-    std::env::set_current_dir(_test_env.path())?;
-    Command::new("git").args(&["checkout", "-b", "feature/test"]).output()?;
-    std::fs::write("test.txt", "test content")?;
-    Command::new("git").args(&["add", "."]).output()?;
-    Command::new("git").args(&["commit", "-m", "Test commit"]).output()?;
-    Command::new("git").args(&["checkout", "main"]).output()?;
+        // Create a simple test branch manually (from main to avoid conflicts)
+        std::env::set_current_dir(_test_env.path())?;
+        Command::new("git")
+            .args(&["checkout", "-b", "feature/test"])
+            .output()?;
+        std::fs::write("test.txt", "test content")?;
+        Command::new("git").args(&["add", "."]).output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Test commit"])
+            .output()?;
+        Command::new("git").args(&["checkout", "main"]).output()?;
 
-    // Test promote functionality (expect merge conflicts, but that's ok - we're testing the CLI)
-    let output = Command::new(&binary_path).args(&["promote", "feature/test", "dev"]).current_dir(_test_env.path()).output()?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("Promote stderr: {}", stderr);
+        // Test promote functionality (expect merge conflicts, but that's ok - we're testing the CLI)
+        let output = Command::new(&binary_path)
+            .args(&["promote", "feature/test", "dev"])
+            .current_dir(_test_env.path())
+            .output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!("Promote stderr: {}", stderr);
 
-    // Whether it succeeds or fails due to merge conflicts, the important thing is that it runs
-    // and we can check the status
-    let output = Command::new(&binary_path).args(&["status"]).current_dir(_test_env.path()).output()?;
-    if !output.status.success() {
-        println!("Status failed: {}", String::from_utf8_lossy(&output.stderr));
-    }
-    assert!(output.status.success(), "Status should succeed");
-    let _stdout = String::from_utf8_lossy(&output.stdout);
+        // Whether it succeeds or fails due to merge conflicts, the important thing is that it runs
+        // and we can check the status
+        let output = Command::new(&binary_path)
+            .args(&["status"])
+            .current_dir(_test_env.path())
+            .output()?;
+        if !output.status.success() {
+            println!("Status failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        assert!(output.status.success(), "Status should succeed");
+        let _stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Test passes if we can run promote and status commands successfully
-    println!("✅ Promote workflow test passed - CLI commands work correctly");
-    Ok(())
+        // Test passes if we can run promote and status commands successfully
+        println!("✅ Promote workflow test passed - CLI commands work correctly");
+        Ok(())
     })
 }

@@ -14,9 +14,7 @@ fn test_basic_init() -> Result<()> {
     std::env::set_current_dir(test_env.path())?;
 
     // Check that hitch-metadata branch exists (from setup_complete_hitch_env)
-    let branch_output = Command::new("git")
-        .args(&["branch"])
-        .output()?;
+    let branch_output = Command::new("git").args(&["branch"]).output()?;
 
     let branches = String::from_utf8(branch_output.stdout)?;
     assert!(

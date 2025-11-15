@@ -32,61 +32,13 @@ pub fn validate_branch_for_promotion(context: &GlobalContext, branch: &str) -> R
 pub fn ensure_environment_exists(context: &GlobalContext, env_name: &str) -> Result<()> {
     use crate::utils::prelude::access_metadata_read_only;
 
-    let config = access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
     if !config.environments.contains_key(env_name) {
         return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
     }
 
     Ok(())
-}
-
-/// Reusable error message patterns
-pub mod errors {
-    /// Standard error for empty names
-    pub fn empty_name(name_type: &str) -> anyhow::Error {
-        anyhow::anyhow!("{} name cannot be empty", name_type)
-    }
-
-    /// Standard error for names that are too long
-    pub fn name_too_long(name_type: &str) -> anyhow::Error {
-        anyhow::anyhow!("{} name cannot exceed 100 characters", name_type)
-    }
-
-    /// Standard error for names with invalid characters
-    pub fn invalid_char(name_type: &str, name: &str, invalid_char: &str) -> anyhow::Error {
-        anyhow::anyhow!(
-            "{} name cannot contain '{}': '{}'",
-            name_type,
-            invalid_char,
-            name
-        )
-    }
-
-    /// Standard error for environment does not exist
-    pub fn environment_not_exists(env_name: &str) -> anyhow::Error {
-        anyhow::anyhow!("Environment '{}' does not exist", env_name)
-    }
-
-    /// Standard error for environment already exists
-    pub fn environment_already_exists(env_name: &str) -> anyhow::Error {
-        anyhow::anyhow!("Environment '{}' already exists", env_name)
-    }
-
-    /// Standard error for branch does not exist
-    pub fn branch_not_exists(branch: &str) -> anyhow::Error {
-        anyhow::anyhow!("Branch '{}' does not exist", branch)
-    }
-
-    /// Standard error for base branch does not exist
-    pub fn base_branch_not_exists(base_branch: &str) -> anyhow::Error {
-        anyhow::anyhow!(
-            "Base branch '{}' does not exist locally or remotely",
-            base_branch
-        )
-    }
 }
 
 /// Reusable environment state helpers
@@ -96,12 +48,15 @@ pub mod environment {
 
     /// Get the user who locked the environment, with a default "unknown" fallback
     pub fn get_locked_by_user(context: &GlobalContext, env_name: &str) -> Result<String> {
-        let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-            Ok(config.clone())
-        })?;
+        let config =
+            crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
         if let Some(environment) = config.environments.get(env_name) {
-            Ok(environment.locked_by.as_ref().unwrap_or(&"unknown".to_string()).clone())
+            Ok(environment
+                .locked_by
+                .as_ref()
+                .unwrap_or(&"unknown".to_string())
+                .clone())
         } else {
             Ok("unknown".to_string())
         }
@@ -130,10 +85,5 @@ pub mod logging {
     /// Standard operation info message
     pub fn operation_info(context: &GlobalContext, operation: &str, target: &str) {
         context.log_info(&format!("{} '{}'...", operation, target));
-    }
-
-    /// Standard verbose operation message
-    pub fn operation_verbose(context: &GlobalContext, operation: &str, target: &str) {
-        context.log_verbose(&format!("{} '{}'...", operation, target));
     }
 }

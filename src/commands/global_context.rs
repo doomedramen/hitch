@@ -1,17 +1,17 @@
 use crate::utils::git_operations::GitOperations;
 use colored::*;
-use std::sync::Arc;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct GlobalContext {
     pub verbose: bool,
     pub no_push: bool,
-    pub git_ops: Arc<GitOperations>,
+    pub git_ops: Rc<GitOperations>,
 }
 
 impl GlobalContext {
     pub fn new(verbose: bool, no_push: bool) -> Result<Self, Box<dyn std::error::Error>> {
-        let git_ops = Arc::new(GitOperations::new()?);
+        let git_ops = Rc::new(GitOperations::new()?);
         Ok(GlobalContext {
             verbose,
             no_push,

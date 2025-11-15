@@ -37,7 +37,7 @@ jobs:
       uses: benchmark-action/github-action-benchmark@v1
       if: github.ref == 'refs/heads/main'
       with:
-        tool: 'cargo-criterion'
+        tool: 'customBiggerIsBetter'
         output-file-path: target/criterion/reports/index.html
         github-token: ${{ secrets.GITHUB_TOKEN }}
         auto-push: true

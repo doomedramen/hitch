@@ -1,8 +1,8 @@
 use crate::commands::global_context::GlobalContext;
 use crate::utils::command_helpers::{environment::get_locked_by_user, logging::validation_success};
 use crate::utils::validation::validate_name;
-use clap::Args;
 use anyhow::Result;
+use clap::Args;
 
 #[derive(Args)]
 pub struct DemoteCommand {
@@ -15,11 +15,11 @@ pub struct DemoteCommand {
     pub env_name: String,
 }
 
-pub fn run(
-    args: DemoteCommand,
-    context: &GlobalContext,
-) -> Result<()> {
-    context.log_info(&format!("Demoting branch '{}' from environment '{}'...", args.branch, args.env_name));
+pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
+    context.log_info(&format!(
+        "Demoting branch '{}' from environment '{}'...",
+        args.branch, args.env_name
+    ));
 
     // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
     crate::utils::prelude::pre_check(context)?;
@@ -33,10 +33,12 @@ pub fn run(
         demote_branch_from_environment(context, &args.branch, &args.env_name)
     })?;
 
-    context.log_success(&format!("Successfully demoted '{}' from environment '{}'!", args.branch, args.env_name));
+    context.log_success(&format!(
+        "Successfully demoted '{}' from environment '{}'!",
+        args.branch, args.env_name
+    ));
     Ok(())
 }
-
 
 /// Validate that branch and environment are ready for demotion
 fn validate_preconditions(
@@ -53,9 +55,8 @@ fn validate_preconditions(
     // Check if environment exists
     crate::utils::command_helpers::ensure_environment_exists(context, env_name)?;
 
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -71,11 +72,16 @@ fn validate_preconditions(
     if !environment.branches.contains(&branch.to_string()) {
         return Err(anyhow::anyhow!(
             "Branch '{}' is not promoted to environment '{}'",
-            branch, env_name
+            branch,
+            env_name
         ));
     }
 
-    validation_success(context, &format!("'{}' from '{}'", branch, env_name), "Demotion validation");
+    validation_success(
+        context,
+        &format!("'{}' from '{}'", branch, env_name),
+        "Demotion validation",
+    );
     Ok(())
 }
 
@@ -85,7 +91,10 @@ fn demote_branch_from_environment(
     branch: &str,
     env_name: &str,
 ) -> anyhow::Result<()> {
-    context.log_verbose(&format!("Removing '{}' from environment '{}'...", branch, env_name));
+    context.log_verbose(&format!(
+        "Removing '{}' from environment '{}'...",
+        branch, env_name
+    ));
 
     // Modify metadata to remove the branch
     crate::utils::prelude::modify_metadata(context, |config| {
@@ -96,14 +105,23 @@ fn demote_branch_from_environment(
         // Remove the branch from the environment's branches list
         environment.remove_branch(branch);
 
-        context.log_verbose(&format!("✓ Removed '{}' from environment '{}'", branch, env_name));
+        context.log_verbose(&format!(
+            "✓ Removed '{}' from environment '{}'",
+            branch, env_name
+        ));
         Ok(())
     })?;
 
     // Trigger rebuild of the environment
-    context.log_info(&format!("Triggering rebuild for environment '{}'...", env_name));
+    context.log_info(&format!(
+        "Triggering rebuild for environment '{}'...",
+        env_name
+    ));
     crate::utils::prelude::rebuild_environment(context, env_name)?;
 
-    context.log_verbose(&format!("✓ Environment '{}' rebuilt successfully", env_name));
+    context.log_verbose(&format!(
+        "✓ Environment '{}' rebuilt successfully",
+        env_name
+    ));
     Ok(())
 }

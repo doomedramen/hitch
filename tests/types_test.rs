@@ -1,6 +1,6 @@
 use anyhow::Result;
-use hitch::types::{Environment, HitchConfig};
 use chrono::Utc;
+use hitch::types::{Environment, HitchConfig};
 
 #[test]
 fn test_environment_new() -> Result<()> {

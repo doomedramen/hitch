@@ -3,7 +3,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_init_line69_remote_push_success() -> Result<()> {
@@ -40,16 +40,21 @@ fn test_init_with_custom_environments() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(output.status.success(), "init with custom environments should succeed");
+        assert!(
+            output.status.success(),
+            "init with custom environments should succeed"
+        );
 
         let stdout = String::from_utf8(output.stdout)?;
         let stderr = String::from_utf8(output.stderr)?;
         let full_output = format!("{}{}", stdout, stderr);
 
         // Should contain success message for environment creation
-        assert!(full_output.contains("Successfully added environment 'dev'") ||
-                full_output.contains("environments") ||
-                stdout.contains("Successfully initialized"));
+        assert!(
+            full_output.contains("Successfully added environment 'dev'")
+                || full_output.contains("environments")
+                || stdout.contains("Successfully initialized")
+        );
 
         Ok(())
     })
@@ -66,7 +71,10 @@ fn test_init_skip_push_flag() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(output.status.success(), "init with --no-push should succeed");
+        assert!(
+            output.status.success(),
+            "init with --no-push should succeed"
+        );
 
         let stdout = String::from_utf8(output.stdout)?;
         let stderr = String::from_utf8(output.stderr)?;
@@ -97,9 +105,11 @@ fn test_init_default_environments() -> Result<()> {
         let full_output = format!("{}{}", stdout, stderr);
 
         // Should contain success message
-        assert!(stdout.contains("Successfully initialized") ||
-                stdout.contains("environments") ||
-                full_output.contains("Successfully"));
+        assert!(
+            stdout.contains("Successfully initialized")
+                || stdout.contains("environments")
+                || full_output.contains("Successfully")
+        );
 
         Ok(())
     })
@@ -128,9 +138,11 @@ fn test_init_already_initialized() -> Result<()> {
         assert!(!output2.status.success(), "second init should fail");
 
         let stderr = String::from_utf8(output2.stderr)?;
-        assert!(stderr.contains("already initialized") ||
-                stderr.contains("hitch.json already exists") ||
-                stderr.contains("already exists"));
+        assert!(
+            stderr.contains("already initialized")
+                || stderr.contains("hitch.json already exists")
+                || stderr.contains("already exists")
+        );
 
         Ok(())
     })
@@ -154,10 +166,12 @@ fn test_init_verbose_output() -> Result<()> {
         let full_output = format!("{}{}", stdout, stderr);
 
         // Should show detailed logs
-        assert!(full_output.contains("Running pre-check validation") ||
-                full_output.contains("Creating hitch-metadata branch") ||
-                full_output.contains("Accessing hitch metadata") ||
-                full_output.contains("Successfully"));
+        assert!(
+            full_output.contains("Running pre-check validation")
+                || full_output.contains("Creating hitch-metadata branch")
+                || full_output.contains("Accessing hitch metadata")
+                || full_output.contains("Successfully")
+        );
 
         Ok(())
     })
@@ -182,14 +196,15 @@ fn test_init_coverage_edge_cases() -> Result<()> {
             let full_output = format!("{}{}", stdout, stderr);
 
             // If it succeeds, it should have created environments
-            assert!(full_output.contains("Successfully") ||
-                    full_output.contains("environments"));
+            assert!(full_output.contains("Successfully") || full_output.contains("environments"));
         } else {
             // If it fails, it should be a graceful failure
             let stderr = String::from_utf8(output.stderr)?;
-            assert!(stderr.contains("invalid") ||
-                    stderr.contains("error") ||
-                    stderr.contains("Invalid"));
+            assert!(
+                stderr.contains("invalid")
+                    || stderr.contains("error")
+                    || stderr.contains("Invalid")
+            );
         }
 
         Ok(())

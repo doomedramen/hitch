@@ -12,7 +12,8 @@ pub struct GitOperations {
 impl GitOperations {
     pub fn new() -> Result<Self> {
         let repo = Repository::discover(".").context("Not in a git repository")?;
-        let repo_path = repo.workdir()
+        let repo_path = repo
+            .workdir()
             .ok_or_else(|| anyhow::anyhow!("Repository has no working directory"))?
             .to_string_lossy()
             .to_string();
@@ -23,7 +24,8 @@ impl GitOperations {
     pub fn new_at_path(path: &str) -> Result<Self> {
         // Open the repository at the exact path to avoid discovering parent repositories
         let repo = Repository::open(path).context("Not in a git repository")?;
-        let repo_path = repo.workdir()
+        let repo_path = repo
+            .workdir()
             .ok_or_else(|| anyhow::anyhow!("Repository has no working directory"))?
             .to_string_lossy()
             .to_string();
@@ -34,8 +36,7 @@ impl GitOperations {
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
-        cmd.output()
-            .context("Failed to execute git command")
+        cmd.output().context("Failed to execute git command")
     }
 
     /// Run multiple git commands sequentially, returning early on first failure
@@ -72,7 +73,9 @@ impl GitOperations {
                     // Return a special name for detached HEAD state
                     Ok(format!("detached-HEAD-{}", &commit_hash[..7]))
                 } else {
-                    Err(anyhow::anyhow!("Failed to get current branch or HEAD commit"))
+                    Err(anyhow::anyhow!(
+                        "Failed to get current branch or HEAD commit"
+                    ))
                 }
             }
         } else {
@@ -85,7 +88,7 @@ impl GitOperations {
 
     pub fn checkout_branch(&self, branch: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["checkout", branch])
+            .args(["checkout", branch])
             .output()
             .context(format!("Failed to checkout branch '{}'", branch))?;
 
@@ -102,7 +105,7 @@ impl GitOperations {
 
     pub fn create_orphan_branch(&self, branch_name: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["checkout", "--orphan", branch_name])
+            .args(["checkout", "--orphan", branch_name])
             .output()
             .context(format!("Failed to create orphan branch '{}'", branch_name))?;
 
@@ -116,7 +119,7 @@ impl GitOperations {
 
         // Clean working directory
         let _ = Command::new("git")
-            .args(&["rm", "-rf", "."])
+            .args(["rm", "-rf", "."])
             .output()
             .context("Failed to clean working directory")?;
 
@@ -127,7 +130,7 @@ impl GitOperations {
         // Add files
         for file in files {
             let output = Command::new("git")
-                .args(&["add", file])
+                .args(["add", file])
                 .output()
                 .context(format!("Failed to add file '{}'", file))?;
 
@@ -142,7 +145,7 @@ impl GitOperations {
 
         // Commit (bypass hooks since this is an automated metadata operation)
         let output = Command::new("git")
-            .args(&["commit", "--no-verify", "-m", message])
+            .args(["commit", "--no-verify", "-m", message])
             .output()
             .context("Failed to commit files")?;
 
@@ -162,7 +165,7 @@ impl GitOperations {
 
     pub fn read_file_from_branch(&self, branch: &str, file: &str) -> Result<String> {
         let output = Command::new("git")
-            .args(&["show", &format!("{}:{}", branch, file)])
+            .args(["show", &format!("{}:{}", branch, file)])
             .output()
             .context(format!(
                 "Failed to read '{}' from branch '{}'",
@@ -189,7 +192,7 @@ impl GitOperations {
 
     pub fn fetch_branch(&self, branch: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["fetch", "origin", branch])
+            .args(["fetch", "origin", branch])
             .output()
             .context(format!("Failed to fetch branch '{}'", branch))?;
 
@@ -220,7 +223,7 @@ impl GitOperations {
 
     pub fn push_branch(&self, branch: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["push", "origin", branch])
+            .args(["push", "origin", branch])
             .output()
             .context(format!("Failed to push branch '{}'", branch))?;
 
@@ -237,7 +240,7 @@ impl GitOperations {
 
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
         let output = Command::new("git")
-            .args(&["branch", "--list", branch])
+            .args(["branch", "--list", branch])
             .output()
             .context("Failed to list branches")?;
 
@@ -264,7 +267,7 @@ impl GitOperations {
     /// Get the latest commit SHA for a branch
     pub fn get_branch_commit_sha(&self, branch: &str) -> Result<String> {
         let output = Command::new("git")
-            .args(&["rev-parse", &format!("refs/heads/{}", branch)])
+            .args(["rev-parse", &format!("refs/heads/{}", branch)])
             .output()
             .context(format!("Failed to get commit SHA for branch '{}'", branch))?;
 
@@ -283,7 +286,7 @@ impl GitOperations {
     /// Get the timestamp for a commit
     pub fn get_commit_timestamp(&self, sha: &str) -> Result<DateTime<Utc>> {
         let output = Command::new("git")
-            .args(&["show", "-s", "--format=%ct", sha])
+            .args(["show", "-s", "--format=%ct", sha])
             .output()
             .context(format!("Failed to get timestamp for commit '{}'", sha))?;
 
@@ -295,11 +298,14 @@ impl GitOperations {
             ));
         }
 
-        let timestamp_str = String::from_utf8(output.stdout).context("Failed to parse timestamp")?;
-        let timestamp_i64: i64 = timestamp_str.trim().parse()
+        let timestamp_str =
+            String::from_utf8(output.stdout).context("Failed to parse timestamp")?;
+        let timestamp_i64: i64 = timestamp_str
+            .trim()
+            .parse()
             .context("Failed to parse timestamp as integer")?;
 
-        Ok(DateTime::from_timestamp(timestamp_i64, 0).unwrap_or_else(|| Utc::now()))
+        Ok(DateTime::from_timestamp(timestamp_i64, 0).unwrap_or_else(Utc::now))
     }
 
     /// Check if a branch exists (local or remote)
@@ -311,7 +317,7 @@ impl GitOperations {
 
         // Check remote
         let output = Command::new("git")
-            .args(&["ls-remote", "--heads", "origin", branch])
+            .args(["ls-remote", "--heads", "origin", branch])
             .output()
             .context("Failed to check remote branches")?;
 
@@ -321,9 +327,12 @@ impl GitOperations {
     /// Create a new branch from a specific source branch
     pub fn create_branch_from(&self, new_branch: &str, source_branch: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["checkout", "-b", new_branch, source_branch])
+            .args(["checkout", "-b", new_branch, source_branch])
             .output()
-            .context(format!("Failed to create branch '{}' from '{}'", new_branch, source_branch))?;
+            .context(format!(
+                "Failed to create branch '{}' from '{}'",
+                new_branch, source_branch
+            ))?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -340,9 +349,12 @@ impl GitOperations {
     /// Rename current branch to a new name
     pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["branch", "-m", old_name, new_name])
+            .args(["branch", "-m", old_name, new_name])
             .output()
-            .context(format!("Failed to rename branch '{}' to '{}'", old_name, new_name))?;
+            .context(format!(
+                "Failed to rename branch '{}' to '{}'",
+                old_name, new_name
+            ))?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -359,18 +371,12 @@ impl GitOperations {
     /// Delete a branch (local)
     pub fn delete_branch(&self, branch: &str, force: bool) -> Result<()> {
         // Get current branch to ensure we're not trying to delete the branch we're on
-        let current_branch = match self.get_current_branch() {
-            Ok(branch) => branch,
-            Err(_) => {
-                // If we can't get current branch, proceed anyway
-                String::new()
-            }
-        };
+        let current_branch = self.get_current_branch().unwrap_or_default();
 
         // If we're currently on the branch we want to delete, switch to main first
         if current_branch == branch {
             let output = Command::new("git")
-                .args(&["checkout", "main"])
+                .args(["checkout", "main"])
                 .output()
                 .context("Failed to switch to main branch before deleting current branch")?;
 
@@ -400,10 +406,14 @@ impl GitOperations {
             if stderr.contains("used by worktree") {
                 // For worktree issues, try to force delete with additional flags
                 let force_args = vec!["branch", "-D", "--force", branch];
-                let force_output = Command::new("git")
-                    .args(&force_args)
-                    .output()
-                    .context(format!("Failed to force delete branch '{}' with --force", branch))?;
+                let force_output =
+                    Command::new("git")
+                        .args(&force_args)
+                        .output()
+                        .context(format!(
+                            "Failed to force delete branch '{}' with --force",
+                            branch
+                        ))?;
 
                 if force_output.status.success() {
                     return Ok(());
@@ -443,7 +453,7 @@ impl GitOperations {
     /// Squash merge a branch into the current branch
     pub fn squash_merge(&self, source_branch: &str, message: &str) -> Result<()> {
         let output = Command::new("git")
-            .args(&["merge", "--squash", source_branch])
+            .args(["merge", "--squash", source_branch])
             .output()
             .context(format!("Failed to squash merge branch '{}'", source_branch))?;
 
@@ -457,7 +467,7 @@ impl GitOperations {
 
         // Add any remaining untracked files before committing
         let add_output = Command::new("git")
-            .args(&["add", "--all"])
+            .args(["add", "--all"])
             .output()
             .context("Failed to add untracked files before squash merge commit")?;
 
@@ -471,7 +481,7 @@ impl GitOperations {
 
         // Check if there's anything to commit
         let status_output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .output()
             .context("Failed to check git status before squash merge commit")?;
 
@@ -483,7 +493,7 @@ impl GitOperations {
 
         // Commit the squash merge (bypass hooks since this is an automated operation)
         let commit_output = Command::new("git")
-            .args(&["commit", "--no-verify", "-m", message])
+            .args(["commit", "--no-verify", "-m", message])
             .output()
             .context("Failed to commit squash merge")?;
 
@@ -511,7 +521,7 @@ impl GitOperations {
     /// Check if a merge would result in conflicts
     pub fn check_merge_conflicts(&self, source_branch: &str) -> Result<bool> {
         let output = Command::new("git")
-            .args(&["merge", "--no-commit", "--no-ff", source_branch])
+            .args(["merge", "--no-commit", "--no-ff", source_branch])
             .output()
             .context(format!("Failed to test merge from '{}'", source_branch))?;
 
@@ -519,10 +529,11 @@ impl GitOperations {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Check if it's a non-existent branch error
-            if stderr.contains("did not match any file(s) known to git") ||
-               stderr.contains("unknown revision or path") ||
-               stderr.contains("not something we can merge") ||
-               stderr.contains("Non-fast-forward commit does not make sense into an empty head") {
+            if stderr.contains("did not match any file(s) known to git")
+                || stderr.contains("unknown revision or path")
+                || stderr.contains("not something we can merge")
+                || stderr.contains("Non-fast-forward commit does not make sense into an empty head")
+            {
                 return Err(anyhow::anyhow!("Branch '{}' does not exist", source_branch));
             }
 
@@ -531,9 +542,7 @@ impl GitOperations {
         }
 
         // Abort the test merge
-        let _ = Command::new("git")
-            .args(&["merge", "--abort"])
-            .output();
+        let _ = Command::new("git").args(["merge", "--abort"]).output();
 
         Ok(false)
     }

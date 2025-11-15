@@ -1,31 +1,43 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use std::path::Path;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env, TestEnv};
+use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, locked: bool) -> Result<()>;
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        locked: bool,
+    ) -> Result<()>;
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output>;
 }
 
 impl TestEnvExt for TestEnv {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, locked: bool) -> Result<()> {
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        locked: bool,
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         let mut environments = HashMap::new();
-        environments.insert(env_name.to_string(), serde_json::json!({
-            "base": base_branch,
-            "branches": [],
-            "locked": locked,
-            "lockedBy": if locked { Some("test@example.com".to_string()) } else { None },
-            "lockedAt": if locked { Some("2024-01-01T00:00:00Z".to_string()) } else { None },
-            "rebuiltAt": null
-        }));
+        environments.insert(
+            env_name.to_string(),
+            serde_json::json!({
+                "base": base_branch,
+                "branches": [],
+                "locked": locked,
+                "lockedBy": if locked { Some("test@example.com".to_string()) } else { None },
+                "lockedAt": if locked { Some("2024-01-01T00:00:00Z".to_string()) } else { None },
+                "rebuiltAt": null
+            }),
+        );
 
         let config = serde_json::json!({
             "version": "1.0.0",
@@ -36,7 +48,10 @@ impl TestEnvExt for TestEnv {
             .args(&["checkout", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
-        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(
+            self.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(self.path())
@@ -71,7 +86,10 @@ fn test_unlock_valid_locked_environment() -> Result<()> {
 
         // Try to unlock
         let output = test_env.run_hitch_command(&["unlock", "dev"])?;
-        assert!(output.status.success(), "Unlock should succeed for valid locked environment");
+        assert!(
+            output.status.success(),
+            "Unlock should succeed for valid locked environment"
+        );
 
         Ok(())
     })
@@ -83,7 +101,10 @@ fn test_unlock_nonexistent_environment() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| {
         // Try to unlock non-existent environment
         let output = test_env.run_hitch_command(&["unlock", "nonexistent"])?;
-        assert!(!output.status.success(), "Unlock should fail with non-existent environment");
+        assert!(
+            !output.status.success(),
+            "Unlock should fail with non-existent environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("does not exist") || stderr.contains("not found"));
 
@@ -99,7 +120,10 @@ fn test_unlock_unlocked_environment() -> Result<()> {
 
         // Try to unlock already unlocked environment
         let output = test_env.run_hitch_command(&["unlock", "dev"])?;
-        assert!(!output.status.success(), "Unlock should fail with unlocked environment");
+        assert!(
+            !output.status.success(),
+            "Unlock should fail with unlocked environment"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not currently locked"));
 
@@ -113,9 +137,15 @@ fn test_unlock_missing_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Test missing arguments
         let output = test_env.run_hitch_command(&["unlock"])?;
-        assert!(!output.status.success(), "Unlock should fail with missing arguments");
+        assert!(
+            !output.status.success(),
+            "Unlock should fail with missing arguments"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("the following required arguments were not provided") || stderr.contains("expected 1 argument"));
+        assert!(
+            stderr.contains("the following required arguments were not provided")
+                || stderr.contains("expected 1 argument")
+        );
 
         Ok(())
     })
@@ -127,7 +157,10 @@ fn test_unlock_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Try to unlock without hitch init
         let output = test_env.run_hitch_command(&["unlock", "dev"])?;
-        assert!(!output.status.success(), "Unlock should fail when hitch not initialized");
+        assert!(
+            !output.status.success(),
+            "Unlock should fail when hitch not initialized"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not found") || stderr.contains("Failed to read"));
 
@@ -143,10 +176,16 @@ fn test_unlock_verbose_output() -> Result<()> {
 
         // Try to unlock with verbose flag
         let output = test_env.run_hitch_command(&["unlock", "dev", "--verbose"])?;
-        assert!(output.status.success(), "Unlock should succeed with verbose flag");
+        assert!(
+            output.status.success(),
+            "Unlock should succeed with verbose flag"
+        );
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("Validating unlock preconditions") || stdout.contains("✓ Unlock validation passed"));
+        assert!(
+            stdout.contains("Validating unlock preconditions")
+                || stdout.contains("✓ Unlock validation passed")
+        );
 
         Ok(())
     })
@@ -176,14 +215,17 @@ fn test_unlock_basic_functionality() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| {
         // Create environment locked by different user
         let mut environments = std::collections::HashMap::new();
-        environments.insert("dev".to_string(), serde_json::json!({
-            "base": "main",
-            "branches": [],
-            "locked": true,
-            "lockedBy": "other@example.com",
-            "lockedAt": "2024-01-01T00:00:00Z",
-            "rebuiltAt": null
-        }));
+        environments.insert(
+            "dev".to_string(),
+            serde_json::json!({
+                "base": "main",
+                "branches": [],
+                "locked": true,
+                "lockedBy": "other@example.com",
+                "lockedAt": "2024-01-01T00:00:00Z",
+                "rebuiltAt": null
+            }),
+        );
 
         let config = serde_json::json!({
             "version": "1.0.0",
@@ -194,7 +236,10 @@ fn test_unlock_basic_functionality() -> Result<()> {
             .args(&["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
-        fs::write(test_env.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(
+            test_env.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(test_env.path())
@@ -211,7 +256,10 @@ fn test_unlock_basic_functionality() -> Result<()> {
         // For now, just test that unlocking works
         // TODO: Add proper user validation testing with different git configs
         let output = test_env.run_hitch_command(&["unlock", "dev"])?;
-        assert!(output.status.success(), "Unlock should succeed for locked environment");
+        assert!(
+            output.status.success(),
+            "Unlock should succeed for locked environment"
+        );
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Successfully unlocked"));

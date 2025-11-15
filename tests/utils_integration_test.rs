@@ -1,11 +1,11 @@
 use anyhow::Result;
+use hitch::types::HitchConfig;
 use std::fs;
 use std::process::Command;
-use hitch::types::HitchConfig;
 
 // Import the test framework (avoid importing TestEnv since we use closure)
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 /// Helper functions for git operations using the test environment
 impl common::TestEnv {
@@ -44,7 +44,9 @@ fn test_git_operations_integration() -> Result<()> {
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
         // Test that git operations work correctly
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
 
         // Test get current branch
         let current_branch = git_ops.get_current_branch()?;
@@ -53,19 +55,37 @@ fn test_git_operations_integration() -> Result<()> {
         // Test checkout branch
         git_ops.checkout_branch("feature/test")?;
         let current_branch = git_ops.get_current_branch()?;
-        assert_eq!(current_branch, "feature/test", "Should be on feature/test branch");
+        assert_eq!(
+            current_branch, "feature/test",
+            "Should be on feature/test branch"
+        );
 
         // Test branch existence check
-        assert!(git_ops.branch_exists_anywhere("main")?, "Main branch should exist");
-        assert!(git_ops.branch_exists_anywhere("feature/test")?, "Feature branch should exist");
-        assert!(!git_ops.branch_exists_anywhere("nonexistent")?, "Nonexistent branch should not exist");
+        assert!(
+            git_ops.branch_exists_anywhere("main")?,
+            "Main branch should exist"
+        );
+        assert!(
+            git_ops.branch_exists_anywhere("feature/test")?,
+            "Feature branch should exist"
+        );
+        assert!(
+            !git_ops.branch_exists_anywhere("nonexistent")?,
+            "Nonexistent branch should not exist"
+        );
 
         // Test clean working directory detection
-        assert!(git_ops.is_working_directory_clean()?, "Should detect clean working directory");
+        assert!(
+            git_ops.is_working_directory_clean()?,
+            "Should detect clean working directory"
+        );
 
         // Test dirty working directory detection
         fs::write(test_env.path().join("dirty.txt"), "dirty content")?;
-        assert!(!git_ops.is_working_directory_clean()?, "Should detect dirty working directory");
+        assert!(
+            !git_ops.is_working_directory_clean()?,
+            "Should detect dirty working directory"
+        );
 
         // Clean up
         Command::new("git")
@@ -78,7 +98,10 @@ fn test_git_operations_integration() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        assert!(git_ops.is_working_directory_clean()?, "Should detect clean working directory again");
+        assert!(
+            git_ops.is_working_directory_clean()?,
+            "Should detect clean working directory again"
+        );
 
         Ok(())
     })
@@ -90,7 +113,9 @@ fn test_git_operations_detached_head() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
 
         // Get current commit hash
         let output = Command::new("git")
@@ -109,7 +134,10 @@ fn test_git_operations_detached_head() -> Result<()> {
 
         // Test get current branch in detached HEAD
         let current_branch = git_ops.get_current_branch()?;
-        assert!(current_branch.starts_with("detached-HEAD-"), "Should detect detached HEAD state");
+        assert!(
+            current_branch.starts_with("detached-HEAD-"),
+            "Should detect detached HEAD state"
+        );
         assert!(current_branch.len() > 13, "Should include commit hash");
 
         Ok(())
@@ -120,11 +148,16 @@ fn test_git_operations_detached_head() -> Result<()> {
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
 
         // Test checkout non-existent branch
         let result = git_ops.checkout_branch("nonexistent");
-        assert!(result.is_err(), "Should fail to checkout non-existent branch");
+        assert!(
+            result.is_err(),
+            "Should fail to checkout non-existent branch"
+        );
 
         // Test get user email
         let user_email = git_ops.get_user_email()?;
@@ -222,7 +255,10 @@ fn test_input_validation() -> Result<()> {
         for name in valid_names {
             assert!(!name.is_empty(), "Valid name should not be empty");
             assert!(name.len() <= 100, "Valid name should be under 100 chars");
-            assert!(!name.contains(".."), "Valid name should not contain invalid chars");
+            assert!(
+                !name.contains(".."),
+                "Valid name should not contain invalid chars"
+            );
         }
 
         // Test invalid environment names (these would fail our validation)

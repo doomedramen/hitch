@@ -1,15 +1,19 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use std::path::Path;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env, TestEnv};
+use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()>;
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()>;
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()>;
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output>;
     fn create_file(&self, path: &str, content: &str) -> Result<()>;
@@ -21,7 +25,12 @@ trait TestEnvExt {
 }
 
 impl TestEnvExt for TestEnv {
-    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()> {
+    fn create_environment_config(
+        &self,
+        env_name: &str,
+        base_branch: &str,
+        branches: &[&str],
+    ) -> Result<()> {
         use std::collections::HashMap;
 
         let mut environments = HashMap::new();
@@ -30,14 +39,17 @@ impl TestEnvExt for TestEnv {
             branches_vec.push(branch.to_string());
         }
 
-        environments.insert(env_name.to_string(), serde_json::json!({
-            "base": base_branch,
-            "branches": branches_vec,
-            "locked": false,
-            "lockedBy": null,
-            "lockedAt": null,
-            "rebuiltAt": null
-        }));
+        environments.insert(
+            env_name.to_string(),
+            serde_json::json!({
+                "base": base_branch,
+                "branches": branches_vec,
+                "locked": false,
+                "lockedBy": null,
+                "lockedAt": null,
+                "rebuiltAt": null
+            }),
+        );
 
         let config = serde_json::json!({
             "version": "1.0.0",
@@ -51,7 +63,10 @@ impl TestEnvExt for TestEnv {
             .output()?;
 
         // Update hitch.json with the new environment configuration
-        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        fs::write(
+            self.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(self.path())
@@ -166,11 +181,15 @@ impl TestEnvExt for TestEnv {
                     .output()?;
 
                 if rev_output.status.success() {
-                    let commit_hash = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+                    let commit_hash = String::from_utf8_lossy(&rev_output.stdout)
+                        .trim()
+                        .to_string();
                     // Return a special name for detached HEAD state
                     Ok(format!("detached-HEAD-{}", &commit_hash[..7]))
                 } else {
-                    Err(anyhow::anyhow!("Failed to get current branch or HEAD commit"))
+                    Err(anyhow::anyhow!(
+                        "Failed to get current branch or HEAD commit"
+                    ))
                 }
             }
         } else {
@@ -201,8 +220,14 @@ impl TestEnvExt for TestEnv {
 
     fn modify_files_for_conflict(&self) -> Result<()> {
         // Modify files in a way that would create merge conflicts
-        fs::write(self.path().join("conflict1.txt"), "Modified content that conflicts")?;
-        fs::write(self.path().join("conflict2.txt"), "Different modified content")?;
+        fs::write(
+            self.path().join("conflict1.txt"),
+            "Modified content that conflicts",
+        )?;
+        fs::write(
+            self.path().join("conflict2.txt"),
+            "Different modified content",
+        )?;
 
         // Commit changes to create diverging history
         Command::new("git")
@@ -235,7 +260,10 @@ fn test_corrupted_git_state() -> Result<()> {
 
         // Try to promote - should fail gracefully
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Should fail with corrupted git state");
+        assert!(
+            !output.status.success(),
+            "Should fail with corrupted git state"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("git") || stderr.contains("repository"));
 
@@ -253,7 +281,10 @@ fn test_missing_git_executable() -> Result<()> {
         // Run a command that would fail if git wasn't available
         let output = test_env.run_hitch_command(&["status"])?;
         // Should succeed because git is available
-        assert!(output.status.success(), "Should succeed when git is available");
+        assert!(
+            output.status.success(),
+            "Should succeed when git is available"
+        );
 
         Ok(())
     })
@@ -271,7 +302,10 @@ fn test_git_hooks_that_always_fail() -> Result<()> {
 
         // Try to promote - should bypass the hook due to --no-verify
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(output.status.success(), "Promote should succeed even with failing pre-commit hook");
+        assert!(
+            output.status.success(),
+            "Promote should succeed even with failing pre-commit hook"
+        );
 
         // Verify we're back on the original branch
         let current_branch = test_env.get_current_branch()?;
@@ -289,11 +323,17 @@ fn test_git_hooks_with_syntax_errors() -> Result<()> {
         test_env.create_environment_config("dev", "main", &[])?;
 
         // Create a pre-commit hook with syntax errors
-        test_env.create_git_hook("pre-commit", "#!/bin/sh\ninvalid_command_that_does_not_exist")?;
+        test_env.create_git_hook(
+            "pre-commit",
+            "#!/bin/sh\ninvalid_command_that_does_not_exist",
+        )?;
 
         // Try to promote - should succeed despite hook syntax errors
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(output.status.success(), "Promote should succeed despite hook syntax errors");
+        assert!(
+            output.status.success(),
+            "Promote should succeed despite hook syntax errors"
+        );
 
         Ok(())
     })
@@ -315,11 +355,18 @@ fn test_detached_head_operations() -> Result<()> {
 
         // Verify we're in detached HEAD
         let current_branch = test_env.get_current_branch()?;
-        assert!(current_branch.starts_with("detached-HEAD-"), "Should be in detached HEAD state, got: {}", current_branch);
+        assert!(
+            current_branch.starts_with("detached-HEAD-"),
+            "Should be in detached HEAD state, got: {}",
+            current_branch
+        );
 
         // Try to promote - should work even in detached HEAD
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(output.status.success(), "Promote should work even with detached HEAD");
+        assert!(
+            output.status.success(),
+            "Promote should work even with detached HEAD"
+        );
 
         // TODO: There's a known issue with detached HEAD branch restoration in complex workflows
         // The promote command works correctly but doesn't return to the exact detached HEAD state
@@ -327,7 +374,10 @@ fn test_detached_head_operations() -> Result<()> {
         // In the future, this should be fixed to return to the original detached HEAD state
 
         // The command should succeed even from detached HEAD
-        assert!(output.status.success(), "Promote should work from detached HEAD");
+        assert!(
+            output.status.success(),
+            "Promote should work from detached HEAD"
+        );
 
         Ok(())
     })
@@ -349,23 +399,44 @@ fn test_many_branches_promotion() -> Result<()> {
 
         // Promote each branch
         for (i, branch) in branches.iter().enumerate() {
-            println!("Promoting branch {} of {}: {}", i + 1, branches.len(), branch);
+            println!(
+                "Promoting branch {} of {}: {}",
+                i + 1,
+                branches.len(),
+                branch
+            );
             let output = test_env.run_hitch_command(&["promote", branch, "dev"])?;
-            assert!(output.status.success(), "Promote should succeed for branch {}", branch);
+            assert!(
+                output.status.success(),
+                "Promote should succeed for branch {}",
+                branch
+            );
 
             // Verify we're back on main
             let current_branch = test_env.get_current_branch()?;
-            assert_eq!(current_branch, "main", "Should be back on main branch after promote {}", branch);
+            assert_eq!(
+                current_branch, "main",
+                "Should be back on main branch after promote {}",
+                branch
+            );
         }
 
         // Test demoting all branches
         for branch in branches.iter().rev() {
             let output = test_env.run_hitch_command(&["demote", branch, "dev"])?;
-            assert!(output.status.success(), "Demote should succeed for branch {}", branch);
+            assert!(
+                output.status.success(),
+                "Demote should succeed for branch {}",
+                branch
+            );
 
             // Verify we're back on main
             let current_branch = test_env.get_current_branch()?;
-            assert_eq!(current_branch, "main", "Should be back on main branch after demote {}", branch);
+            assert_eq!(
+                current_branch, "main",
+                "Should be back on main branch after demote {}",
+                branch
+            );
         }
 
         Ok(())
@@ -383,15 +454,29 @@ fn test_long_branch_names() -> Result<()> {
 
         // Test promotion with long branch name - should fail due to validation
         let output = test_env.run_hitch_command(&["promote", long_branch_name, "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with overly long branch name");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with overly long branch name"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("cannot exceed") || stderr.contains("too long"), "Expected error about name length, got: {}", stderr);
+        assert!(
+            stderr.contains("cannot exceed") || stderr.contains("too long"),
+            "Expected error about name length, got: {}",
+            stderr
+        );
 
         // Test demotion with long branch name - should also fail due to validation
         let output = test_env.run_hitch_command(&["demote", long_branch_name, "dev"])?;
-        assert!(!output.status.success(), "Demote should fail with overly long branch name");
+        assert!(
+            !output.status.success(),
+            "Demote should fail with overly long branch name"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("cannot exceed") || stderr.contains("too long"), "Expected error about name length, got: {}", stderr);
+        assert!(
+            stderr.contains("cannot exceed") || stderr.contains("too long"),
+            "Expected error about name length, got: {}",
+            stderr
+        );
 
         Ok(())
     })
@@ -419,11 +504,19 @@ fn test_special_characters_in_branch_names() -> Result<()> {
         for branch in &special_branches {
             // Promote
             let output = test_env.run_hitch_command(&["promote", branch, "dev"])?;
-            assert!(output.status.success(), "Promote should succeed for branch {}", branch);
+            assert!(
+                output.status.success(),
+                "Promote should succeed for branch {}",
+                branch
+            );
 
             // Demote
             let output = test_env.run_hitch_command(&["demote", branch, "dev"])?;
-            assert!(output.status.success(), "Demote should succeed for branch {}", branch);
+            assert!(
+                output.status.success(),
+                "Demote should succeed for branch {}",
+                branch
+            );
         }
 
         Ok(())
@@ -442,17 +535,20 @@ fn test_git_state_inconsistencies() -> Result<()> {
             .args(&["checkout", "feature/test"])
             .current_dir(test_env.path())
             .output()?;
-    for i in 1..=5 {
-        fs::write(test_env.path().join(&format!("file{}.txt", i)), &format!("Content {}", i))?;
-        Command::new("git")
+        for i in 1..=5 {
+            fs::write(
+                test_env.path().join(&format!("file{}.txt", i)),
+                &format!("Content {}", i),
+            )?;
+            Command::new("git")
                 .args(&["add", "."])
                 .current_dir(test_env.path())
                 .output()?;
-        Command::new("git")
+            Command::new("git")
                 .args(&["commit", "-m", &format!("Commit {}", i)])
                 .current_dir(test_env.path())
                 .output()?;
-    }
+        }
         Command::new("git")
             .args(&["checkout", "main"])
             .current_dir(test_env.path())
@@ -484,7 +580,10 @@ fn test_corrupted_hitch_json() -> Result<()> {
             .args(&["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
-        fs::write(test_env.path().join("hitch.json"), "invalid json content that is not parseable")?;
+        fs::write(
+            test_env.path().join("hitch.json"),
+            "invalid json content that is not parseable",
+        )?;
         Command::new("git")
             .args(&["add", "hitch.json"])
             .current_dir(test_env.path())
@@ -500,9 +599,16 @@ fn test_corrupted_hitch_json() -> Result<()> {
 
         // Try to promote - should fail gracefully
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with corrupted hitch.json");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with corrupted hitch.json"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("parse") || stderr.contains("Failed to read") || stderr.contains("invalid"));
+        assert!(
+            stderr.contains("parse")
+                || stderr.contains("Failed to read")
+                || stderr.contains("invalid")
+        );
 
         Ok(())
     })
@@ -535,7 +641,10 @@ fn test_missing_hitch_json() -> Result<()> {
 
         // Try to promote - should fail gracefully
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-        assert!(!output.status.success(), "Promote should fail with missing hitch.json");
+        assert!(
+            !output.status.success(),
+            "Promote should fail with missing hitch.json"
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not found") || stderr.contains("Failed to read"));
 

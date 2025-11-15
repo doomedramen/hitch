@@ -1,11 +1,11 @@
 //! Common test utilities for all Hitch tests
 
 use anyhow::Result;
-use std::fs;
-use std::process::Command;
-use std::path::Path;
-use tempfile::TempDir;
 use git2::{Repository, Signature};
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+use tempfile::TempDir;
 
 /// Test environment with complete git2-based isolation
 pub struct TestEnv {
@@ -23,20 +23,21 @@ impl TestEnv {
     /// Create a new isolated test environment, optionally with git repository
     pub fn new_with_git(with_git: bool) -> Result<Self> {
         // Create unique temp directory with thread ID, timestamp, and random component
-        use std::time::{SystemTime, UNIX_EPOCH};
         use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_micros(); // Use microseconds for better uniqueness
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros(); // Use microseconds for better uniqueness
 
         let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
         let thread_id = std::thread::current().id();
         let thread_str = format!("{:?}", thread_id);
         let temp_dir = tempfile::Builder::new()
-            .prefix(&format!("hitch_test_{}_{}_{}", timestamp, counter, thread_str))
+            .prefix(&format!(
+                "hitch_test_{}_{}_{}",
+                timestamp, counter, thread_str
+            ))
             .tempdir()?;
 
         let original_dir = std::env::current_dir()?;
@@ -71,14 +72,8 @@ impl TestEnv {
             let tree_id = index.write_tree()?;
             let tree = repo.find_tree(tree_id)?;
 
-            let initial_commit = repo.commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "Initial commit",
-                &tree,
-                &[]
-            )?;
+            let initial_commit =
+                repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
 
             // Set up main branch explicitly
             repo.branch("main", &repo.find_commit(initial_commit)?, true)?;
@@ -93,17 +88,29 @@ impl TestEnv {
         std::env::set_current_dir(self.path())?;
 
         // Set git config using command-line git (hitch needs this)
-        Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-        Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-        Command::new("git").args(&["config", "core.autocrlf", "false"]).output()?;
-        Command::new("git").args(&["config", "core.filemode", "false"]).output()?;
+        Command::new("git")
+            .args(&["config", "user.name", "Test User"])
+            .output()?;
+        Command::new("git")
+            .args(&["config", "user.email", "test@example.com"])
+            .output()?;
+        Command::new("git")
+            .args(&["config", "core.autocrlf", "false"])
+            .output()?;
+        Command::new("git")
+            .args(&["config", "core.filemode", "false"])
+            .output()?;
 
         // Ensure working tree is clean (git2 setup might leave uncommitted changes)
-        let output = Command::new("git").args(&["status", "--porcelain"]).output()?;
+        let output = Command::new("git")
+            .args(&["status", "--porcelain"])
+            .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
             Command::new("git").args(&["add", "."]).output()?;
-            Command::new("git").args(&["commit", "-m", "Clean up initial setup"]).output()?;
+            Command::new("git")
+                .args(&["commit", "-m", "Clean up initial setup"])
+                .output()?;
         }
 
         // Initialize Hitch
@@ -112,21 +119,27 @@ impl TestEnv {
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to run hitch init: {}", String::from_utf8_lossy(&output.stderr)));
+            return Err(anyhow::anyhow!(
+                "Failed to run hitch init: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
 
         // Clean up any remaining changes from hitch init
-        let output = Command::new("git").args(&["status", "--porcelain"]).output()?;
+        let output = Command::new("git")
+            .args(&["status", "--porcelain"])
+            .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
             Command::new("git").args(&["add", "."]).output()?;
-            Command::new("git").args(&["commit", "-m", "Clean up after hitch init"]).output()?;
+            Command::new("git")
+                .args(&["commit", "-m", "Clean up after hitch init"])
+                .output()?;
         }
 
         Ok(())
     }
 
-    
     /// Get the path to the test directory
     pub fn path(&self) -> &Path {
         self.temp_dir.path()
@@ -187,35 +200,54 @@ where
         SetupLevel::GitOnly => {
             // Basic git setup is already done in TestEnv::new()
             // Just need to ensure git config is set for hitch operations
-            Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-            Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-            Command::new("git").args(&["config", "core.autocrlf", "false"]).output()?;
-            Command::new("git").args(&["config", "core.filemode", "false"]).output()?;
+            Command::new("git")
+                .args(&["config", "user.name", "Test User"])
+                .output()?;
+            Command::new("git")
+                .args(&["config", "user.email", "test@example.com"])
+                .output()?;
+            Command::new("git")
+                .args(&["config", "core.autocrlf", "false"])
+                .output()?;
+            Command::new("git")
+                .args(&["config", "core.filemode", "false"])
+                .output()?;
 
             // Ensure working tree is clean (git2 setup might leave uncommitted changes)
-            let output = Command::new("git").args(&["status", "--porcelain"]).output()?;
+            let output = Command::new("git")
+                .args(&["status", "--porcelain"])
+                .output()?;
             let status_output = String::from_utf8_lossy(&output.stdout);
             if !status_output.trim().is_empty() {
                 // Add all changes including deleted files
                 let add_output = Command::new("git").args(&["add", "-A"]).output()?;
                 if !add_output.status.success() {
-                    return Err(anyhow::anyhow!("Failed to add files: {}", String::from_utf8_lossy(&add_output.stderr)));
+                    return Err(anyhow::anyhow!(
+                        "Failed to add files: {}",
+                        String::from_utf8_lossy(&add_output.stderr)
+                    ));
                 }
-                let commit_output = Command::new("git").args(&["commit", "-m", "Clean up initial setup"]).output()?;
+                let commit_output = Command::new("git")
+                    .args(&["commit", "-m", "Clean up initial setup"])
+                    .output()?;
                 if !commit_output.status.success() {
                     let stderr = String::from_utf8_lossy(&commit_output.stderr);
                     let stdout = String::from_utf8_lossy(&commit_output.stdout);
                     // Don't treat "nothing to commit" as an error
-                    if !(stderr.contains("nothing to commit") || stdout.contains("nothing to commit")) {
-                        return Err(anyhow::anyhow!("Failed to commit: stderr={}, stdout={}", stderr, stdout));
+                    if !(stderr.contains("nothing to commit")
+                        || stdout.contains("nothing to commit"))
+                    {
+                        return Err(anyhow::anyhow!(
+                            "Failed to commit: stderr={}, stdout={}",
+                            stderr,
+                            stdout
+                        ));
                     }
                 }
             }
             Ok(())
         }
-        SetupLevel::Complete => {
-            test_env.setup_complete_hitch_env()
-        }
+        SetupLevel::Complete => test_env.setup_complete_hitch_env(),
     };
 
     // If setup failed, return to original directory and return error
@@ -232,4 +264,3 @@ where
 
     test_result
 }
-

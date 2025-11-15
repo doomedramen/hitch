@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::prelude::{with_locked_env, access_metadata_read_only};
+use crate::utils::prelude::{access_metadata_read_only, with_locked_env};
 use anyhow::Result;
 use clap::Args;
 
@@ -14,10 +14,7 @@ pub struct RebuildCommand {
     pub force: bool,
 }
 
-pub fn run(
-    args: RebuildCommand,
-    context: &GlobalContext,
-) -> Result<()> {
+pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     context.log_info(&format!("Rebuilding environment '{}'...", args.env_name));
 
     // Step 1: Precondition checks
@@ -28,7 +25,10 @@ pub fn run(
 
     if args.force {
         // For force mode, we need to handle locking manually since the environment is already locked
-        context.log_info(&format!("Force rebuilding locked environment '{}'...", args.env_name));
+        context.log_info(&format!(
+            "Force rebuilding locked environment '{}'...",
+            args.env_name
+        ));
         crate::utils::prelude::rebuild_environment(context, &args.env_name)?;
     } else {
         // Normal mode: use automatic locking and unlocking
@@ -37,7 +37,10 @@ pub fn run(
         })?;
     }
 
-    context.log_success(&format!("Environment '{}' rebuilt successfully!", args.env_name));
+    context.log_success(&format!(
+        "Environment '{}' rebuilt successfully!",
+        args.env_name
+    ));
     Ok(())
 }
 
@@ -50,9 +53,7 @@ fn validate_environment_exists_and_unlocked(
     context.log_verbose("Validating environment preconditions...");
 
     // Check if environment exists
-    let config = access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
+    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
     if !config.environments.contains_key(env_name) {
         return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
@@ -65,7 +66,10 @@ fn validate_environment_exists_and_unlocked(
         return Err(anyhow::anyhow!(
             "Environment '{}' is locked by {}. Use --force to override.",
             env_name,
-            environment.locked_by.as_ref().unwrap_or(&"unknown".to_string())
+            environment
+                .locked_by
+                .as_ref()
+                .unwrap_or(&"unknown".to_string())
         ));
     }
 

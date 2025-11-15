@@ -3,7 +3,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{SetupLevel, with_test_env};
+use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_init_with_environments() -> Result<()> {

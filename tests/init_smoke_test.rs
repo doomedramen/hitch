@@ -12,9 +12,7 @@ fn test_init_smoke_test() -> Result<()> {
 
     // Run hitch init again to test the smoke test functionality
     let binary_path = test_env.hitch_binary();
-    let output = Command::new(&binary_path)
-        .args(&["init"])
-        .output()?;
+    let output = Command::new(&binary_path).args(&["init"]).output()?;
 
     let stdout = String::from_utf8(output.stdout)?;
     let stderr = String::from_utf8(output.stderr)?;
@@ -26,18 +24,16 @@ fn test_init_smoke_test() -> Result<()> {
 
     // Check for expected messages (success or already initialized)
     assert!(
-        full_output.contains("Hitch initialized successfully") ||
-        full_output.contains("already initialized") ||
-        full_output.contains("hitch-metadata branch already exists"),
+        full_output.contains("Hitch initialized successfully")
+            || full_output.contains("already initialized")
+            || full_output.contains("hitch-metadata branch already exists"),
         "Output should contain expected init message. Got: {}",
         full_output
     );
 
     // Check that hitch-metadata branch exists
     std::env::set_current_dir(test_env.path())?;
-    let branch_output = Command::new("git")
-        .args(&["branch"])
-        .output()?;
+    let branch_output = Command::new("git").args(&["branch"]).output()?;
 
     let branches = String::from_utf8(branch_output.stdout)?;
     assert!(

@@ -22,20 +22,77 @@ fn test_environment_name_validation() -> Result<()> {
     for name in valid_names {
         // Test that valid names pass basic validation
         assert!(!name.is_empty(), "Valid name should not be empty: {}", name);
-        assert!(name.len() <= 100, "Valid name should be <= 100 chars: {} ({})", name, name.len());
-        assert!(!name.contains(".."), "Valid name should not contain '..': {}", name);
-        assert!(!name.contains("@"), "Valid name should not contain '@': {}", name);
-        assert!(!name.contains(":"), "Valid name should not contain ':': {}", name);
-        assert!(!name.contains("["), "Valid name should not contain '[': {}", name);
-        assert!(!name.contains("]"), "Valid name should not contain ']': {}", name);
-        assert!(!name.contains("\\"), "Valid name should not contain '\\': {}", name);
-        assert!(!name.contains("^"), "Valid name should not contain '^': {}", name);
-        assert!(!name.contains("~"), "Valid name should not contain '~': {}", name);
-        assert!(!name.contains("?"), "Valid name should not contain '?': {}", name);
-        assert!(!name.contains("*"), "Valid name should not contain '*': {}", name);
-        assert!(!name.starts_with('/'), "Valid name should not start with '/': {}", name);
-        assert!(!name.ends_with('/'), "Valid name should not end with '/': {}", name);
-        assert!(!name.contains("//"), "Valid name should not contain '//' : {}", name);
+        assert!(
+            name.len() <= 100,
+            "Valid name should be <= 100 chars: {} ({})",
+            name,
+            name.len()
+        );
+        assert!(
+            !name.contains(".."),
+            "Valid name should not contain '..': {}",
+            name
+        );
+        assert!(
+            !name.contains("@"),
+            "Valid name should not contain '@': {}",
+            name
+        );
+        assert!(
+            !name.contains(":"),
+            "Valid name should not contain ':': {}",
+            name
+        );
+        assert!(
+            !name.contains("["),
+            "Valid name should not contain '[': {}",
+            name
+        );
+        assert!(
+            !name.contains("]"),
+            "Valid name should not contain ']': {}",
+            name
+        );
+        assert!(
+            !name.contains("\\"),
+            "Valid name should not contain '\\': {}",
+            name
+        );
+        assert!(
+            !name.contains("^"),
+            "Valid name should not contain '^': {}",
+            name
+        );
+        assert!(
+            !name.contains("~"),
+            "Valid name should not contain '~': {}",
+            name
+        );
+        assert!(
+            !name.contains("?"),
+            "Valid name should not contain '?': {}",
+            name
+        );
+        assert!(
+            !name.contains("*"),
+            "Valid name should not contain '*': {}",
+            name
+        );
+        assert!(
+            !name.starts_with('/'),
+            "Valid name should not start with '/': {}",
+            name
+        );
+        assert!(
+            !name.ends_with('/'),
+            "Valid name should not end with '/': {}",
+            name
+        );
+        assert!(
+            !name.contains("//"),
+            "Valid name should not contain '//' : {}",
+            name
+        );
     }
 
     Ok(())
@@ -64,16 +121,29 @@ fn test_environment_name_validation_edge_cases() -> Result<()> {
     for name in invalid_names {
         let is_empty = name.is_empty();
         let too_long = name.len() > 100;
-        let contains_invalid_chars = name.contains("..") || name.contains("@") || name.contains(":") ||
-                                  name.contains("[") || name.contains("]") || name.contains("\\") ||
-                                  name.contains("^") || name.contains("~") || name.contains("?") ||
-                                  name.contains("*");
+        let contains_invalid_chars = name.contains("..")
+            || name.contains("@")
+            || name.contains(":")
+            || name.contains("[")
+            || name.contains("]")
+            || name.contains("\\")
+            || name.contains("^")
+            || name.contains("~")
+            || name.contains("?")
+            || name.contains("*");
         let starts_or_ends_with_slash = name.starts_with('/') || name.ends_with('/');
         let has_double_slash = name.contains("//");
 
         // At least one validation rule should fail for invalid names
-        assert!(is_empty || too_long || contains_invalid_chars || starts_or_ends_with_slash || has_double_slash,
-               "Invalid name should fail at least one validation rule: '{}'", name);
+        assert!(
+            is_empty
+                || too_long
+                || contains_invalid_chars
+                || starts_or_ends_with_slash
+                || has_double_slash,
+            "Invalid name should fail at least one validation rule: '{}'",
+            name
+        );
     }
 
     Ok(())
@@ -106,22 +176,40 @@ fn test_branch_name_validation_patterns() -> Result<()> {
 
     for branch_name in common_patterns {
         // All common patterns should pass our basic validation
-        assert!(!branch_name.is_empty(), "Branch name should not be empty: {}", branch_name);
-        assert!(branch_name.len() <= 100, "Branch name should be reasonable length: {} ({})", branch_name, branch_name.len());
+        assert!(
+            !branch_name.is_empty(),
+            "Branch name should not be empty: {}",
+            branch_name
+        );
+        assert!(
+            branch_name.len() <= 100,
+            "Branch name should be reasonable length: {} ({})",
+            branch_name,
+            branch_name.len()
+        );
 
         // Most common patterns use valid characters
-        let has_invalid_chars = branch_name.contains("..") || branch_name.contains("@") ||
-                               branch_name.contains(":") || branch_name.contains("[") ||
-                               branch_name.contains("]") || branch_name.contains("\\") ||
-                               branch_name.contains("^") || branch_name.contains("~") ||
-                               branch_name.contains("?") || branch_name.contains("*");
+        let has_invalid_chars = branch_name.contains("..")
+            || branch_name.contains("@")
+            || branch_name.contains(":")
+            || branch_name.contains("[")
+            || branch_name.contains("]")
+            || branch_name.contains("\\")
+            || branch_name.contains("^")
+            || branch_name.contains("~")
+            || branch_name.contains("?")
+            || branch_name.contains("*");
 
         // Note: Some patterns might contain "/" which is valid in many git contexts
         // but our validation doesn't allow it at start/end or double slashes
 
         if has_invalid_chars {
             // If it has invalid chars, that's expected to be caught
-            assert!(false, "Common branch pattern contains unexpected invalid characters: {}", branch_name);
+            assert!(
+                false,
+                "Common branch pattern contains unexpected invalid characters: {}",
+                branch_name
+            );
         }
     }
 
@@ -143,12 +231,24 @@ fn test_email_validation_patterns() -> Result<()> {
 
     for email in valid_emails {
         // Basic email validation (contains @ and has content on both sides)
-        assert!(email.contains("@"), "Valid email should contain @: {}", email);
+        assert!(
+            email.contains("@"),
+            "Valid email should contain @: {}",
+            email
+        );
         let parts: Vec<&str> = email.split("@").collect();
         assert_eq!(parts.len(), 2, "Email should have exactly one @: {}", email);
-        assert!(!parts[0].is_empty(), "Email should have username: {}", email);
+        assert!(
+            !parts[0].is_empty(),
+            "Email should have username: {}",
+            email
+        );
         assert!(!parts[1].is_empty(), "Email should have domain: {}", email);
-        assert!(parts[1].contains("."), "Email domain should have dot: {}", email);
+        assert!(
+            parts[1].contains("."),
+            "Email domain should have dot: {}",
+            email
+        );
     }
 
     Ok(())
@@ -173,15 +273,18 @@ fn test_timestamp_validation() -> Result<()> {
     // Test ISO 8601 format parsing
     let iso_string = now.to_rfc3339();
     let parsed: DateTime<Utc> = iso_string.parse()?;
-    assert!((parsed - now).num_seconds().abs() < 1, "Parsed timestamp should match original");
+    assert!(
+        (parsed - now).num_seconds().abs() < 1,
+        "Parsed timestamp should match original"
+    );
 
     Ok(())
 }
 
 #[test]
 fn test_json_serialization_edge_cases() -> Result<()> {
-    use serde_json;
     use hitch::types::{Environment, HitchConfig};
+    use serde_json;
 
     // Test serialization with special characters
     let mut env = Environment::new("main".to_string());
@@ -193,7 +296,10 @@ fn test_json_serialization_edge_cases() -> Result<()> {
     // Test JSON serialization
     let json_str = serde_json::to_string(&env)?;
     assert!(json_str.contains("main"), "JSON should contain base branch");
-    assert!(json_str.contains("test-branch"), "JSON should contain added branch");
+    assert!(
+        json_str.contains("test-branch"),
+        "JSON should contain added branch"
+    );
 
     // Test JSON deserialization
     let deserialized: Environment = serde_json::from_str(&json_str)?;
@@ -205,7 +311,10 @@ fn test_json_serialization_edge_cases() -> Result<()> {
     config.add_environment("test-env".to_string(), env.clone());
 
     let config_json = serde_json::to_string(&config)?;
-    assert!(config_json.contains("test-env"), "Config JSON should contain environment name");
+    assert!(
+        config_json.contains("test-env"),
+        "Config JSON should contain environment name"
+    );
 
     let config_deserialized: HitchConfig = serde_json::from_str(&config_json)?;
     assert!(config_deserialized.environment_exists("test-env"));
@@ -242,7 +351,11 @@ fn test_error_message_formatting() -> Result<()> {
         error_found = true;
     }
 
-    assert!(error_found, "Invalid name should trigger at least one validation error: {}", invalid_name);
+    assert!(
+        error_found,
+        "Invalid name should trigger at least one validation error: {}",
+        invalid_name
+    );
 
     Ok(())
 }
@@ -263,10 +376,10 @@ fn test_path_validation() -> Result<()> {
     ];
 
     let invalid_paths = vec![
-        "", // Empty
+        "",                              // Empty
         "path/with/../parent/reference", // Parent directory reference
         "path/with/./current/reference", // Current directory reference
-        "path/with//double/slash", // Double slash
+        "path/with//double/slash",       // Double slash
         "/absolute/path/with/trailing/slash/",
     ];
 
@@ -276,13 +389,17 @@ fn test_path_validation() -> Result<()> {
     }
 
     for path in invalid_paths {
-        let has_issues = path.is_empty() ||
-                        path.contains("..") ||
-                        path.contains("./") ||
-                        path.contains("//") ||
-                        (path.starts_with('/') && path.ends_with('/'));
+        let has_issues = path.is_empty()
+            || path.contains("..")
+            || path.contains("./")
+            || path.contains("//")
+            || (path.starts_with('/') && path.ends_with('/'));
 
-        assert!(has_issues, "Invalid path should have detectable issues: {}", path);
+        assert!(
+            has_issues,
+            "Invalid path should have detectable issues: {}",
+            path
+        );
     }
 
     Ok(())
