@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::utils::validation::{validate_name, validate_environment_not_exists, validate_base_branch_exists};
 use clap::Args;
 use anyhow::Result;
 
@@ -31,49 +32,6 @@ pub fn run(
     Ok(())
 }
 
-/// Validate that a name is valid for git branches/environments
-fn validate_name(name: &str, name_type: &str) -> Result<()> {
-    if name.is_empty() {
-        return Err(anyhow::anyhow!("{} name cannot be empty", name_type));
-    }
-
-    if name.len() > 100 {
-        return Err(anyhow::anyhow!("{} name cannot exceed 100 characters", name_type));
-    }
-
-    // Check for invalid characters that would cause issues in git
-    let invalid_chars = ["..", "@{", ":", "[", "]", "\\", "^", "~", "?", "*"];
-    for invalid in &invalid_chars {
-        if name.contains(invalid) {
-            return Err(anyhow::anyhow!(
-                "{} name cannot contain '{}': '{}'",
-                name_type,
-                invalid,
-                name
-            ));
-        }
-    }
-
-    // Cannot start or end with slash
-    if name.starts_with('/') || name.ends_with('/') {
-        return Err(anyhow::anyhow!(
-            "{} name cannot start or end with '/': '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    // Cannot have consecutive slashes
-    if name.contains("//") {
-        return Err(anyhow::anyhow!(
-            "{} name cannot contain consecutive slashes: '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    Ok(())
-}
 
 /// Validate that environment is ready for addition
 fn validate_preconditions(
@@ -82,17 +40,9 @@ fn validate_preconditions(
 ) -> Result<()> {
     context.log_verbose("Validating add preconditions...");
 
-    // Validate input name
+    // Use reusable validation functions (following SPEC principles)
     validate_name(env_name, "Environment")?;
-
-    // Check if environment already exists
-    let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.clone())
-    })?;
-
-    if config.environments.contains_key(env_name) {
-        return Err(anyhow::anyhow!("Environment '{}' already exists", env_name));
-    }
+    validate_environment_not_exists(context, env_name)?;
 
     context.log_verbose(&format!("✓ Add validation passed for '{}'", env_name));
     Ok(())
@@ -109,13 +59,8 @@ fn add_environment(
     // Use 'main' as default source branch if not specified
     let base_branch = source.as_deref().unwrap_or("main");
 
-    // Validate that the base branch exists
-    if !context.git().branch_exists_anywhere(base_branch)? {
-        return Err(anyhow::anyhow!(
-            "Base branch '{}' does not exist locally or remotely",
-            base_branch
-        ));
-    }
+    // Use reusable base branch validation
+    validate_base_branch_exists(context, base_branch)?;
 
     // Modify metadata to add the new environment
     crate::utils::prelude::modify_metadata(context, |config| {

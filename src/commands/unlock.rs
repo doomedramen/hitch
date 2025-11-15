@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::utils::validation::validate_name;
 use clap::Args;
 use anyhow::Result;
 
