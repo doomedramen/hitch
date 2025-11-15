@@ -29,7 +29,7 @@ fn test_cli_basic_functionality() -> Result<()> {
     let output = Command::new(&binary_path).args(&["--help"]).output()?;
     assert!(output.status.success(), "Help should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("A CLI tool for managing environment-specific git branches"));
+    assert!(stdout.contains("Hitch is a CLI tool that brings environment branch management to Git"));
     assert!(stdout.contains("Print detailed step-by-step logs"));
     assert!(stdout.contains("Skip automatic pushes"));
 

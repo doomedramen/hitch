@@ -1,5 +1,7 @@
 # Development Guide
 
+Hitch is a CLI tool that brings environment branch management to Git. It helps teams organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation.
+
 This document covers the development workflow, CI/CD setup, and release process for the Hitch CLI tool.
 
 ## 🛠️ Development Environment Setup

@@ -1,5 +1,7 @@
 # Hitch CLI Tool Specification
 
+Hitch is a Git branch management tool for environment-based deployments. It provides structured promotion workflows, environment locking, and rebuild automation for deployment branches (like `dev`, `qa`, `main`).
+
 ## Global Flags
 
 - `--verbose` – print detailed step-by-step logs for commands.

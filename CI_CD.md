@@ -1,6 +1,6 @@
 # CI/CD Pipeline Documentation
 
-This document explains the complete CI/CD pipeline for the Hitch CLI tool.
+Hitch is a Git branch management tool for environment-based deployments. This document explains the complete CI/CD pipeline for the Hitch CLI tool.
 
 ## 🔄 Workflow Overview
 

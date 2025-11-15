@@ -8,7 +8,8 @@ use commands::global_context::GlobalContext;
 
 #[derive(Parser)]
 #[command(name = "hitch")]
-#[command(about = "A CLI tool for managing environment-specific git branches and metadata")]
+#[command(about = "Git branch management for environment-based deployments")]
+#[command(long_about = "Hitch is a CLI tool that brings environment branch management to Git. It helps you organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation—turning chaotic branch-based releases into a structured, auditable process.")]
 #[command(version = "1.0.0")]
 #[command(author = "Martin Page")]
 struct Cli {
@@ -26,25 +27,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize hitch metadata in the current git repository
+    /// Initialize Hitch for environment branch management
     Init(commands::init::InitCommand),
-    /// Add a new environment to hitch configuration
+    /// Add a new environment (e.g., dev, qa, staging)
     Add(commands::add::AddCommand),
-    /// Remove an environment from hitch configuration
+    /// Remove an environment from configuration
     Remove(commands::remove::RemoveCommand),
-    /// Promote a branch to an environment for deployment
+    /// Promote a branch to an environment (deploy)
     Promote(commands::promote::PromoteCommand),
-    /// Demote a branch from an environment
+    /// Demote a branch from an environment (undeploy)
     Demote(commands::demote::DemoteCommand),
-    /// Rebuild an environment by merging its branches
+    /// Rebuild environment by merging promoted branches
     Rebuild(commands::rebuild::RebuildCommand),
-    /// Show the status of Hitch environments and branches
+    /// Show status of environments and promoted branches
     Status(commands::status::StatusCommand),
-    /// Lock an environment to prevent changes
+    /// Lock environment to prevent deployments
     Lock(commands::lock::LockCommand),
-    /// Unlock an environment to allow changes
+    /// Unlock environment to allow deployments
     Unlock(commands::unlock::UnlockCommand),
-    /// Guard against commits to environment branches (for pre-commit hooks)
+    /// Guard against direct commits to environment branches
     Guard(commands::guard::GuardCommand),
 }
 
