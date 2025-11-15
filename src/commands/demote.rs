@@ -1,4 +1,6 @@
 use crate::commands::global_context::GlobalContext;
+use crate::utils::command_helpers::{ensure_environment_exists, environment::get_locked_by_user};
+use crate::utils::validation::validate_name;
 use clap::Args;
 use anyhow::Result;
 
@@ -35,49 +37,6 @@ pub fn run(
     Ok(())
 }
 
-/// Validate that a name is valid for git branches/environments
-fn validate_name(name: &str, name_type: &str) -> Result<()> {
-    if name.is_empty() {
-        return Err(anyhow::anyhow!("{} name cannot be empty", name_type));
-    }
-
-    if name.len() > 100 {
-        return Err(anyhow::anyhow!("{} name cannot exceed 100 characters", name_type));
-    }
-
-    // Check for invalid characters that would cause issues in git
-    let invalid_chars = ["..", "@{", ":", "[", "]", "\\", "^", "~", "?", "*"];
-    for invalid in &invalid_chars {
-        if name.contains(invalid) {
-            return Err(anyhow::anyhow!(
-                "{} name cannot contain '{}': '{}'",
-                name_type,
-                invalid,
-                name
-            ));
-        }
-    }
-
-    // Cannot start or end with slash
-    if name.starts_with('/') || name.ends_with('/') {
-        return Err(anyhow::anyhow!(
-            "{} name cannot start or end with '/': '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    // Cannot have consecutive slashes
-    if name.contains("//") {
-        return Err(anyhow::anyhow!(
-            "{} name cannot contain consecutive slashes: '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    Ok(())
-}
 
 /// Validate that branch and environment are ready for demotion
 fn validate_preconditions(
@@ -92,14 +51,11 @@ fn validate_preconditions(
     validate_name(env_name, "Environment")?;
 
     // Check if environment exists
+    ensure_environment_exists(context, env_name)?;
+
     let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
         Ok(config.clone())
     })?;
-
-    if !config.environments.contains_key(env_name) {
-        return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
-    }
-
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -107,7 +63,7 @@ fn validate_preconditions(
         return Err(anyhow::anyhow!(
             "Environment '{}' is currently locked by '{}'",
             env_name,
-            environment.locked_by.as_ref().unwrap_or(&"unknown".to_string())
+            get_locked_by_user(context, env_name)?
         ));
     }
 

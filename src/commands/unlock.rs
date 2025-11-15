@@ -26,49 +26,6 @@ pub fn run(
     Ok(())
 }
 
-/// Validate that a name is valid for git branches/environments
-fn validate_name(name: &str, name_type: &str) -> Result<()> {
-    if name.is_empty() {
-        return Err(anyhow::anyhow!("{} name cannot be empty", name_type));
-    }
-
-    if name.len() > 100 {
-        return Err(anyhow::anyhow!("{} name cannot exceed 100 characters", name_type));
-    }
-
-    // Check for invalid characters that would cause issues in git
-    let invalid_chars = ["..", "@{", ":", "[", "]", "\\", "^", "~", "?", "*"];
-    for invalid in &invalid_chars {
-        if name.contains(invalid) {
-            return Err(anyhow::anyhow!(
-                "{} name cannot contain '{}': '{}'",
-                name_type,
-                invalid,
-                name
-            ));
-        }
-    }
-
-    // Cannot start or end with slash
-    if name.starts_with('/') || name.ends_with('/') {
-        return Err(anyhow::anyhow!(
-            "{} name cannot start or end with '/': '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    // Cannot have consecutive slashes
-    if name.contains("//") {
-        return Err(anyhow::anyhow!(
-            "{} name cannot contain consecutive slashes: '{}'",
-            name_type,
-            name
-        ));
-    }
-
-    Ok(())
-}
 
 /// Validate that environment exists and is ready for unlocking
 fn validate_preconditions(
