@@ -72,6 +72,19 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Install OpenSSL (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+          echo "OPENSSL_DIR=/usr/local/opt/openssl" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=/usr/local/opt/openssl/lib" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl/include" >> $GITHUB_ENV
+        elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+          echo "OPENSSL_DIR=/opt/homebrew/opt/openssl" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=/opt/homebrew/opt/openssl/lib" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/opt/homebrew/opt/openssl/include" >> $GITHUB_ENV
+        fi
+
     - name: Cache dependencies
       uses: actions/cache@v3
       with:

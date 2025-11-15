@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::environment::get_locked_by_user;
+use crate::utils::command_helpers::{environment::get_locked_by_user, ensure_environment_exists, logging::validation_success, validate_branch_for_promotion};
 use crate::utils::validation::validate_name;
 use clap::Args;
 use anyhow::Result;
@@ -51,14 +51,11 @@ fn validate_preconditions(
     validate_name(env_name, "Environment")?;
 
     // Check if environment exists
+    ensure_environment_exists(context, env_name)?;
+
     let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
         Ok(config.clone())
     })?;
-
-    if !config.environments.contains_key(env_name) {
-        return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
-    }
-
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -78,12 +75,10 @@ fn validate_preconditions(
         ));
     }
 
-    // Check if branch exists (locally or remotely)
-    if !context.git().branch_exists_anywhere(branch)? {
-        return Err(anyhow::anyhow!("Branch '{}' does not exist", branch));
-    }
+    // Check if branch exists and is valid for promotion
+    validate_branch_for_promotion(context, branch)?;
 
-    context.log_verbose(&format!("✓ Promotion validation passed for '{}' to '{}'", branch, env_name));
+    validation_success(context, &format!("'{}' to '{}'", branch, env_name), "Promotion validation");
     Ok(())
 }
 

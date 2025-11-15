@@ -1,5 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::validation::validate_name;
+use crate::utils::command_helpers::logging::validation_success;
+use crate::utils::validation::{validate_name, validate_environment_exists};
 use clap::Args;
 use anyhow::Result;
 
@@ -38,14 +39,11 @@ fn validate_preconditions(
     validate_name(env_name, "Environment")?;
 
     // Check if environment exists
+    validate_environment_exists(context, env_name)?;
+
     let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
         Ok(config.clone())
     })?;
-
-    if !config.environments.contains_key(env_name) {
-        return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
-    }
-
     let environment = &config.environments[env_name];
 
     // Check if environment is locked
@@ -67,7 +65,7 @@ fn validate_preconditions(
         }
     }
 
-    context.log_verbose(&format!("✓ Unlock validation passed for '{}'", env_name));
+    validation_success(context, env_name, "Unlock validation");
     Ok(())
 }
 

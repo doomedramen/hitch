@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::process::Command;
 use tempfile::tempdir;
+use hitch::types::HitchConfig;
 
 /// Simple test environment setup helper
 struct TestEnv {

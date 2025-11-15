@@ -371,7 +371,7 @@ fn test_status_verbose_output() -> Result<()> {
         .output()?;
 
     let stdout = String::from_utf8(output.stdout.clone())?;
-    let stderr = String::from_utf8(output.stderr.clone())?;
+    let _stderr = String::from_utf8(output.stderr.clone())?;
 
     assert!(output.status.success(), "status command should succeed");
 

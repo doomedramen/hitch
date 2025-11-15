@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::{ensure_environment_exists, environment::get_locked_by_user};
+use crate::utils::command_helpers::{environment::get_locked_by_user, logging::validation_success};
 use crate::utils::validation::validate_name;
 use clap::Args;
 use anyhow::Result;
@@ -47,7 +47,7 @@ fn validate_preconditions(
     validate_name(env_name, "Environment")?;
 
     // Check if environment exists
-    ensure_environment_exists(context, env_name)?;
+    crate::utils::command_helpers::ensure_environment_exists(context, env_name)?;
 
     let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
         Ok(config.clone())
@@ -73,7 +73,7 @@ fn validate_preconditions(
         ));
     }
 
-    context.log_verbose(&format!("✓ Remove validation passed for '{}'", env_name));
+    validation_success(context, env_name, "Remove validation");
     Ok(())
 }
 

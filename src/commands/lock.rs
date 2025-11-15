@@ -1,6 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::environment::get_locked_by_user;
-use crate::utils::validation::validate_name;
+use crate::utils::command_helpers::{environment::get_locked_by_user, logging::{validation_start, validation_success, operation_info, operation_success}};
+use crate::utils::validation::{validate_name, validate_environment_exists};
 use clap::Args;
 use anyhow::Result;
 
@@ -15,7 +15,7 @@ pub fn run(
     args: LockCommand,
     context: &GlobalContext,
 ) -> Result<()> {
-    context.log_info(&format!("Locking environment '{}'...", args.env_name));
+    operation_info(context, "Locking", &args.env_name);
 
     // Step 1: Precondition checks
     validate_preconditions(context, &args.env_name)?;
@@ -23,7 +23,7 @@ pub fn run(
     // Step 2: Lock the environment
     crate::utils::prelude::lock_environment(context, &args.env_name)?;
 
-    context.log_success(&format!("Successfully locked environment '{}'!", args.env_name));
+    operation_success(context, "locked", &args.env_name);
     Ok(())
 }
 
@@ -33,20 +33,17 @@ fn validate_preconditions(
     context: &GlobalContext,
     env_name: &str,
 ) -> Result<()> {
-    context.log_verbose("Validating lock preconditions...");
+    validation_start(context, "lock");
 
     // Validate input name
     validate_name(env_name, "Environment")?;
 
     // Check if environment exists
+    validate_environment_exists(context, env_name)?;
+
     let config = crate::utils::prelude::access_metadata_read_only(context, |config| {
         Ok(config.clone())
     })?;
-
-    if !config.environments.contains_key(env_name) {
-        return Err(anyhow::anyhow!("Environment '{}' does not exist", env_name));
-    }
-
     let environment = &config.environments[env_name];
 
     // Check if environment is already locked
@@ -58,7 +55,7 @@ fn validate_preconditions(
         ));
     }
 
-    context.log_verbose(&format!("✓ Lock validation passed for '{}'", env_name));
+    validation_success(context, env_name, "Lock validation");
     Ok(())
 }
 
