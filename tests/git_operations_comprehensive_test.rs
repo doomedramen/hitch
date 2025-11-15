@@ -332,9 +332,11 @@ fn test_git_operations_error_handling() -> Result<()> {
     with_test_env(SetupLevel::Basic, |test_env| {
         let test_path = test_env.path();
 
-        // Test operations in non-git directory (use a temp directory without git)
-        let temp_dir = tempfile::tempdir()?;
-        let result = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap());
+        // Test operations in non-git directory - create a temp directory without git
+        use std::fs;
+        let non_git_dir = test_env.path().join("non_git_temp");
+        fs::create_dir_all(&non_git_dir)?;
+        let result = hitch::utils::git_operations::GitOperations::new_at_path(non_git_dir.to_str().unwrap());
         assert!(result.is_err(), "Should fail to create GitOperations in non-git directory");
 
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;

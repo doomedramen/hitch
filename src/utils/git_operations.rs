@@ -21,7 +21,8 @@ impl GitOperations {
 
     #[allow(dead_code)]
     pub fn new_at_path(path: &str) -> Result<Self> {
-        let repo = Repository::discover(path).context("Not in a git repository")?;
+        // Open the repository at the exact path to avoid discovering parent repositories
+        let repo = Repository::open(path).context("Not in a git repository")?;
         let repo_path = repo.workdir()
             .ok_or_else(|| anyhow::anyhow!("Repository has no working directory"))?
             .to_string_lossy()
