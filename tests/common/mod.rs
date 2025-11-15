@@ -10,31 +10,42 @@ use git2::{Repository, Signature};
 /// Test environment with complete git2-based isolation
 pub struct TestEnv {
     temp_dir: TempDir,
-    original_dir: std::path::PathBuf,
-    _repo: Repository, // Used for drop behavior but not directly accessed
+    pub(crate) original_dir: std::path::PathBuf,
+    _repo: Option<Repository>, // Used for drop behavior but not directly accessed
 }
 
 impl TestEnv {
     /// Create a new isolated test environment with git2 repository
     pub fn new() -> Result<Self> {
-        // Create unique temp directory with thread ID and timestamp
+        Self::new_with_git(true)
+    }
+
+    /// Create a new isolated test environment, optionally with git repository
+    pub fn new_with_git(with_git: bool) -> Result<Self> {
+        // Create unique temp directory with thread ID, timestamp, and random component
         use std::time::{SystemTime, UNIX_EPOCH};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
-            .as_millis();
+            .as_micros(); // Use microseconds for better uniqueness
 
+        let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
         let thread_id = std::thread::current().id();
         let thread_str = format!("{:?}", thread_id);
         let temp_dir = tempfile::Builder::new()
-            .prefix(&format!("hitch_test_{}_{}", timestamp, thread_str))
+            .prefix(&format!("hitch_test_{}_{}_{}", timestamp, counter, thread_str))
             .tempdir()?;
 
         let original_dir = std::env::current_dir()?;
 
-        
-        // Create git repository using git2
-        let repo = Self::setup_git_repository(temp_dir.path())?;
+        let repo = if with_git {
+            Some(Self::setup_git_repository(temp_dir.path())?)
+        } else {
+            None
+        };
 
         Ok(TestEnv {
             temp_dir,
@@ -137,5 +148,88 @@ impl Drop for TestEnv {
 
         // TempDir automatically cleans up when it goes out of scope
     }
+}
+
+/// Setup level for test environments
+#[derive(Debug, Clone, Copy)]
+pub enum SetupLevel {
+    /// Basic - minimal setup (alias for GitOnly)
+    Basic,
+    /// Git only - basic git repository setup
+    GitOnly,
+    /// Complete setup - git repository + hitch initialized
+    Complete,
+}
+
+/// Run a test with a managed test environment
+/// This function handles the creation and cleanup of the test environment
+/// and ensures proper setup based on the specified level
+pub fn with_test_env<F>(level: SetupLevel, test_fn: F) -> Result<()>
+where
+    F: FnOnce(&TestEnv) -> Result<()>,
+{
+    let original_dir = std::env::current_dir()?;
+
+    let test_env = match level {
+        SetupLevel::Basic => TestEnv::new_with_git(false)?,
+        SetupLevel::GitOnly | SetupLevel::Complete => TestEnv::new_with_git(true)?,
+    };
+
+    // Ensure we're in the test directory before running any setup
+    std::env::set_current_dir(test_env.path())?;
+
+    // Setup based on level
+    let setup_result = match level {
+        SetupLevel::Basic => {
+            // No setup needed - just a plain temp directory
+            Ok(())
+        }
+        SetupLevel::GitOnly => {
+            // Basic git setup is already done in TestEnv::new()
+            // Just need to ensure git config is set for hitch operations
+            Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
+            Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
+            Command::new("git").args(&["config", "core.autocrlf", "false"]).output()?;
+            Command::new("git").args(&["config", "core.filemode", "false"]).output()?;
+
+            // Ensure working tree is clean (git2 setup might leave uncommitted changes)
+            let output = Command::new("git").args(&["status", "--porcelain"]).output()?;
+            let status_output = String::from_utf8_lossy(&output.stdout);
+            if !status_output.trim().is_empty() {
+                // Add all changes including deleted files
+                let add_output = Command::new("git").args(&["add", "-A"]).output()?;
+                if !add_output.status.success() {
+                    return Err(anyhow::anyhow!("Failed to add files: {}", String::from_utf8_lossy(&add_output.stderr)));
+                }
+                let commit_output = Command::new("git").args(&["commit", "-m", "Clean up initial setup"]).output()?;
+                if !commit_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&commit_output.stderr);
+                    let stdout = String::from_utf8_lossy(&commit_output.stdout);
+                    // Don't treat "nothing to commit" as an error
+                    if !(stderr.contains("nothing to commit") || stdout.contains("nothing to commit")) {
+                        return Err(anyhow::anyhow!("Failed to commit: stderr={}, stdout={}", stderr, stdout));
+                    }
+                }
+            }
+            Ok(())
+        }
+        SetupLevel::Complete => {
+            test_env.setup_complete_hitch_env()
+        }
+    };
+
+    // If setup failed, return to original directory and return error
+    if let Err(e) = setup_result {
+        let _ = std::env::set_current_dir(&original_dir);
+        return Err(e);
+    }
+
+    // Run the test function
+    let test_result = test_fn(&test_env);
+
+    // Always return to original directory
+    let _ = std::env::set_current_dir(&original_dir);
+
+    test_result
 }
 

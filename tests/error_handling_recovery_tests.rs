@@ -1,54 +1,27 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use tempfile::tempdir;
 use std::path::Path;
 
-/// Simple test environment setup helper
-struct TestEnv {
-    dir: tempfile::TempDir,
-    original_dir: std::path::PathBuf,
+// Import the proper test framework
+mod common;
+use common::{SetupLevel, with_test_env, TestEnv};
+
+/// Helper extension trait for TestEnv to provide custom methods needed by these tests
+trait TestEnvExt {
+    fn run_hitch_init(&self) -> Result<()>;
+    fn create_environment_config(&self, env_name: &str, base_branch: &str, branches: &[&str]) -> Result<()>;
+    fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()>;
+    fn get_current_branch(&self) -> Result<String>;
+    fn branch_exists(&self, branch: &str) -> Result<bool>;
+    fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output>;
 }
 
-impl TestEnv {
-    fn new() -> Result<Self> {
-        let temp_dir = tempdir()?;
-        let original_dir = std::env::current_dir()?;
-
-        std::env::set_current_dir(temp_dir.path())?;
-
-        Ok(TestEnv {
-            dir: temp_dir,
-            original_dir,
-        })
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-
-    fn init_git_repo(&self) -> Result<()> {
-        Command::new("git").args(&["init"]).output()?;
-        Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-        Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-        // Create initial commit
-        fs::write("README.md", "# Test Repository")?;
-        Command::new("git").args(&["add", "README.md"]).output()?;
-        Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
-
-        Ok(())
-    }
-
+impl TestEnvExt for TestEnv {
     fn run_hitch_init(&self) -> Result<()> {
-        // Find the hitch binary in target/debug
-        let binary_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("debug")
-            .join("hitch");
-
-        let output = Command::new(&binary_path)
+        let output = Command::new(&self.hitch_binary())
             .args(&["init"])
+            .current_dir(self.path())
             .output()?;
 
         if !output.status.success() {
@@ -82,27 +55,52 @@ impl TestEnv {
         });
 
         // Write to hitch-metadata branch
-        Command::new("git").args(&["checkout", "--orphan", "hitch-metadata"]).output()?;
-        fs::write("hitch.json", serde_json::to_string_pretty(&config)?)?;
-        Command::new("git").args(&["add", "hitch.json"]).output()?;
-        Command::new("git").args(&["commit", "-m", "Initialize hitch configuration"]).output()?;
-        Command::new("git").args(&["checkout", "main"]).output()?;
+        Command::new("git")
+            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .current_dir(self.path())
+            .output()?;
+        fs::write(self.path().join("hitch.json"), serde_json::to_string_pretty(&config)?)?;
+        Command::new("git")
+            .args(&["add", "hitch.json"])
+            .current_dir(self.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Initialize hitch configuration"])
+            .current_dir(self.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(self.path())
+            .output()?;
 
         Ok(())
     }
 
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
-        Command::new("git").args(&["checkout", "-b", branch_name]).output()?;
-        fs::write("test.txt", message)?;
-        Command::new("git").args(&["add", "test.txt"]).output()?;
-        Command::new("git").args(&["commit", "-m", message]).output()?;
-        Command::new("git").args(&["checkout", "main"]).output()?;
+        Command::new("git")
+            .args(&["checkout", "-b", branch_name])
+            .current_dir(self.path())
+            .output()?;
+        fs::write(self.path().join("test.txt"), message)?;
+        Command::new("git")
+            .args(&["add", "test.txt"])
+            .current_dir(self.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", message])
+            .current_dir(self.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(self.path())
+            .output()?;
         Ok(())
     }
 
     fn get_current_branch(&self) -> Result<String> {
         let output = Command::new("git")
             .args(&["branch", "--show-current"])
+            .current_dir(self.path())
             .output()?;
 
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -111,225 +109,191 @@ impl TestEnv {
     fn branch_exists(&self, branch: &str) -> Result<bool> {
         let output = Command::new("git")
             .args(&["branch", "--list", branch])
+            .current_dir(self.path())
             .output()?;
 
         Ok(output.status.success() && !output.stdout.is_empty())
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        // Find the hitch binary in target/debug
-        let binary_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("debug")
-            .join("hitch");
-
-        let output = Command::new(&binary_path)
+        let output = Command::new(&self.hitch_binary())
             .args(args)
+            .current_dir(self.path())
             .output()?;
 
         Ok(output)
     }
 }
 
-impl Drop for TestEnv {
-    fn drop(&mut self) {
-        // Return to original directory
-        let _ = std::env::set_current_dir(&self.original_dir);
-
-        // Clean up any git lock files that might remain
-        if let Ok(git_dir) = self.dir.path().join(".git").read_dir() {
-            for entry in git_dir.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".lock") {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Test actual git hook interference by setting up a pre-commit hook that fails
 #[test]
 fn test_rebuild_with_actual_git_hooks() -> Result<()> {
-    let test_env = TestEnv::new()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Set up environments with promoted branches
+        test_env.create_environment_config("dev", "main", &["feature/test"])?;
+        test_env.create_branch_and_commit("feature/test", "Add test feature")?;
 
-    // Initialize repo and hitch
-    test_env.init_git_repo()?;
-    test_env.run_hitch_init()?;
+        // Create a failing pre-commit hook
+        let hooks_dir = test_env.path().join(".git").join("hooks");
+        fs::create_dir_all(&hooks_dir)?;
 
-    // Set up environments with promoted branches
-    test_env.create_environment_config("dev", "main", &["feature/test"])?;
-    test_env.create_branch_and_commit("feature/test", "Add test feature")?;
+        let pre_commit_hook = hooks_dir.join("pre-commit");
+        fs::write(&pre_commit_hook, "#!/bin/sh\necho 'Simulated hook failure'\nexit 1")?;
 
-    // Create a failing pre-commit hook
-    let hooks_dir = test_env.path().join(".git").join("hooks");
-    fs::create_dir_all(&hooks_dir)?;
+        // Make the hook executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&pre_commit_hook)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&pre_commit_hook, perms)?;
+        }
 
-    let pre_commit_hook = hooks_dir.join("pre-commit");
-    fs::write(&pre_commit_hook, "#!/bin/sh\necho 'Simulated hook failure'\nexit 1")?;
+        // Verify the hook exists and will fail
+        let output = Command::new("git")
+            .args(&["commit", "--allow-empty", "-m", "test hook"])
+            .current_dir(test_env.path())
+            .output()?;
 
-    // Make the hook executable
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&pre_commit_hook)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&pre_commit_hook, perms)?;
-    }
+        if output.status.success() {
+            println!("WARNING: Git hook didn't execute as expected");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            println!("Git hook working as expected: {}", stderr);
+        }
 
-    // Verify the hook exists and will fail
-    let output = Command::new("git")
-        .args(&["commit", "--allow-empty", "-m", "test hook"])
-        .current_dir(test_env.path())
-        .output()?;
+        // Now attempt rebuild - this should bypass hooks with --no-verify
+        let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
 
-    if output.status.success() {
-        println!("WARNING: Git hook didn't execute as expected");
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("Git hook working as expected: {}", stderr);
-    }
+        // Print output for debugging
+        println!("=== Rebuild Output ===");
+        println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        println!("Exit code: {}", output.status);
+        println!("=== End Output ===");
 
-    // Now attempt rebuild - this should bypass hooks with --no-verify
-    let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
+        // The rebuild should succeed despite the failing hook
+        assert!(output.status.success(), "Rebuild should succeed even with failing git hooks");
 
-    // Print output for debugging
-    println!("=== Rebuild Output ===");
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    println!("Exit code: {}", output.status);
-    println!("=== End Output ===");
+        // Verify we're back on the original branch
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
 
-    // The rebuild should succeed despite the failing hook
-    assert!(output.status.success(), "Rebuild should succeed even with failing git hooks");
+        // Verify the environment was actually rebuilt (dev branch should be updated)
+        let dev_exists = test_env.branch_exists("dev")?;
+        assert!(dev_exists, "Dev branch should exist after rebuild");
 
-    // Verify we're back on the original branch
-    let current_branch = test_env.get_current_branch()?;
-    assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
-
-    // Verify the environment was actually rebuilt (dev branch should be updated)
-    let dev_exists = test_env.branch_exists("dev")?;
-    assert!(dev_exists, "Dev branch should exist after rebuild");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Test rebuild when there are no changes to commit (branches already up to date)
 #[test]
 fn test_rebuild_nothing_to_commit() -> Result<()> {
-    let test_env = TestEnv::new()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Set up environment with promoted branches that are already up to date
+        // Don't create any commits on the feature branch - it will be identical to main
+        test_env.create_environment_config("dev", "main", &["feature/same-as-main"])?;
 
-    // Initialize repo and hitch
-    test_env.init_git_repo()?;
-    test_env.run_hitch_init()?;
+        // Create feature branch but don't add any commits to it
+        Command::new("git")
+            .args(&["checkout", "-b", "feature/same-as-main"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
 
-    // Set up environment with promoted branches that are already up to date
-    // Don't create any commits on the feature branch - it will be identical to main
-    test_env.create_environment_config("dev", "main", &["feature/same-as-main"])?;
+        // Now attempt rebuild - should handle "nothing to commit" gracefully
+        let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
 
-    // Create feature branch but don't add any commits to it
-    Command::new("git")
-        .args(&["checkout", "-b", "feature/same-as-main"])
-        .current_dir(test_env.path())
-        .output()?;
-    Command::new("git")
-        .args(&["checkout", "main"])
-        .current_dir(test_env.path())
-        .output()?;
+        // Print output for debugging
+        println!("=== Rebuild Output (No Changes) ===");
+        println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        println!("Exit code: {}", output.status);
+        println!("=== End Output ===");
 
-    // Now attempt rebuild - should handle "nothing to commit" gracefully
-    let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
+        // The rebuild should succeed even when there's nothing to commit
+        assert!(output.status.success(), "Rebuild should succeed when there's nothing to commit");
 
-    // Print output for debugging
-    println!("=== Rebuild Output (No Changes) ===");
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    println!("Exit code: {}", output.status);
-    println!("=== End Output ===");
+        // Verify we're back on the original branch
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
 
-    // The rebuild should succeed even when there's nothing to commit
-    assert!(output.status.success(), "Rebuild should succeed when there's nothing to commit");
+        // Verify the environment branch exists
+        let dev_exists = test_env.branch_exists("dev")?;
+        assert!(dev_exists, "Dev branch should exist after rebuild");
 
-    // Verify we're back on the original branch
-    let current_branch = test_env.get_current_branch()?;
-    assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
-
-    // Verify the environment branch exists
-    let dev_exists = test_env.branch_exists("dev")?;
-    assert!(dev_exists, "Dev branch should exist after rebuild");
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Test rebuild cleanup behavior and verify that temp/backup branches are properly cleaned up
 #[test]
 fn test_rebuild_cleanup_verification() -> Result<()> {
-    let test_env = TestEnv::new()?;
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Set up environment with promoted branches
+        test_env.create_environment_config("dev", "main", &["feature/test"])?;
+        test_env.create_branch_and_commit("feature/test", "Add test feature")?;
 
-    // Initialize repo and hitch
-    test_env.init_git_repo()?;
-    test_env.run_hitch_init()?;
+        // Get list of branches before rebuild
+        let branches_before = Command::new("git")
+            .args(&["branch", "-a"])
+            .current_dir(test_env.path())
+            .output()?;
+        let branches_before_str = String::from_utf8_lossy(&branches_before.stdout);
+        println!("Branches before rebuild:\n{}", branches_before_str);
 
-    // Set up environment with promoted branches
-    test_env.create_environment_config("dev", "main", &["feature/test"])?;
-    test_env.create_branch_and_commit("feature/test", "Add test feature")?;
+        // Run rebuild
+        let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
 
-    // Get list of branches before rebuild
-    let branches_before = std::process::Command::new("git")
-        .args(&["branch", "-a"])
-        .current_dir(test_env.path())
-        .output()?;
-    let branches_before_str = String::from_utf8_lossy(&branches_before.stdout);
-    println!("Branches before rebuild:\n{}", branches_before_str);
+        // Print output for debugging
+        println!("=== Rebuild Output ===");
+        println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+        println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+        println!("Exit code: {}", output.status);
+        println!("=== End Output ===");
 
-    // Run rebuild
-    let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
+        // The rebuild should succeed
+        assert!(output.status.success(), "Rebuild should succeed");
 
-    // Print output for debugging
-    println!("=== Rebuild Output ===");
-    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    println!("Exit code: {}", output.status);
-    println!("=== End Output ===");
+        // Get list of branches after rebuild
+        let branches_after = Command::new("git")
+            .args(&["branch", "-a"])
+            .current_dir(test_env.path())
+            .output()?;
+        let branches_after_str = String::from_utf8_lossy(&branches_after.stdout);
+        println!("Branches after rebuild:\n{}", branches_after_str);
 
-    // The rebuild should succeed
-    assert!(output.status.success(), "Rebuild should succeed");
+        // Verify we're back on the original branch
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
 
-    // Get list of branches after rebuild
-    let branches_after = std::process::Command::new("git")
-        .args(&["branch", "-a"])
-        .current_dir(test_env.path())
-        .output()?;
-    let branches_after_str = String::from_utf8_lossy(&branches_after.stdout);
-    println!("Branches after rebuild:\n{}", branches_after_str);
-
-    // Verify we're back on the original branch
-    let current_branch = test_env.get_current_branch()?;
-    assert_eq!(current_branch, "main", "Should be back on main branch after rebuild");
-
-    // Verify no temp or backup branches remain
-    let branch_lines: Vec<&str> = branches_after_str.lines().collect();
-    for line in branch_lines {
-        let clean_line = line.trim().replace("* ", "").replace("  ", "");
-        if clean_line.starts_with("hitch-tmp-") || clean_line.starts_with("hitch-backup-") {
-            panic!("Found leftover temporary branch after rebuild: {}", clean_line);
+        // Verify no temp or backup branches remain
+        let branch_lines: Vec<&str> = branches_after_str.lines().collect();
+        for line in branch_lines {
+            let clean_line = line.trim().replace("* ", "").replace("  ", "");
+            if clean_line.starts_with("hitch-tmp-") || clean_line.starts_with("hitch-backup-") {
+                panic!("Found leftover temporary branch after rebuild: {}", clean_line);
+            }
         }
-    }
 
-    // Verify the environment branch exists
-    let dev_exists = test_env.branch_exists("dev")?;
-    assert!(dev_exists, "Dev branch should exist after rebuild");
+        // Verify the environment branch exists
+        let dev_exists = test_env.branch_exists("dev")?;
+        assert!(dev_exists, "Dev branch should exist after rebuild");
 
-    // Verify no cleanup warnings in output
-    let stderr_str = String::from_utf8_lossy(&output.stderr);
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let combined_output = format!("{}{}", stderr_str, stdout_str);
+        // Verify no cleanup warnings in output
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        let combined_output = format!("{}{}", stderr_str, stdout_str);
 
-    if combined_output.contains("Failed to delete backup branch") ||
-       combined_output.contains("Failed to delete temp branch") {
-        panic!("Rebuild output contains cleanup failure warnings, which indicates cleanup problems");
-    }
+        if combined_output.contains("Failed to delete backup branch") ||
+           combined_output.contains("Failed to delete temp branch") {
+            panic!("Rebuild output contains cleanup failure warnings, which indicates cleanup problems");
+        }
 
-    Ok(())
+        Ok(())
+    })
 }
