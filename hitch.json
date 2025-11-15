@@ -3,9 +3,9 @@
     "dev": {
       "base": "main",
       "branches": [],
-      "locked": true,
-      "lockedAt": "2024-01-01T00:00:00Z",
-      "lockedBy": "test@example.com",
+      "locked": false,
+      "lockedAt": null,
+      "lockedBy": null,
       "rebuiltAt": null
     }
   },
