@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use colored::*;
 
 mod commands;
 mod types;
@@ -60,15 +59,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Execute the appropriate command
     match cli.command {
-        Commands::Init(args) => commands::init::run(args, &context),
-        Commands::Add(args) => commands::add::run(args, &context),
-        Commands::Remove(args) => commands::remove::run(args, &context),
-        Commands::Promote(args) => commands::promote::run(args, &context),
-        Commands::Demote(args) => commands::demote::run(args, &context),
-        Commands::Rebuild(args) => commands::rebuild::run(args, &context),
-        Commands::Status(args) => commands::status::run(args, &context),
-        Commands::Lock(args) => commands::lock::run(args, &context),
-        Commands::Unlock(args) => commands::unlock::run(args, &context),
-        Commands::Guard(args) => commands::guard::run(args, &context),
+        Commands::Init(args) => commands::init::run(args, &context).map_err(|e| e.into()),
+        Commands::Add(args) => commands::add::run(args, &context).map_err(|e| e.into()),
+        Commands::Remove(args) => commands::remove::run(args, &context).map_err(|e| e.into()),
+        Commands::Promote(args) => commands::promote::run(args, &context).map_err(|e| e.into()),
+        Commands::Demote(args) => commands::demote::run(args, &context).map_err(|e| e.into()),
+        Commands::Rebuild(args) => commands::rebuild::run(args, &context).map_err(|e| e.into()),
+        Commands::Status(args) => commands::status::run(args, &context).map_err(|e| e.into()),
+        Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
+        Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
+        Commands::Guard(args) => commands::guard::run(args, &context).map_err(|e| e.into()),
     }
 }

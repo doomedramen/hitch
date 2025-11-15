@@ -126,13 +126,14 @@ fn test_status_basic_display() -> Result<()> {
     assert!(output.status.success(), "status command should succeed");
 
     // Verify basic status display elements (using cleaned text without ANSI codes)
-    assert!(clean_output.contains("Environments (2 total):"));
-    assert!(clean_output.contains("┌─ dev (main)"));
-    assert!(clean_output.contains("┌─ staging (main)"));
+    assert!(clean_output.contains("🚀 Hitch Environment Status"));
+    assert!(clean_output.contains("2 environments: 2 total"));
+    assert!(clean_output.contains("┌─ dev"));
+    assert!(clean_output.contains("┌─ staging"));
     assert!(clean_output.contains("• No branches promoted"));
     assert!(clean_output.contains("feature/test"));
     assert!(clean_output.contains("• Never"));
-    assert!(clean_output.contains("• 2025-01-14 10:00 UTC"));
+    assert!(clean_output.contains("2025-01-14 10:00 UTC"));
 
     Ok(())
 }
@@ -226,9 +227,10 @@ fn test_status_locked_environment() -> Result<()> {
     let clean_output = format!("{}{}", clean_stdout, stderr);
 
     // Verify locked environment display
-    assert!(clean_output.contains("Environments (1 total):"));
-    assert!(clean_output.contains("┌─ prod (main)"));
-    assert!(clean_output.contains("Locked by admin@example.com"));
+    assert!(clean_output.contains("🚀 Hitch Environment Status"));
+    assert!(clean_output.contains("1 environments: 1 total"));
+    assert!(clean_output.contains("┌─ prod"));
+    assert!(clean_output.contains("🔒 Locked by admin@example.com"));
     assert!(clean_output.contains("feature/login"));
     assert!(clean_output.contains("feature/ui"));
     assert!(clean_output.contains("• Never"));
@@ -654,10 +656,10 @@ fn test_status_environmental_sorting() -> Result<()> {
     let mut env_order = Vec::new();
 
     for line in lines {
-        if line.contains(" (main)") {
-            // Extract just the environment name (remove box characters and spaces)
-            let env_line = line.split(" (main)").next().unwrap().trim();
-            let env_name = env_line.replace("┌─ ", "");
+        if line.contains("base: main") {
+            // Extract just the environment name (remove box characters, spaces, and lock emoji)
+            let env_line = line.split(" base: main").next().unwrap().trim();
+            let env_name = env_line.replace("┌─ ", "").replace(" 🔓", "").replace(" 🔒", "");
             env_order.push(env_name);
         }
     }

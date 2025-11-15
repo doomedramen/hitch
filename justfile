@@ -4,14 +4,16 @@
 # Default recipe
 default:
     @echo "Available commands:"
-    @echo "  build     - Build the project in release mode"
-    @echo "  format    - Format the code"
-    @echo "  lint      - Run linters"
-    @echo "  install   - Install the binary locally"
-    @echo "  test      - Run all tests"
-    @echo "  clean     - Clean build artifacts"
-    @echo "  dev       - Build in debug mode"
-    @echo "  run       - Run the hitch binary in debug mode"
+    @echo "  build         - Build the project in release mode"
+    @echo "  format        - Format the code"
+    @echo "  lint          - Run linters"
+    @echo "  install       - Install the binary locally"
+    @echo "  test          - Run all tests"
+    @echo "  clean         - Clean build artifacts"
+    @echo "  dev           - Build in debug mode"
+    @echo "  run           - Run the hitch binary in debug mode"
+    @echo "  release       - Complete release process (bump version → test → build → tag → push → trigger CI/CD)"
+    @echo "  release-tag   - Create and push release tag for current version"
 
 # Build the project in release mode
 build:
@@ -133,10 +135,58 @@ docs-serve: docs
         python3 -m http.server 8000 --directory target/doc || \
         (echo "❌ python3 not found for serving docs" && exit 1)
 
-# Create a release (build, test, lint, format)
-release: format lint test build
-    @echo "🎉 Hitch release ready!"
-    @echo "Binary available at: ./target/release/hitch"
+# Create a new release (bump version, test, build, and push tag)
+release: format lint test
+    @echo "🚀 Creating new release with automatic version bump..."
+    # Get current version from Cargo.toml
+    @current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
+    @echo "Current version: v${current_version}"
+    # Extract version components
+    @major=$(echo ${current_version} | cut -d. -f1)
+    @minor=$(echo ${current_version} | cut -d. -f2)
+    @patch=$(echo ${current_version} | cut -d. -f3)
+    # Increment patch version
+    @new_patch=$((patch + 1))
+    @new_version="${major}.${minor}.${new_patch}"
+    @echo "New version: v${new_version}"
+    # Update version in Cargo.toml
+    @sed -i '' 's/^version = "${current_version}"/version = "${new_version}"/' Cargo.toml
+    # Build release
+    @echo "🔨 Building release v${new_version}..."
+    cargo build --release
+    # Commit the version bump
+    @git add Cargo.toml
+    @git commit -m "chore: bump version to v${new_version}"
+    # Create and push the tag to trigger release workflow
+    @git tag "v${new_version}"
+    @echo "🚀 Pushing tag to trigger release workflow..."
+    @git push origin "v${new_version}"
+    @echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
+    @echo "📦 Binary available at: ./target/release/hitch"
+
+# Create and push a new release tag (for current version without bumping)
+release-tag:
+    @echo "🏷️ Creating and pushing release tag..."
+    # Get current version from Cargo.toml
+    @current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
+    @echo "Current version: v${current_version}"
+    # Check if tag already exists
+    @if git rev-parse "v${current_version}" >/dev/null 2>&1; then \
+        echo "❌ Tag v${current_version} already exists!"; \
+        echo "💡 Run 'just release' to create a new version"; \
+        exit 1; \
+    fi
+    # Commit any changes first
+    @if [ -n "$(git status --porcelain)" ]; then \
+        echo "📝 Committing changes..."; \
+        git add .; \
+        git commit -m "chore: prepare for v${current_version} release"; \
+    fi
+    # Create and push the tag
+    @git tag "v${current_version}"
+    @echo "✅ Created tag v${current_version}"
+    @git push origin "v${current_version}"
+    @echo "🚀 Release triggered! Check GitHub Actions for progress."
 
 # Show project information
 info:

@@ -1,0 +1,81 @@
+# Configuration for cargo-dist
+# This file defines how releases are built and distributed
+
+[workspace]
+members = ["hitch"]
+
+# Define the release plan
+[workspace.metadata.dist]
+# The preferred cargo-dist version to use in CI
+cargo-dist-version = "0.13.3"
+
+# The preferred Rust toolchain to use in CI
+rust-toolchain-version = "1.70.0"
+
+# CI backends to support
+ci = ["github"]
+
+# Target platforms to build apps for
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin"
+]
+
+# Archive formats
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+
+# Installation path
+install-path = "CARGO_HOME"
+
+# Auto-updater
+install-updater = false
+
+# Plan configuration
+[[workspace.metadata.dist.plan]]
+# The name of the artifact to distribute
+artifact-name = "hitch"
+
+# Whether to generate installers
+generate-installers = true
+
+# Whether to generate archives
+generate-archives = true
+
+# GitHub release configuration
+[workspace.metadata.dist.github]
+# Owner of the repository
+owner = "doomedramen"
+
+# Name of the repository
+name = "hitch"
+
+# Whether to create GitHub releases
+create-release = true
+
+# Whether to upload artifacts to GitHub releases
+upload-artifacts = true
+
+# Homebrew configuration
+[workspace.metadata.dist.homebrew]
+# Owner of the Homebrew tap
+owner = "doomedramen"
+
+# Name of the Homebrew tap
+tap = "homebrew-hitch"
+
+# Name of the formula
+formula-name = "hitch"
+
+# Homepage for the formula
+homepage = "https://github.com/doomedramen/hitch"
+
+# Description for the formula
+description = "A CLI tool for managing environment-specific git branches and metadata"
+
+# License for the formula
+license = "MIT"
+
+# Test command for the formula
+test = "system \"#{bin}/hitch --version\""

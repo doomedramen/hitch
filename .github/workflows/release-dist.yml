@@ -1,0 +1,156 @@
+# Cargo-dist release workflow
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  # Plan the release
+  plan:
+    name: Plan Release
+    runs-on: ubuntu-latest
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      publish: ${{ steps.plan.outputs.publish }}
+      announcement: ${{ steps.plan.outputs.announcement }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cargo-dist
+        uses: axodotdev/cargo-dist-installer@v0.13.3
+
+      - name: Plan release
+        id: plan
+        run: |
+          cargo dist plan --output-format=json > dist-manifest.json
+          echo "manifest=$(cat dist-manifest.json)" >> "$GITHUB_OUTPUT"
+
+          # Extract publish decision from the plan
+          if jq -e '.artifacts | length > 0' dist-manifest.json > /dev/null; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Create announcement if we're publishing
+          if [ "${{ steps.plan.outputs.publish }}" = "true" ]; then
+            cat > release-notes.md << 'EOF'
+          ## 🚀 Release ${{ github.ref_name }}
+
+          ### 📦 Installation
+
+          #### Homebrew
+          ```bash
+          brew install doomedramen/homebrew-hitch/hitch
+          ```
+
+          #### Cargo
+          ```bash
+          cargo install hitch
+          ```
+
+          #### Binary Download
+          Download the appropriate binary for your platform from the release assets below.
+
+          ### 🔄 What's Changed
+
+          <!-- Add your release notes here -->
+
+          Full changelog: https://github.com/doomedramen/hitch/compare/${{ github.ref_name }}...main
+          EOF
+            echo "announcement=release-notes.md" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Build and publish artifacts
+  publish:
+    name: Publish Release
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-dist
+        uses: axodotdev/cargo-dist-installer@v0.13.3
+
+      - name: Build release artifacts
+        run: |
+          cargo dist build --target=${{ matrix.target }} --output-pattern=artifacts
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: artifacts/
+
+  # Create GitHub release
+  create-release:
+    name: Create GitHub Release
+    needs: [plan, publish]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          pattern: artifacts-*
+          merge-multiple: true
+          path: artifacts/
+
+      - name: Install cargo-dist
+        uses: axodotdev/cargo-dist-installer@v0.13.3
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
+          body_path: ${{ needs.plan.outputs.announcement }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Update Homebrew formula
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: [plan, create-release]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew formula
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: hitch
+          homebrew-tap: doomedramen/homebrew-hitch
+          download-url: https://github.com/doomedramen/hitch/archive/${{ github.ref_name }}.tar.gz
+          base-branch: main
+          commit-message: |
+            {{formulaName}} {{version}}
+
+            Created by https://github.com/mislav/bump-homebrew-formula-action
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

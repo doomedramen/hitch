@@ -65,6 +65,7 @@ impl Environment {
         self.branches.retain(|b| b != branch);
     }
 
+    #[allow(dead_code)]
     pub fn has_branch(&self, branch: &str) -> bool {
         self.branches.contains(&branch.to_string())
     }
@@ -104,6 +105,7 @@ impl HitchConfig {
         self.environments.get_mut(name)
     }
 
+    #[allow(dead_code)]
     pub fn environment_exists(&self, name: &str) -> bool {
         self.environments.contains_key(name)
     }

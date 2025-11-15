@@ -2,6 +2,7 @@ use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
 use crate::utils::prelude::{modify_metadata, pre_check};
 use clap::Args;
+use anyhow::Result;
 
 #[derive(Args)]
 pub struct InitCommand {
@@ -10,7 +11,7 @@ pub struct InitCommand {
     environments: Option<Vec<String>>,
 }
 
-pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     context.log_info("Initializing Hitch in the current git repository...");
 
     // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
@@ -19,7 +20,7 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<(), Box<dyn std
     // Step 2: Ensure hitch-metadata branch does not exist
     context.log_verbose("Checking if hitch-metadata branch already exists...");
     if context.git().branch_exists("hitch-metadata")? {
-        return Err("Hitch is already initialized in this repository. hitch-metadata branch already exists.".into());
+        return Err(anyhow::anyhow!("Hitch is already initialized in this repository. hitch-metadata branch already exists."));
     }
     context.log_verbose("✓ hitch-metadata branch does not exist");
 

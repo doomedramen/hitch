@@ -1,0 +1,66 @@
+# Lefthook configuration for hitch
+# Install with: lefthook install
+
+pre-commit:
+  commands:
+    # Rust formatting
+    format:
+      run: cargo fmt --all -- --check
+      fail_text: |
+        🚨 Rust code formatting issues found!
+
+        Run 'cargo fmt' to fix formatting issues.
+
+    # Rust linting
+    clippy:
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      fail_text: |
+        🚨 Clippy found issues!
+
+        Run 'cargo clippy --fix' to automatically fix some issues, or manually address the warnings.
+
+    # Security audit
+    audit:
+      run: cargo audit
+      fail_text: |
+        🚨 Security vulnerabilities found!
+
+        Run 'cargo audit --fix' to automatically update dependencies where possible.
+
+    # Check if Cargo.lock is up to date
+    check-lock:
+      run: cargo check --locked
+      fail_text: |
+        🚨 Cargo.lock is out of sync!
+
+        Run 'cargo check' to update Cargo.lock.
+
+pre-push:
+  commands:
+    # Run full test suite
+    test:
+      run: cargo test --all-features -- --test-threads=1
+      fail_text: |
+        🚨 Tests failed!
+
+        Fix the failing tests before pushing.
+
+    # Build check
+    build:
+      run: cargo build --release
+      fail_text: |
+        🚨 Build failed!
+
+        Fix build errors before pushing.
+
+# Skip these hooks for specific files or patterns
+skip_output:
+  - meta
+  - success
+
+# Global settings
+skip_empty_commit: true
+glob: "*.{rs,toml,yml,yaml,md}"
+
+# Allow parallel execution
+parallel: true
