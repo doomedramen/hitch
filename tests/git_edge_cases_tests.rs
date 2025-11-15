@@ -459,65 +459,86 @@ fn test_git_state_inconsistencies() -> Result<()> {
             .output()?;
 
         // Promote the branch
-    let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-    assert!(output.status.success(), "Promote should succeed");
+        let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
+        assert!(output.status.success(), "Promote should succeed");
 
-    // While rebuild is happening, make changes to simulate concurrent access
-    test_env.create_file("concurrent-change.txt", "This change might interfere")?;
+        // While rebuild is happening, make changes to simulate concurrent access
+        test_env.create_file("concurrent-change.txt", "This change might interfere")?;
 
-    // Verify the operation completed successfully
-    let current_branch = test_env.get_current_branch()?;
-    assert_eq!(current_branch, "main", "Should be back on main branch");
+        // Verify the operation completed successfully
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(current_branch, "main", "Should be back on main branch");
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Test with corrupted hitch.json
 #[test]
 fn test_corrupted_hitch_json() -> Result<()> {
-    let test_env = TestEnv::new()?;
+    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+        test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
-    test_env.init_git_repo()?;
-    test_env.run_hitch_init()?;
-    test_env.create_branch_and_commit("feature/test", "Test feature")?;
+        // Corrupt the hitch.json file
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(test_env.path())
+            .output()?;
+        fs::write(test_env.path().join("hitch.json"), "invalid json content that is not parseable")?;
+        Command::new("git")
+            .args(&["add", "hitch.json"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Corrupt config"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
 
-    // Corrupt the hitch.json file
-    Command::new("git").args(&["checkout", "hitch-metadata"]).output()?;
-    fs::write("hitch.json", "invalid json content that is not parseable")?;
-    Command::new("git").args(&["add", "hitch.json"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Corrupt config"]).output()?;
-    Command::new("git").args(&["checkout", "main"]).output()?;
+        // Try to promote - should fail gracefully
+        let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
+        assert!(!output.status.success(), "Promote should fail with corrupted hitch.json");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("parse") || stderr.contains("Failed to read") || stderr.contains("invalid"));
 
-    // Try to promote - should fail gracefully
-    let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-    assert!(!output.status.success(), "Promote should fail with corrupted hitch.json");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("parse") || stderr.contains("Failed to read") || stderr.contains("invalid"));
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Test with missing hitch.json
 #[test]
 fn test_missing_hitch_json() -> Result<()> {
-    let test_env = TestEnv::new()?;
+    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+        test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
-    test_env.init_git_repo()?;
-    test_env.run_hitch_init()?;
-    test_env.create_branch_and_commit("feature/test", "Test feature")?;
+        // Delete hitch.json
+        Command::new("git")
+            .args(&["checkout", "hitch-metadata"])
+            .current_dir(test_env.path())
+            .output()?;
+        fs::remove_file(test_env.path().join("hitch.json"))?;
+        Command::new("git")
+            .args(&["add", "--all"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["commit", "-m", "Remove hitch.json"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(&["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
 
-    // Delete hitch.json
-    Command::new("git").args(&["checkout", "hitch-metadata"]).output()?;
-    fs::remove_file("hitch.json")?;
-    Command::new("git").args(&["add", "--all"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Remove hitch.json"]).output()?;
-    Command::new("git").args(&["checkout", "main"]).output()?;
+        // Try to promote - should fail gracefully
+        let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
+        assert!(!output.status.success(), "Promote should fail with missing hitch.json");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("not found") || stderr.contains("Failed to read"));
 
-    // Try to promote - should fail gracefully
-    let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
-    assert!(!output.status.success(), "Promote should fail with missing hitch.json");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not found") || stderr.contains("Failed to read"));
-
-    Ok(())
+        Ok(())
+    })
 }
