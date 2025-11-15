@@ -137,7 +137,7 @@ fn test_git_operations_error_handling() -> Result<()> {
 /// Test types and serialization
 #[test]
 fn test_environment_type_functionality() -> Result<()> {
-    use hitch::types::{Environment, HitchConfig};
+    use hitch::types::Environment;
     use serde_json;
 
     // Test environment creation and methods
@@ -177,7 +177,7 @@ fn test_environment_type_functionality() -> Result<()> {
 /// Test hitch config functionality
 #[test]
 fn test_hitch_config_functionality() -> Result<()> {
-    use hitch::types::{Environment, HitchConfig};
+    use hitch::types::Environment;
     use serde_json;
 
     let mut config = HitchConfig::new();

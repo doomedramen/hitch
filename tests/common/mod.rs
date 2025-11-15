@@ -10,9 +10,8 @@ use git2::{Repository, Signature};
 /// Test environment with complete git2-based isolation
 pub struct TestEnv {
     temp_dir: TempDir,
-    repo: Repository,
     original_dir: std::path::PathBuf,
-    hitch_binary_path: std::path::PathBuf,
+    _repo: Repository, // Used for drop behavior but not directly accessed
 }
 
 impl TestEnv {
@@ -33,21 +32,14 @@ impl TestEnv {
 
         let original_dir = std::env::current_dir()?;
 
-        // Get absolute path to hitch binary before we change directories
-        let hitch_binary_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("debug")
-            .join("hitch")
-            .canonicalize()?;
-
+        
         // Create git repository using git2
         let repo = Self::setup_git_repository(temp_dir.path())?;
 
         Ok(TestEnv {
             temp_dir,
-            repo,
             original_dir,
-            hitch_binary_path,
+            _repo: repo,
         })
     }
 
@@ -104,7 +96,7 @@ impl TestEnv {
         }
 
         // Initialize Hitch
-        let output = Command::new(&self.hitch_binary_path)
+        let output = Command::new(&self.hitch_binary())
             .args(&["init"])
             .output()?;
 
@@ -123,61 +115,18 @@ impl TestEnv {
         Ok(())
     }
 
-    /// Create a branch in the test repository with commit using git2
-    pub fn create_branch(&self, branch_name: &str) -> Result<()> {
-        // Get current HEAD commit
-        let head_commit = self.repo.head()?.peel_to_commit()?;
-        let sig = Signature::now("Test User", "test@example.com")?;
-
-        // Create a new branch from HEAD
-        let _branch_ref = self.repo.branch(branch_name, &head_commit, false)?;
-        let branch_ref_name = format!("refs/heads/{}", branch_name);
-
-        // Create a file and commit on the new branch
-        let file_path = self.path().join(format!("{}.md", branch_name));
-        println!("Creating file at: {:?}", file_path);
-        fs::write(&file_path, format!("Content for {} branch", branch_name))?;
-
-        // Create index for the new commit
-        let mut index = self.repo.index()?;
-        index.add_path(Path::new(&format!("{}.md", branch_name)))?;
-        let tree_id = index.write_tree()?;
-        let tree = self.repo.find_tree(tree_id)?;
-
-        // Create commit on the branch
-        self.repo.commit(
-            Some(&branch_ref_name),
-            &sig,
-            &sig,
-            &format!("Add {} branch", branch_name),
-            &tree,
-            &[&head_commit]
-        )?;
-
-        Ok(())
-    }
-
-    /// Create test branches for comprehensive testing
-    pub fn create_test_branches(&self) -> Result<()> {
-        self.create_branch("feature/user-auth")?;
-        self.create_branch("feature/api-endpoints")?;
-        self.create_branch("dev")?;
-        self.create_branch("qa")?;
-
-        // Switch back to main
-        Command::new("git").args(&["checkout", "main"]).output()?;
-
-        Ok(())
-    }
-
+    
     /// Get the path to the test directory
     pub fn path(&self) -> &Path {
         self.temp_dir.path()
     }
 
     /// Get the absolute path to the hitch binary
-    pub fn hitch_binary(&self) -> &std::path::Path {
-        &self.hitch_binary_path
+    pub fn hitch_binary(&self) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("debug")
+            .join("hitch")
     }
 }
 
@@ -190,9 +139,3 @@ impl Drop for TestEnv {
     }
 }
 
-/// Simple temp directory setup for basic isolation
-pub fn setup_temp_dir() -> (TempDir, std::path::PathBuf) {
-    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let path = temp_dir.path().to_path_buf();
-    (temp_dir, path)
-}

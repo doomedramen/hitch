@@ -1,65 +1,21 @@
 use anyhow::Result;
 use std::process::Command;
 
+mod common;
+use common::TestEnv;
+
 #[test]
 fn test_basic_init() -> Result<()> {
-    let temp_dir = tempfile::tempdir()?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
+    test_env.setup_complete_hitch_env()?;
 
-    // Initialize git repo
-    Command::new("git")
-        .args(&["init"])
-        .current_dir(&temp_dir)
-        .output()?;
+    // Test that we can verify the setup worked correctly
+    std::env::set_current_dir(test_env.path())?;
 
-    // Configure git user
-    Command::new("git")
-        .args(&["config", "user.name", "Test User"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["config", "user.email", "test@example.com"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Create initial commit
-    std::fs::write(temp_dir.path().join("README.md"), "# Test\n")?;
-    Command::new("git")
-        .args(&["add", "README.md"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    Command::new("git")
-        .args(&["commit", "-m", "Initial commit"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    // Get the path to our hitch binary
-    let hitch_path = format!("{}/target/debug/hitch", std::env::current_dir()?.display());
-
-    // Run hitch init with --no-push to avoid remote warnings
-    let output = Command::new(&hitch_path)
-        .args(&["init", "--no-push"])
-        .current_dir(&temp_dir)
-        .output()?;
-
-    assert!(output.status.success(), "hitch init should succeed");
-
-    let stdout = String::from_utf8(output.stdout)?;
-    let stderr = String::from_utf8(output.stderr)?;
-    let full_output = format!("{}{}", stdout, stderr);
-
-    // Check for success message
-    assert!(
-        full_output.contains("Hitch initialized successfully"),
-        "Output should contain success message. Got: {}",
-        full_output
-    );
-
-    // Check that hitch-metadata branch exists
+    // Check that hitch-metadata branch exists (from setup_complete_hitch_env)
     let branch_output = Command::new("git")
         .args(&["branch"])
-        .current_dir(&temp_dir)
         .output()?;
 
     let branches = String::from_utf8(branch_output.stdout)?;
@@ -67,6 +23,21 @@ fn test_basic_init() -> Result<()> {
         branches.contains("hitch-metadata"),
         "hitch-metadata branch should exist. Got branches: {}",
         branches
+    );
+
+    // Check that .gitignore and hitch.json files exist in hitch-metadata branch
+    Command::new("git")
+        .args(&["checkout", "hitch-metadata"])
+        .output()?;
+
+    assert!(
+        test_env.path().join(".gitignore").exists(),
+        ".gitignore should exist in hitch-metadata branch"
+    );
+
+    assert!(
+        test_env.path().join("hitch.json").exists(),
+        "hitch.json should exist in hitch-metadata branch"
     );
 
     Ok(())

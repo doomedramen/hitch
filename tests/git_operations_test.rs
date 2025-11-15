@@ -1,27 +1,18 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
-use tempfile::tempdir;
+
+mod common;
+use common::TestEnv;
 
 /// Test git operations functionality
 #[test]
 fn test_git_operations_basic_functionality() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
-
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    // Create initial commit
-    fs::write("README.md", "# Test Repository")?;
-    Command::new("git").args(&["add", "README.md"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
     // Test git operations
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Test get_current_branch
     let current_branch = git_ops.get_current_branch()?;
@@ -41,112 +32,82 @@ fn test_git_operations_basic_functionality() -> Result<()> {
     assert!(!git_ops.branch_exists("nonexistent")?);
 
     // Test checkout_branch
-    Command::new("git").args(&["checkout", "-b", "test-branch"]).output()?;
+    Command::new("git").args(&["checkout", "-b", "test-branch"]).current_dir(test_env.path()).output()?;
     assert_eq!(git_ops.get_current_branch()?, "test-branch");
 
     // Test fetch_branch (should fail gracefully with no remote)
     let result = git_ops.fetch_branch("nonexistent-branch");
     assert!(result.is_ok(), "Fetch should fail gracefully for non-existent branch");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations with untracked files
 #[test]
 fn test_git_operations_dirty_working_directory() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Initially clean
     assert!(git_ops.is_working_directory_clean()?);
 
     // Add untracked file
-    fs::write("untracked.txt", "untracked content")?;
+    fs::write(test_env.path().join("untracked.txt"), "untracked content")?;
     assert!(!git_ops.is_working_directory_clean()?);
 
     // Add staged file
-    Command::new("git").args(&["add", "untracked.txt"]).output()?;
+    Command::new("git").args(&["add", "untracked.txt"]).current_dir(test_env.path()).output()?;
     assert!(!git_ops.is_working_directory_clean()?);
 
     // Commit to make clean again
-    Command::new("git").args(&["commit", "-m", "Add untracked file"]).output()?;
+    Command::new("git").args(&["commit", "-m", "Add untracked file"]).current_dir(test_env.path()).output()?;
     assert!(git_ops.is_working_directory_clean()?);
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations with detached HEAD
 #[test]
 fn test_git_operations_detached_head() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    // Create initial commit
-    fs::write("README.md", "# Test Repository")?;
-    Command::new("git").args(&["add", "README.md"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
-
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Get commit hash
     let commit_hash_output = Command::new("git")
         .args(&["rev-parse", "HEAD"])
+        .current_dir(test_env.path())
         .output()?;
     let commit_hash_binding = String::from_utf8_lossy(&commit_hash_output.stdout);
     let commit_hash_str = commit_hash_binding.trim();
 
     // Switch to detached HEAD
-    Command::new("git").args(&["checkout", &commit_hash_str]).output()?;
+    Command::new("git").args(&["checkout", &commit_hash_str]).current_dir(test_env.path()).output()?;
 
     // Test get_current_branch with detached HEAD
     let current_branch = git_ops.get_current_branch()?;
     assert!(current_branch.starts_with("detached-HEAD-"));
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations file reading and writing
 #[test]
 fn test_git_operations_file_operations() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
-
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    // Create initial commit
-    fs::write("README.md", "# Test Repository")?;
-    Command::new("git").args(&["add", "README.md"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
     // Create test branch
-    Command::new("git").args(&["checkout", "-b", "test-branch"]).output()?;
-    fs::write("test.txt", "test content")?;
-    Command::new("git").args(&["add", "test.txt"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Add test file"]).output()?;
-    Command::new("git").args(&["checkout", "main"]).output()?;
+    Command::new("git").args(&["checkout", "-b", "test-branch"]).current_dir(test_env.path()).output()?;
+    fs::write(test_env.path().join("test.txt"), "test content")?;
+    Command::new("git").args(&["add", "test.txt"]).current_dir(test_env.path()).output()?;
+    Command::new("git").args(&["commit", "-m", "Add test file"]).current_dir(test_env.path()).output()?;
+    Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
 
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Test read_file_from_branch
     let content = git_ops.read_file_from_branch("test-branch", "test.txt")?;
@@ -156,106 +117,70 @@ fn test_git_operations_file_operations() -> Result<()> {
     let result = git_ops.read_file_from_branch("test-branch", "nonexistent.txt");
     assert!(result.is_err(), "Should fail to read non-existent file");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations with invalid git repository
 #[test]
 fn test_git_operations_invalid_repository() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
-
     // Test with non-git directory
     let result = hitch::utils::git_operations::GitOperations::new();
     assert!(result.is_err(), "Should fail to create GitOperations in non-git directory");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations push functionality
 #[test]
 fn test_git_operations_push() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    // Create initial commit
-    fs::write("README.md", "# Test Repository")?;
-    Command::new("git").args(&["add", "README.md"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
-
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Test push_branch (should fail gracefully with no remote)
     let result = git_ops.push_branch("main");
     assert!(result.is_err(), "Push should fail gracefully with no remote configured");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations merge functionality
 #[test]
 fn test_git_operations_merge() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    // Create initial commit
-    fs::write("README.md", "# Test Repository")?;
-    Command::new("git").args(&["add", "README.md"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Initial commit"]).output()?;
-
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Create feature branch
-    Command::new("git").args(&["checkout", "-b", "feature"]).output()?;
-    fs::write("feature.txt", "feature content")?;
-    Command::new("git").args(&["add", "feature.txt"]).output()?;
-    Command::new("git").args(&["commit", "-m", "Add feature"]).output()?;
-    Command::new("git").args(&["checkout", "main"]).output()?;
+    Command::new("git").args(&["checkout", "-b", "feature"]).current_dir(test_env.path()).output()?;
+    fs::write(test_env.path().join("feature.txt"), "feature content")?;
+    Command::new("git").args(&["add", "feature.txt"]).current_dir(test_env.path()).output()?;
+    Command::new("git").args(&["commit", "-m", "Add feature"]).current_dir(test_env.path()).output()?;
+    Command::new("git").args(&["checkout", "main"]).current_dir(test_env.path()).output()?;
 
     // Test squash_merge
     let result = git_ops.squash_merge("feature", "Squash merge feature branch");
     assert!(result.is_ok(), "Squash merge should succeed");
 
     // Verify merge
-    assert!(fs::metadata("feature.txt").is_ok());
+    assert!(fs::metadata(test_env.path().join("feature.txt")).is_ok());
 
     // Test check_merge_conflicts
     let has_conflicts = git_ops.check_merge_conflicts("feature")?;
     assert!(!has_conflicts, "Should have no conflicts");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
 
 /// Test git operations error handling
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
-    let temp_dir = tempdir()?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir.path())?;
+    // Use the git2-based TestEnv framework for complete isolation
+    let test_env = TestEnv::new()?;
 
-    // Initialize git repository
-    Command::new("git").args(&["init"]).output()?;
-    Command::new("git").args(&["config", "user.name", "Test User"]).output()?;
-    Command::new("git").args(&["config", "user.email", "test@example.com"]).output()?;
-
-    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(temp_dir.path().to_str().unwrap())?;
+    let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(test_env.path().to_str().unwrap())?;
 
     // Test checkout to non-existent branch
     let result = git_ops.checkout_branch("nonexistent");
@@ -269,6 +194,5 @@ fn test_git_operations_error_handling() -> Result<()> {
     let result = git_ops.check_merge_conflicts("nonexistent");
     assert!(result.is_err(), "Should fail to check conflicts for non-existent branch");
 
-    std::env::set_current_dir(original_dir)?;
     Ok(())
 }
