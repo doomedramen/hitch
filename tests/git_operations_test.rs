@@ -270,7 +270,7 @@ fn test_git_operations_error_handling() -> Result<()> {
 
 #[test]
 fn test_debug_merge_conflicts_scenario() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Recreate the scenario from the failing rebuild test exactly
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -300,8 +300,8 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
             "environments": environments
         });
 
-        // Switch to hitch-metadata branch and write config
-        git_ops.checkout_branch("hitch-metadata")?;
+        // Create hitch-metadata branch and write config
+        git_ops.create_orphan_branch("hitch-metadata")?;
         std::fs::write(
             test_env.path().join("hitch.json"),
             serde_json::to_string_pretty(&config)?,

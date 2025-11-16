@@ -62,7 +62,7 @@ fn test_cli_invalid_command() -> Result<()> {
 /// Test CLI with missing required arguments
 #[test]
 fn test_cli_missing_arguments() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let binary_path = test_env.hitch_binary();
 
         // Test promote without arguments
@@ -160,8 +160,23 @@ fn test_cli_error_handling() -> Result<()> {
 /// Test complete CLI workflow: add -> lock -> unlock -> remove
 #[test]
 fn test_cli_complete_workflow() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |_test_env| {
+    with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
+
+        // Initialize hitch first
+        let output = Command::new(&binary_path)
+            .args(["init"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Hitch init should succeed");
+
+        // Clean up any changes made by hitch init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            _test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
 
         // Complete workflow test
         println!("Testing environment lifecycle: add -> lock -> unlock -> remove");
@@ -240,15 +255,35 @@ fn test_cli_complete_workflow() -> Result<()> {
 /// Test CLI error handling and validation
 #[test]
 fn test_cli_error_validation() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |_test_env| {
+    with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
+
+        // Initialize hitch first
+        let output = Command::new(&binary_path)
+            .args(["init"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Hitch init should succeed");
+
+        // Clean up any changes made by hitch init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            _test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
 
         // Test duplicate environment addition
         let output = Command::new(&binary_path)
             .args(["add", "test"])
             .current_dir(_test_env.path())
             .output()?;
-        assert!(output.status.success(), "First add should succeed");
+        assert!(
+            output.status.success(),
+            "First add should succeed. stdout: {}, stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         let output = Command::new(&binary_path)
             .args(["add", "test"])
@@ -305,8 +340,23 @@ fn test_cli_error_validation() -> Result<()> {
 /// Test CLI guard functionality
 #[test]
 fn test_cli_guard_functionality() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |_test_env| {
+    with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
+
+        // Initialize hitch first
+        let output = Command::new(&binary_path)
+            .args(["init"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Hitch init should succeed");
+
+        // Clean up any changes made by hitch init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            _test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
 
         // Test guard when not on environment branch
         let output = Command::new(&binary_path)
@@ -341,9 +391,24 @@ fn test_cli_guard_functionality() -> Result<()> {
 /// Test CLI promote workflow with branches
 #[test]
 fn test_cli_promote_workflow() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |_test_env| {
+    with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
         println!("Hitch binary path: {:?}", binary_path);
+
+        // Initialize hitch first
+        let output = Command::new(&binary_path)
+            .args(["init"])
+            .current_dir(_test_env.path())
+            .output()?;
+        assert!(output.status.success(), "Hitch init should succeed");
+
+        // Clean up any changes made by hitch init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            _test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
 
         // Add environment for testing
         let output = Command::new(&binary_path)
