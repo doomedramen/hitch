@@ -8,6 +8,8 @@ use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
+    #[allow(dead_code)]
+    fn run_hitch_init(&self) -> Result<()>;
     fn create_environment_config(
         &self,
         env_name: &str,
@@ -24,6 +26,23 @@ trait TestEnvExt {
 }
 
 impl TestEnvExt for TestEnv {
+    #[allow(dead_code)]
+    fn run_hitch_init(&self) -> Result<()> {
+        let output = Command::new(self.hitch_binary())
+            .args(["init"])
+            .current_dir(self.path())
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to run hitch init: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     fn create_environment_config(
         &self,
         env_name: &str,

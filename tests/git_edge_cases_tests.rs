@@ -8,6 +8,8 @@ use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
+    #[allow(dead_code)]
+    fn run_hitch_init(&self) -> Result<()>;
     fn create_environment_config(
         &self,
         env_name: &str,
@@ -27,6 +29,23 @@ trait TestEnvExt {
 }
 
 impl TestEnvExt for TestEnv {
+    #[allow(dead_code)]
+    fn run_hitch_init(&self) -> Result<()> {
+        let output = Command::new(self.hitch_binary())
+            .args(["init"])
+            .current_dir(self.path())
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to run hitch init: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     fn create_environment_config(
         &self,
         env_name: &str,
@@ -58,68 +77,51 @@ impl TestEnvExt for TestEnv {
             "environments": environments
         });
 
+        // Use GitOperations for all git operations
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
         // Write to hitch-metadata branch (not orphan - it should already exist from hitch init)
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(self.path())
-            .output()?;
+        if git_ops.branch_exists("hitch-metadata")? {
+            git_ops.checkout_branch("hitch-metadata")?;
+        } else {
+            git_ops.create_orphan_branch("hitch-metadata")?;
+        }
 
         // Update hitch.json with the new environment configuration
         fs::write(
             self.path().join("hitch.json"),
             serde_json::to_string_pretty(&config)?,
         )?;
-        Command::new("git")
-            .args(["add", "hitch.json"])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", &format!("Add environment '{}'", env_name)])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.add_and_commit(&["hitch.json"], &format!("Add environment '{}'", env_name))?;
+        git_ops.checkout_branch("main")?;
 
         Ok(())
     }
 
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
-        // Ensure we're on main branch first to avoid hitch-metadata .gitignore issues
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        // Use GitOperations for all git operations
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
 
-        Command::new("git")
-            .args(["checkout", "-b", branch_name])
-            .current_dir(self.path())
-            .output()?;
+        // Ensure we're on main branch first to avoid hitch-metadata .gitignore issues
+        git_ops.checkout_branch("main")?;
+
+        git_ops.create_branch_from(branch_name, "main")?;
 
         // Clean any ignored files from previous operations
-        Command::new("git")
-            .args(["clean", "-fd"])
-            .current_dir(self.path())
-            .output()?;
+        let _ = git_ops.run_git_command(&["clean", "-fd"])?;
 
         // Use unique filename that won't be ignored by hitch-metadata .gitignore
         // Since hitch-metadata .gitignore has "*", our files will be ignored
         // So we force add them
         let filename = format!("{}.txt", branch_name.replace("/", "_"));
         fs::write(self.path().join(&filename), message)?;
-        Command::new("git")
-            .args(["add", "-f", &filename])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        let _ = git_ops.run_git_command(&["add", "-f", &filename])?;
+        let _ = git_ops.run_git_command(&["commit", "-m", message])?;
+        git_ops.checkout_branch("main")?;
         Ok(())
     }
 
@@ -138,11 +140,10 @@ impl TestEnvExt for TestEnv {
     }
 
     fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(self.path())
-            .output()?;
-
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        let output = git_ops.run_git_command(args)?;
         Ok(output)
     }
 
@@ -166,40 +167,10 @@ impl TestEnvExt for TestEnv {
     }
 
     fn get_current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(self.path())
-            .output()?;
-
-        if output.status.success() {
-            let branch_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch_name.is_empty() {
-                Ok(branch_name)
-            } else {
-                // Handle detached HEAD - get the commit hash instead
-                let rev_output = Command::new("git")
-                    .args(["rev-parse", "HEAD"])
-                    .current_dir(self.path())
-                    .output()?;
-
-                if rev_output.status.success() {
-                    let commit_hash = String::from_utf8_lossy(&rev_output.stdout)
-                        .trim()
-                        .to_string();
-                    // Return a special name for detached HEAD state
-                    Ok(format!("detached-HEAD-{}", &commit_hash[..7]))
-                } else {
-                    Err(anyhow::anyhow!(
-                        "Failed to get current branch or HEAD commit"
-                    ))
-                }
-            }
-        } else {
-            Err(anyhow::anyhow!(
-                "Failed to get current branch: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
-        }
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.get_current_branch()
     }
 
     #[allow(dead_code)]
@@ -209,14 +180,10 @@ impl TestEnvExt for TestEnv {
         fs::write(self.path().join("conflict2.txt"), "Original content")?;
 
         // Commit them
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Add conflicting files"])
-            .current_dir(self.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.add_and_commit(&["conflict1.txt", "conflict2.txt"], "Add conflicting files")?;
 
         Ok(())
     }
@@ -234,14 +201,13 @@ impl TestEnvExt for TestEnv {
         )?;
 
         // Commit changes to create diverging history
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Create conflict potential"])
-            .current_dir(self.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.add_and_commit(
+            &["conflict1.txt", "conflict2.txt"],
+            "Create conflict potential",
+        )?;
 
         Ok(())
     }
@@ -250,7 +216,18 @@ impl TestEnvExt for TestEnv {
 /// Test operations with corrupted git state
 #[test]
 fn test_corrupted_git_state() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
         test_env.create_environment_config("dev", "main", &[])?;
 
@@ -278,7 +255,18 @@ fn test_corrupted_git_state() -> Result<()> {
 /// Test with missing git executable
 #[test]
 fn test_missing_git_executable() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // This test simulates what happens if git is not available
         // We can't actually remove git, but we can test error handling
 
@@ -297,7 +285,18 @@ fn test_missing_git_executable() -> Result<()> {
 /// Test with git hooks that always fail
 #[test]
 fn test_git_hooks_that_always_fail() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
         test_env.create_environment_config("dev", "main", &[])?;
 
@@ -322,7 +321,18 @@ fn test_git_hooks_that_always_fail() -> Result<()> {
 /// Test with git hooks that have syntax errors
 #[test]
 fn test_git_hooks_with_syntax_errors() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
         test_env.create_environment_config("dev", "main", &[])?;
 
@@ -346,7 +356,18 @@ fn test_git_hooks_with_syntax_errors() -> Result<()> {
 /// Test operations with detached HEAD
 #[test]
 fn test_detached_head_operations() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
         test_env.create_environment_config("dev", "main", &[])?;
 
@@ -390,7 +411,18 @@ fn test_detached_head_operations() -> Result<()> {
 /// Test with large number of branches
 #[test]
 fn test_many_branches_promotion() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create many branches
         let mut branches = Vec::new();
         for i in 1..=20 {
@@ -450,7 +482,18 @@ fn test_many_branches_promotion() -> Result<()> {
 /// Test with very long branch names
 #[test]
 fn test_long_branch_names() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create branch with very long name
         let long_branch_name = "feature/very-long-branch-name-that-exceeds-normal-length-limits-and-might-cause-issues-in-some-git-commands-or-display-problems-123456789";
         test_env.create_branch_and_commit(long_branch_name, "Long branch test")?;
@@ -489,7 +532,18 @@ fn test_long_branch_names() -> Result<()> {
 /// Test with special characters in branch names
 #[test]
 fn test_special_characters_in_branch_names() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create branches with special characters
         let special_branches = vec![
             "feature/bug-123",
@@ -530,33 +584,31 @@ fn test_special_characters_in_branch_names() -> Result<()> {
 /// Test operations during git state inconsistencies
 #[test]
 fn test_git_state_inconsistencies() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
         test_env.create_environment_config("dev", "main", &[])?;
 
         // Create some commits on feature branch
-        Command::new("git")
-            .args(["checkout", "feature/test"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("feature/test")?;
         for i in 1..=5 {
             fs::write(
                 test_env.path().join(format!("file{}.txt", i)),
                 format!("Content {}", i),
             )?;
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(test_env.path())
-                .output()?;
-            Command::new("git")
-                .args(["commit", "-m", &format!("Commit {}", i)])
-                .current_dir(test_env.path())
-                .output()?;
+            git_ops.add_and_commit(&[&format!("file{}.txt", i)], &format!("Commit {}", i))?;
         }
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("main")?;
 
         // Promote the branch
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
@@ -576,30 +628,28 @@ fn test_git_state_inconsistencies() -> Result<()> {
 /// Test with corrupted hitch.json
 #[test]
 fn test_corrupted_hitch_json() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
         // Corrupt the hitch.json file
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
         fs::write(
             test_env.path().join("hitch.json"),
             "invalid json content that is not parseable",
         )?;
-        Command::new("git")
-            .args(["add", "hitch.json"])
-            .current_dir(test_env.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Corrupt config"])
-            .current_dir(test_env.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.add_and_commit(&["hitch.json"], "Corrupt config")?;
+        git_ops.checkout_branch("main")?;
 
         // Try to promote - should fail gracefully
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
@@ -621,27 +671,26 @@ fn test_corrupted_hitch_json() -> Result<()> {
 /// Test with missing hitch.json
 #[test]
 fn test_missing_hitch_json() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_branch_and_commit("feature/test", "Test feature")?;
 
         // Delete hitch.json
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
         fs::remove_file(test_env.path().join("hitch.json"))?;
-        Command::new("git")
-            .args(["add", "--all"])
-            .current_dir(test_env.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Remove hitch.json"])
-            .current_dir(test_env.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_env.path())
-            .output()?;
+        let _ = git_ops.run_git_command(&["add", "--all"])?;
+        let _ = git_ops.run_git_command(&["commit", "-m", "Remove hitch.json"])?;
+        git_ops.checkout_branch("main")?;
 
         // Try to promote - should fail gracefully
         let output = test_env.run_hitch_command(&["promote", "feature/test", "dev"])?;
