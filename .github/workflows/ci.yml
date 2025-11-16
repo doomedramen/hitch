@@ -59,8 +59,6 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
             target: aarch64-apple-darwin
 
     steps:
@@ -75,16 +73,17 @@ jobs:
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Install OpenSSL@3 via Homebrew and use brew --prefix to find actual installation path
+        # Install OpenSSL@3 via Homebrew (native ARM64 build for ARM64 target)
         brew install openssl@3
         OPENSSL_PATH=$(brew --prefix openssl@3)
         echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
         echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
         echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
-        echo "Target: ${{ matrix.target }}"
+        echo "Target: ${{ matrix.target }} (native build)"
         echo "Using OpenSSL path: $OPENSSL_PATH"
-        echo "OpenSSL lib directory contents:"
-        ls -la "$OPENSSL_PATH/lib" || echo "Lib directory not found at $OPENSSL_PATH/lib"
+        echo "OpenSSL architecture check:"
+        file "$OPENSSL_PATH/lib/libssl.dylib" || echo "Could not check architecture"
+        file "$OPENSSL_PATH/lib/libcrypto.dylib" || echo "Could not check architecture"
 
     - name: Cache dependencies
       uses: actions/cache@v3
