@@ -210,8 +210,10 @@ mod concurrent_operations_tests {
             }
 
             // Check that the promotion process was attempted (3 branches attempted)
-            assert!(feature_branches.len() == 3,
-                   "Promotion process should be attempted for all 3 branches");
+            assert!(
+                feature_branches.len() == 3,
+                "Promotion process should be attempted for all 3 branches"
+            );
 
             // Verify final state
             let status_output = run_hitch_command(test_env, &["status"])?;
@@ -275,7 +277,10 @@ mod concurrent_operations_tests {
             }
 
             // Check that the rebuild process was attempted (5 rebuild attempts)
-            assert!(successful_rebuilds >= 0, "Rebuild process should be attempted even if remote operations fail");
+            assert!(
+                successful_rebuilds >= 0,
+                "Rebuild process should be attempted even if remote operations fail"
+            );
 
             // Environment should still be in valid state
             let final_status = run_hitch_command(test_env, &["status"])?;

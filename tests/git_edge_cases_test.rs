@@ -128,7 +128,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior in detached HEAD state
     #[test]
-        fn test_hitch_in_detached_head_state() -> Result<()> {
+    fn test_hitch_in_detached_head_state() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -180,7 +180,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with uncommitted changes
     #[test]
-        fn test_hitch_with_uncommitted_changes() -> Result<()> {
+    fn test_hitch_with_uncommitted_changes() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -213,7 +213,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with staged but uncommitted changes
     #[test]
-        fn test_hitch_with_staged_changes() -> Result<()> {
+    fn test_hitch_with_staged_changes() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -250,7 +250,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with git worktrees
     #[test]
-        fn test_hitch_with_git_worktrees() -> Result<()> {
+    fn test_hitch_with_git_worktrees() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -318,7 +318,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with empty repository (no commits)
     #[test]
-        fn test_hitch_with_empty_repository() -> Result<()> {
+    fn test_hitch_with_empty_repository() -> Result<()> {
         with_test_env(SetupLevel::Basic, |test_env| {
             // Initialize empty git repository
             Command::new("git")
@@ -349,7 +349,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with bare repository
     #[test]
-        fn test_hitch_with_bare_repository() -> Result<()> {
+    fn test_hitch_with_bare_repository() -> Result<()> {
         with_test_env(SetupLevel::Basic, |test_env| {
             // Initialize bare git repository
             Command::new("git")
@@ -382,7 +382,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with corrupted git repository
     #[test]
-        fn test_hitch_with_corrupted_git_repository() -> Result<()> {
+    fn test_hitch_with_corrupted_git_repository() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Corrupt the git repository by removing .git/HEAD
             let git_head_path = test_env.path().join(".git").join("HEAD");
@@ -407,7 +407,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with submodules
     #[test]
-        fn test_hitch_with_git_submodules() -> Result<()> {
+    fn test_hitch_with_git_submodules() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -471,7 +471,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with large number of branches
     #[test]
-        fn test_hitch_with_many_branches() -> Result<()> {
+    fn test_hitch_with_many_branches() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -520,7 +520,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with git tags
     #[test]
-        fn test_hitch_with_git_tags() -> Result<()> {
+    fn test_hitch_with_git_tags() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -552,7 +552,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior when on a non-main branch
     #[test]
-        fn test_hitch_on_non_main_branch() -> Result<()> {
+    fn test_hitch_on_non_main_branch() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -588,7 +588,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with git hooks present
     #[test]
-        fn test_hitch_with_git_hooks() -> Result<()> {
+    fn test_hitch_with_git_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -626,7 +626,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with git LFS files
     #[test]
-        fn test_hitch_with_git_lfs_files() -> Result<()> {
+    fn test_hitch_with_git_lfs_files() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -655,7 +655,7 @@ mod git_edge_cases_tests {
 
     /// Test Hitch behavior with binary files
     #[test]
-        fn test_hitch_with_binary_files() -> Result<()> {
+    fn test_hitch_with_binary_files() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;

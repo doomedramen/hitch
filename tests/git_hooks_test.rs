@@ -127,7 +127,7 @@ mod git_hooks_tests {
     /// Test Hitch with pre-commit hook that always passes
     #[test]
     #[ignore]
-        fn test_hitch_with_passing_pre_commit_hook() -> Result<()> {
+    fn test_hitch_with_passing_pre_commit_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -165,7 +165,7 @@ exit 0
     /// Test Hitch with pre-commit hook that always fails
     #[test]
     #[ignore]
-        fn test_hitch_with_failing_pre_commit_hook() -> Result<()> {
+    fn test_hitch_with_failing_pre_commit_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -191,8 +191,8 @@ exit 1
                 "Should handle failing pre-commit hook gracefully"
             );
             assert!(
-                !output.status.success() ||
-                stderr.contains("hook")
+                !output.status.success()
+                    || stderr.contains("hook")
                     || stderr.contains("pre-commit")
                     || stderr.contains("commit")
                     || output.status.code() == Some(1)
@@ -208,7 +208,7 @@ exit 1
     /// Test Hitch with pre-push hook that always passes
     #[test]
     #[ignore]
-        fn test_hitch_with_passing_pre_push_hook() -> Result<()> {
+    fn test_hitch_with_passing_pre_push_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -257,7 +257,7 @@ exit 0
     /// Test Hitch with pre-push hook that always fails
     #[test]
     #[ignore]
-        fn test_hitch_with_failing_pre_push_hook() -> Result<()> {
+    fn test_hitch_with_failing_pre_push_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -315,7 +315,7 @@ exit 1
     /// Test Hitch with commit-msg hook
     #[test]
     #[ignore]
-        fn test_hitch_with_commit_msg_hook() -> Result<()> {
+    fn test_hitch_with_commit_msg_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -368,7 +368,7 @@ fi
     /// Test Hitch with multiple hooks
     #[test]
     #[ignore]
-        fn test_hitch_with_multiple_hooks() -> Result<()> {
+    fn test_hitch_with_multiple_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -416,7 +416,7 @@ exit 0
     /// Test Hitch behavior when hooks directory doesn't exist
     #[test]
     #[ignore]
-        fn test_hitch_without_hooks_directory() -> Result<()> {
+    fn test_hitch_without_hooks_directory() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -451,7 +451,7 @@ exit 0
     /// Test Hitch with Lefthook-style configuration
     #[test]
     #[ignore]
-        fn test_hitch_with_lefthook_style_setup() -> Result<()> {
+    fn test_hitch_with_lefthook_style_setup() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -513,7 +513,7 @@ exit 0
     /// Test Hitch with complex hook that validates files
     #[test]
     #[ignore]
-        fn test_hitch_with_complex_validation_hook() -> Result<()> {
+    fn test_hitch_with_complex_validation_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -608,7 +608,7 @@ exit 0
     /// Test Hitch interaction with hooks during promote operations
     #[test]
     #[ignore]
-        fn test_hitch_promote_with_hooks() -> Result<()> {
+    fn test_hitch_promote_with_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -696,7 +696,7 @@ fi
     /// Test Hitch with hooks that modify files
     #[test]
     #[ignore]
-        fn test_hitch_with_file_modifying_hooks() -> Result<()> {
+    fn test_hitch_with_file_modifying_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -742,7 +742,7 @@ exit 0
     /// Test Hitch with async hooks (background processes)
     #[test]
     #[ignore]
-        fn test_hitch_with_async_hooks() -> Result<()> {
+    fn test_hitch_with_async_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;

@@ -171,10 +171,13 @@ mod cli_workflow_tests {
                 .output()?;
             let branch_stdout = String::from_utf8_lossy(&branch_output.stdout);
             // Check for either hitch/dev branch or similar pattern
-            assert!(branch_stdout.contains("hitch/dev") ||
-                   branch_stdout.contains("dev") ||
-                   branch_stdout.contains("*"),
-                   "Expected to find dev-related branch. Branches: {}", branch_stdout);
+            assert!(
+                branch_stdout.contains("hitch/dev")
+                    || branch_stdout.contains("dev")
+                    || branch_stdout.contains("*"),
+                "Expected to find dev-related branch. Branches: {}",
+                branch_stdout
+            );
 
             Ok(())
         })
@@ -244,10 +247,18 @@ mod cli_workflow_tests {
 
             // The promotion might succeed locally but fail on remote operations
             // We consider it successful if the promotion logic runs (even with remote failures)
-            assert!(stdout.contains("Promoting branch") && stdout.contains("to environment"),
-                   "Should show promotion process started. stdout: {}", stdout);
-            assert!(stdout.contains("feature-branch") || stdout.contains("dev") || stdout.contains("promoted"),
-                   "Should mention promotion. Output: {}", stdout);
+            assert!(
+                stdout.contains("Promoting branch") && stdout.contains("to environment"),
+                "Should show promotion process started. stdout: {}",
+                stdout
+            );
+            assert!(
+                stdout.contains("feature-branch")
+                    || stdout.contains("dev")
+                    || stdout.contains("promoted"),
+                "Should mention promotion. Output: {}",
+                stdout
+            );
             assert!(stdout.contains("feature-branch"));
             assert!(stdout.contains("dev"));
 
@@ -291,10 +302,16 @@ mod cli_workflow_tests {
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should show rebuild process
-            assert!(stdout.contains("Rebuilding") || stdout.contains("Triggering rebuild"),
-                   "Should show rebuild process started. stdout: {}", stdout);
-            assert!(stdout.contains("dev") || stdout.contains("environment"),
-                   "Should mention environment. stdout: {}", stdout);
+            assert!(
+                stdout.contains("Rebuilding") || stdout.contains("Triggering rebuild"),
+                "Should show rebuild process started. stdout: {}",
+                stdout
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should mention environment. stdout: {}",
+                stdout
+            );
 
             Ok(())
         })
@@ -436,17 +453,29 @@ mod cli_workflow_tests {
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should work without explicit mention of no-push
-            assert!(output.status.success(), "Command with --no-push should succeed");
-            assert!(stdout.contains("dev") || stdout.contains("environment"),
-                   "Should add environment successfully. stdout: {}", stdout);
+            assert!(
+                output.status.success(),
+                "Command with --no-push should succeed"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully. stdout: {}",
+                stdout
+            );
 
             // Rebuild with --no-push
             let rebuild_output = run_hitch_command(test_env, &["rebuild", "dev", "--no-push"])?;
             let rebuild_stdout = String::from_utf8_lossy(&rebuild_output.stdout);
             // Rebuild should also work
-            assert!(rebuild_output.status.success(), "Rebuild with --no-push should succeed");
-            assert!(rebuild_stdout.contains("dev") || rebuild_stdout.contains("environment"),
-                   "Should rebuild environment successfully. stdout: {}", rebuild_stdout);
+            assert!(
+                rebuild_output.status.success(),
+                "Rebuild with --no-push should succeed"
+            );
+            assert!(
+                rebuild_stdout.contains("dev") || rebuild_stdout.contains("environment"),
+                "Should rebuild environment successfully. stdout: {}",
+                rebuild_stdout
+            );
 
             Ok(())
         })

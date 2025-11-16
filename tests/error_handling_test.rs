@@ -439,8 +439,8 @@ mod error_handling_tests {
 
             // Should handle corruption gracefully - either succeed with warnings or fail gracefully
             assert!(
-                output.status.success() ||
-                stderr.contains("JSON")
+                output.status.success()
+                    || stderr.contains("JSON")
                     || stderr.contains("parse")
                     || stderr.contains("invalid")
                     || stderr.contains("corrupted")
