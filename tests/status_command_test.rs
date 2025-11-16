@@ -4,7 +4,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel, TestEnv};
+use common::{with_test_env, SetupLevel};
 
 /// Simple ANSI code stripper for test assertions
 fn strip_ansi_codes(text: &str) -> String {

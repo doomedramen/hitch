@@ -85,6 +85,7 @@ impl TestEnv {
     }
 
     /// Create a complete test environment with everything needed for Hitch testing
+    #[allow(dead_code)]
     pub fn setup_complete_hitch_env(&self) -> Result<()> {
         // Change to the test directory
         std::env::set_current_dir(self.path())?;

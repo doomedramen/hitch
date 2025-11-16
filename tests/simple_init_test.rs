@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::process::Command;
 
 mod common;
 use common::{with_test_env, SetupLevel};

@@ -20,9 +20,8 @@ impl common::TestEnv {
             .current_dir(&remote_dir)
             .output()?;
 
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_path.to_str().unwrap(),
-        )?;
+        let git_ops =
+            hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
         git_ops.run_git_command(&["remote", "add", "origin", remote_dir.to_str().unwrap()])?;
 
         Ok(())
