@@ -18,7 +18,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.70.0  # Minimum supported version
+          - 1.75.0  # Minimum supported version
 
     steps:
     - name: Checkout repository
@@ -75,17 +75,19 @@ jobs:
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Install OpenSSL via Homebrew
+        # Install OpenSSL via Homebrew and find the correct paths
         if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-          brew install openssl@3
-          echo "OPENSSL_DIR=/usr/local/opt/openssl@3" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=/usr/local/opt/openssl@3/lib" >> $GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@3/include" >> $GITHUB_ENV
+          brew install openssl
+          OPENSSL_PATH=$(brew --prefix openssl)
+          echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
         elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-          brew install openssl@3
-          echo "OPENSSL_DIR=/opt/homebrew/opt/openssl@3" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=/opt/homebrew/opt/openssl@3/lib" >> $GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=/opt/homebrew/opt/openssl@3/include" >> $GITHUB_ENV
+          brew install openssl
+          OPENSSL_PATH=$(brew --prefix openssl)
+          echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
         fi
 
     - name: Cache dependencies
