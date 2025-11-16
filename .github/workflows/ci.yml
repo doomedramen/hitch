@@ -75,19 +75,23 @@ jobs:
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Install OpenSSL via Homebrew and find the correct paths
+        # Install OpenSSL@3 via Homebrew and verify paths exist
         if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-          brew install openssl
-          OPENSSL_PATH=$(brew --prefix openssl)
+          brew install openssl@3
+          OPENSSL_PATH=$(brew --prefix openssl@3)
           echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
+          echo "Using OpenSSL path: $OPENSSL_PATH"
+          ls -la "$OPENSSL_PATH/lib" || echo "Lib directory not found"
         elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-          brew install openssl
-          OPENSSL_PATH=$(brew --prefix openssl)
+          brew install openssl@3
+          OPENSSL_PATH=$(brew --prefix openssl@3)
           echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
+          echo "Using OpenSSL path: $OPENSSL_PATH"
+          ls -la "$OPENSSL_PATH/lib" || echo "Lib directory not found"
         fi
 
     - name: Cache dependencies
