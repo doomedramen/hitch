@@ -129,10 +129,7 @@ impl GitOperations {
     pub fn add_and_commit(&self, files: &[&str], message: &str) -> Result<()> {
         // Add files
         for file in files {
-            let output = Command::new("git")
-                .args(["add", file])
-                .output()
-                .context(format!("Failed to add file '{}'", file))?;
+            let output = self.run_git_command(&["add", file])?;
 
             if !output.status.success() {
                 return Err(anyhow::anyhow!(
@@ -144,10 +141,7 @@ impl GitOperations {
         }
 
         // Commit (bypass hooks since this is an automated metadata operation)
-        let output = Command::new("git")
-            .args(["commit", "--no-verify", "-m", message])
-            .output()
-            .context("Failed to commit files")?;
+        let output = self.run_git_command(&["commit", "--no-verify", "-m", message])?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
