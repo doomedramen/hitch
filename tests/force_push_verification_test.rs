@@ -83,7 +83,7 @@ mod force_push_tests {
     /// Test that git push --force --set-upstream sets up upstream tracking
     #[test]
     #[ignore]
-    fn test_git_force_push_with_set_upstream() -> Result<()> {
+        fn test_git_force_push_with_set_upstream() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create a local branch without any upstream tracking
             run_git_command(test_env, &["checkout", "-b", "test-branch"])?;
@@ -123,7 +123,7 @@ mod force_push_tests {
     /// Test that git push --force works without --set-upstream
     #[test]
     #[ignore]
-    fn test_git_force_push_without_set_upstream() -> Result<()> {
+        fn test_git_force_push_without_set_upstream() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create a local branch without any upstream tracking
             run_git_command(test_env, &["checkout", "-b", "test-branch-2"])?;
@@ -148,7 +148,7 @@ mod force_push_tests {
     /// Test that upstream tracking works after multiple force pushes with --set-upstream
     #[test]
     #[ignore]
-    fn test_multiple_force_pushes_preserve_upstream_tracking() -> Result<()> {
+        fn test_multiple_force_pushes_preserve_upstream_tracking() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create a local branch
             run_git_command(test_env, &["checkout", "-b", "test-branch-3"])?;
@@ -194,7 +194,7 @@ mod force_push_tests {
     /// Test that git push --set-upstream fails when remote doesn't exist
     #[test]
     #[ignore]
-    fn test_push_to_nonexistent_remote_with_set_upstream() -> Result<()> {
+        fn test_push_to_nonexistent_remote_with_set_upstream() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create a local branch
             run_git_command(test_env, &["checkout", "-b", "test-branch-4"])?;
@@ -245,7 +245,7 @@ mod force_push_tests {
     /// Test behavior when remote branch doesn't exist but --set-upstream is used
     #[test]
     #[ignore]
-    fn test_push_to_new_remote_branch_with_set_upstream() -> Result<()> {
+        fn test_push_to_new_remote_branch_with_set_upstream() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create a local branch
             run_git_command(test_env, &["checkout", "-b", "test-branch-5"])?;
@@ -285,7 +285,7 @@ mod force_push_tests {
     /// Test the exact git command syntax that Hitch uses
     #[test]
     #[ignore]
-    fn test_hitch_git_command_syntax() -> Result<()> {
+        fn test_hitch_git_command_syntax() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Set up a proper remote for testing
             setup_remote(test_env)?;
@@ -338,7 +338,7 @@ mod force_push_tests {
     /// Test that branch deletion and recreation with --set-upstream works
     #[test]
     #[ignore]
-    fn test_branch_recreation_with_set_upstream() -> Result<()> {
+        fn test_branch_recreation_with_set_upstream() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create and set up upstream tracking for a branch
             run_git_command(test_env, &["checkout", "-b", "test-recreate"])?;
