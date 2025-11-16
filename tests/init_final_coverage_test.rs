@@ -8,20 +8,9 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_init_line69_remote_push_success() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Run init and check for the specific line 69 message
+        // Run init and check for the specific line 69 message (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--verbose"])
             .current_dir(test_env.path())
@@ -39,20 +28,9 @@ fn test_init_line69_remote_push_success() -> Result<()> {
 #[test]
 fn test_init_with_custom_environments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Run init with custom environments
+        // Run init with custom environments (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--environments", "dev,staging,production"])
             .current_dir(test_env.path())
@@ -81,20 +59,9 @@ fn test_init_with_custom_environments() -> Result<()> {
 #[test]
 fn test_init_skip_push_flag() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Run init with --no-push flag
+        // Run init with --no-push flag (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--no-push", "--verbose"])
             .current_dir(test_env.path())
@@ -119,20 +86,9 @@ fn test_init_skip_push_flag() -> Result<()> {
 #[test]
 fn test_init_default_environments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Run init with default settings
+        // Run init with default settings (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init"])
             .current_dir(test_env.path())
@@ -158,20 +114,9 @@ fn test_init_default_environments() -> Result<()> {
 #[test]
 fn test_init_already_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // First init should succeed
+        // First init should succeed (this is the first init)
         let output1 = Command::new(&hitch_path)
             .args(["init"])
             .current_dir(test_env.path())
@@ -203,20 +148,9 @@ fn test_init_already_initialized() -> Result<()> {
 #[test]
 fn test_init_verbose_output() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Run init with verbose output
+        // Run init with verbose output (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--verbose"])
             .current_dir(test_env.path())
@@ -243,20 +177,9 @@ fn test_init_verbose_output() -> Result<()> {
 #[test]
 fn test_init_coverage_edge_cases() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
         let hitch_path = test_env.hitch_binary();
 
-        // Test edge case: init with invalid environment names
+        // Test edge case: init with invalid environment names (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--environments", "dev,invalid-env-with-dashes"])
             .current_dir(test_env.path())

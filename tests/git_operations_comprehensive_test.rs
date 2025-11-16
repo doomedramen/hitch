@@ -85,6 +85,9 @@ fn test_git_operations_new_at_path() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         let test_path = test_env.path();
 
         // Create GitOperations instance with explicit path

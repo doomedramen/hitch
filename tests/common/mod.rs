@@ -152,6 +152,7 @@ impl TestEnv {
     }
 
     /// Run hitch init command
+    #[allow(dead_code)]
     pub fn run_hitch_init(&self) -> Result<()> {
         // Initialize Hitch in the test directory
         let output = Command::new(self.hitch_binary())

@@ -166,16 +166,7 @@ fn test_cli_global_flags() -> Result<()> {
 #[test]
 fn test_cli_no_git_repository() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
+        // NOTE: Do NOT initialize hitch - this test checks what happens when hitch is not initialized
 
         let binary_path = test_env.hitch_binary();
 

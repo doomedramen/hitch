@@ -20,6 +20,9 @@ fn test_git_operations_basic_functionality() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         // Test git operations
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -82,6 +85,9 @@ fn test_git_operations_dirty_working_directory() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -126,6 +132,9 @@ fn test_git_operations_detached_head() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -166,6 +175,9 @@ fn test_git_operations_file_operations() -> Result<()> {
         if !git_ops.is_working_directory_clean()? {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
+
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
 
         // Create test branch
         Command::new("git")
@@ -233,6 +245,9 @@ fn test_git_operations_push() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -262,6 +277,9 @@ fn test_git_operations_merge() -> Result<()> {
         if !git_ops.is_working_directory_clean()? {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
+
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
 
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -316,6 +334,9 @@ fn test_git_operations_error_handling() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -359,6 +380,9 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
         // Recreate the scenario from the failing rebuild test exactly
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -386,8 +410,10 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
 
         let config = serde_json::json!({ "environments": environments });
 
-        // Create hitch-metadata branch and write config
-        git_ops.create_orphan_branch("hitch-metadata")?;
+        // Create hitch-metadata branch and write config (only if it doesn't already exist)
+        if !git_ops.branch_exists("hitch-metadata")? {
+            git_ops.create_orphan_branch("hitch-metadata")?;
+        }
         std::fs::write(
             test_env.path().join("hitch.json"),
             serde_json::to_string_pretty(&config)?,

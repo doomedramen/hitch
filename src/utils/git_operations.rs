@@ -120,9 +120,9 @@ impl GitOperations {
     }
 
     pub fn add_and_commit(&self, files: &[&str], message: &str) -> Result<()> {
-        // Add files
+        // Add files (use -f to force-add files that might be ignored by .gitignore)
         for file in files {
-            let output = self.run_git_command(&["add", file])?;
+            let output = self.run_git_command(&["add", "-f", file])?;
 
             if !output.status.success() {
                 return Err(anyhow::anyhow!(

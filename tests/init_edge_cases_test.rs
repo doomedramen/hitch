@@ -9,36 +9,6 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_init_already_initialized_error() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
-        // Ensure working tree is clean before creating hitch-metadata branch
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        let status_output = String::from_utf8_lossy(&output.stdout);
-        if !status_output.trim().is_empty() {
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(test_env.path())
-                .output()?;
-
-            Command::new("git")
-                .args(["commit", "-m", "Clean up before hitch init test"])
-                .current_dir(test_env.path())
-                .output()?;
-        }
-
         // Manually create hitch-metadata branch to simulate already initialized state
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -62,7 +32,7 @@ fn test_init_already_initialized_error() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        // Now init should fail because hitch-metadata branch already exists
+        // Now init should fail because hitch-metadata branch already exists (this is the first init attempt)
         let output = Command::new(test_env.hitch_binary())
             .args(["init"])
             .current_dir(test_env.path())
@@ -91,37 +61,7 @@ fn test_init_already_initialized_error() -> Result<()> {
 #[test]
 fn test_init_remote_push_success() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
-        // Ensure working tree is clean before running hitch init
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        let status_output = String::from_utf8_lossy(&output.stdout);
-        if !status_output.trim().is_empty() {
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(test_env.path())
-                .output()?;
-
-            Command::new("git")
-                .args(["commit", "-m", "Clean up before hitch init test"])
-                .current_dir(test_env.path())
-                .output()?;
-        }
-
-        // Set up a fake remote
+        // Set up a fake remote BEFORE init
         Command::new("git")
             .args([
                 "remote",
@@ -132,7 +72,7 @@ fn test_init_remote_push_success() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        // Run init to test remote push (will fail but should try)
+        // Run init to test remote push (will fail but should try) - this is the first init
         let output = Command::new(test_env.hitch_binary())
             .args(["init"])
             .current_dir(test_env.path())
@@ -163,43 +103,13 @@ fn test_init_remote_push_success() -> Result<()> {
 #[test]
 fn test_init_original_branch_check() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
-        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
-            test_env.path().to_str().unwrap(),
-        )?;
-        if !git_ops.is_working_directory_clean()? {
-            git_ops.clean_working_directory("Clean up after hitch init")?;
-        }
-
-        // Ensure working tree is clean before running hitch init
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        let status_output = String::from_utf8_lossy(&output.stdout);
-        if !status_output.trim().is_empty() {
-            Command::new("git")
-                .args(["add", "."])
-                .current_dir(test_env.path())
-                .output()?;
-
-            Command::new("git")
-                .args(["commit", "-m", "Clean up before hitch init test"])
-                .current_dir(test_env.path())
-                .output()?;
-        }
-
-        // Create and switch to a different branch
+        // Create and switch to a different branch BEFORE init
         Command::new("git")
             .args(["checkout", "-b", "feature"])
             .current_dir(test_env.path())
             .output()?;
 
-        // Run init with verbose to see branch checking
+        // Run init with verbose to see branch checking - this is the first init
         let output = Command::new(test_env.hitch_binary())
             .args(["init", "--verbose"])
             .current_dir(test_env.path())
