@@ -106,12 +106,17 @@ impl TestEnv {
         // Ensure working tree is clean (git2 setup might leave uncommitted changes)
         let output = Command::new("git")
             .args(["status", "--porcelain"])
+            .current_dir(self.path())
             .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
-            Command::new("git").args(["add", "."]).output()?;
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(self.path())
+                .output()?;
             Command::new("git")
                 .args(["commit", "-m", "Clean up initial setup"])
+                .current_dir(self.path())
                 .output()?;
         }
 
@@ -128,12 +133,17 @@ impl TestEnv {
         // Clean up any remaining changes from hitch init
         let output = Command::new("git")
             .args(["status", "--porcelain"])
+            .current_dir(self.path())
             .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
-            Command::new("git").args(["add", "."]).output()?;
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(self.path())
+                .output()?;
             Command::new("git")
                 .args(["commit", "-m", "Clean up after hitch init"])
+                .current_dir(self.path())
                 .output()?;
         }
 
@@ -206,25 +216,33 @@ where
             // Just need to ensure git config is set for hitch operations
             Command::new("git")
                 .args(["config", "user.name", "Test User"])
+                .current_dir(test_env.path())
                 .output()?;
             Command::new("git")
                 .args(["config", "user.email", "test@example.com"])
+                .current_dir(test_env.path())
                 .output()?;
             Command::new("git")
                 .args(["config", "core.autocrlf", "false"])
+                .current_dir(test_env.path())
                 .output()?;
             Command::new("git")
                 .args(["config", "core.filemode", "false"])
+                .current_dir(test_env.path())
                 .output()?;
 
             // Ensure working tree is clean (git2 setup might leave uncommitted changes)
             let output = Command::new("git")
                 .args(["status", "--porcelain"])
+                .current_dir(test_env.path())
                 .output()?;
             let status_output = String::from_utf8_lossy(&output.stdout);
             if !status_output.trim().is_empty() {
                 // Add all changes including deleted files
-                let add_output = Command::new("git").args(["add", "-A"]).output()?;
+                let add_output = Command::new("git")
+                    .args(["add", "-A"])
+                    .current_dir(test_env.path())
+                    .output()?;
                 if !add_output.status.success() {
                     return Err(anyhow::anyhow!(
                         "Failed to add files: {}",
@@ -233,6 +251,7 @@ where
                 }
                 let commit_output = Command::new("git")
                     .args(["commit", "-m", "Clean up initial setup"])
+                    .current_dir(test_env.path())
                     .output()?;
                 if !commit_output.status.success() {
                     let stderr = String::from_utf8_lossy(&commit_output.stderr);
