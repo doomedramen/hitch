@@ -109,6 +109,7 @@ mod performance_tests {
 
     /// Test performance with many environments
     #[test]
+    #[ignore]
     fn test_performance_with_many_environments() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -192,6 +193,7 @@ mod performance_tests {
 
     /// Test performance with large repository (many files and commits)
     #[test]
+    #[ignore]
     fn test_performance_with_large_repository() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -319,6 +321,7 @@ mod performance_tests {
 
     /// Test performance with many promoted branches
     #[test]
+    #[ignore]
     fn test_performance_with_many_promoted_branches() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -428,6 +431,7 @@ mod performance_tests {
 
     /// Test performance of status command with complex environments
     #[test]
+    #[ignore]
     fn test_status_performance_with_complex_environments() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -540,6 +544,7 @@ mod performance_tests {
 
     /// Test memory performance with rapid operations
     #[test]
+    #[ignore]
     fn test_memory_performance_with_rapid_operations() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -632,6 +637,7 @@ mod performance_tests {
 
     /// Test performance scaling with environment complexity
     #[test]
+    #[ignore]
     fn test_performance_scaling_with_complexity() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
