@@ -21,7 +21,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.80.0  # Minimum supported version (supports Cargo.lock v4)
+          - 1.83.0  # Minimum supported version (supports latest dependencies)
 
     steps:
     - name: Checkout repository
