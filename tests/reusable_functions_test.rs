@@ -8,7 +8,7 @@ use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_pre_check_function() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Test pre-check in valid git repository
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
@@ -89,7 +89,7 @@ fn test_pre_check_function_dirty_working_directory() -> Result<()> {
 
 #[test]
 fn test_switch_to_function() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Create feature branch and some content
         Command::new("git")
             .args(["checkout", "-b", "feature/test"])
@@ -160,7 +160,7 @@ fn test_switch_to_function() -> Result<()> {
 
 #[test]
 fn test_modify_metadata_function() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Test that hitch init creates proper metadata structure using access_metadata
         let hitch_path = test_env.hitch_binary();
 
@@ -231,7 +231,7 @@ fn test_modify_metadata_function() -> Result<()> {
 
 #[test]
 fn test_with_locked_env_function() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize Hitch to set up metadata
         let hitch_path = test_env.hitch_binary();
 
@@ -269,7 +269,7 @@ fn test_with_locked_env_function() -> Result<()> {
 #[test]
 fn test_global_flags_integration() -> Result<()> {
     // Test --verbose flag
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         let verbose_output = Command::new(&hitch_path)
@@ -296,7 +296,7 @@ fn test_global_flags_integration() -> Result<()> {
     })?;
 
     // Test --no-push flag
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         let no_push_output = Command::new(&hitch_path)
