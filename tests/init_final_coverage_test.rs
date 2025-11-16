@@ -7,7 +7,7 @@ use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_init_line69_remote_push_success() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Run init and check for the specific line 69 message
@@ -27,7 +27,7 @@ fn test_init_line69_remote_push_success() -> Result<()> {
 
 #[test]
 fn test_init_with_custom_environments() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Run init with custom environments
@@ -58,7 +58,7 @@ fn test_init_with_custom_environments() -> Result<()> {
 
 #[test]
 fn test_init_skip_push_flag() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Run init with --no-push flag
@@ -85,7 +85,7 @@ fn test_init_skip_push_flag() -> Result<()> {
 
 #[test]
 fn test_init_default_environments() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Run init with default settings
@@ -113,7 +113,7 @@ fn test_init_default_environments() -> Result<()> {
 
 #[test]
 fn test_init_already_initialized() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // First init should succeed
@@ -146,7 +146,7 @@ fn test_init_already_initialized() -> Result<()> {
 
 #[test]
 fn test_init_verbose_output() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Run init with verbose output
@@ -175,7 +175,7 @@ fn test_init_verbose_output() -> Result<()> {
 
 #[test]
 fn test_init_coverage_edge_cases() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let hitch_path = test_env.hitch_binary();
 
         // Test edge case: init with invalid environment names
