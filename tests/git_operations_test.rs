@@ -9,6 +9,17 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_git_operations_basic_functionality() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Test git operations
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -60,6 +71,17 @@ fn test_git_operations_basic_functionality() -> Result<()> {
 #[test]
 fn test_git_operations_dirty_working_directory() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -93,6 +115,17 @@ fn test_git_operations_dirty_working_directory() -> Result<()> {
 #[test]
 fn test_git_operations_detached_head() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -123,6 +156,17 @@ fn test_git_operations_detached_head() -> Result<()> {
 #[test]
 fn test_git_operations_file_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create test branch
         Command::new("git")
             .args(["checkout", "-b", "test-branch"])
@@ -178,6 +222,17 @@ fn test_git_operations_invalid_repository() -> Result<()> {
 #[test]
 fn test_git_operations_push() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -197,6 +252,17 @@ fn test_git_operations_push() -> Result<()> {
 #[test]
 fn test_git_operations_merge() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -239,6 +305,17 @@ fn test_git_operations_merge() -> Result<()> {
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -271,6 +348,17 @@ fn test_git_operations_error_handling() -> Result<()> {
 #[test]
 fn test_debug_merge_conflicts_scenario() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Recreate the scenario from the failing rebuild test exactly
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),

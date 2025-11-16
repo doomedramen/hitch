@@ -9,6 +9,17 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_pre_check_function() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Test pre-check in valid git repository
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
@@ -61,6 +72,17 @@ fn test_pre_check_function_failures() -> Result<()> {
 #[test]
 fn test_pre_check_function_dirty_working_directory() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create dirty file (uncommitted changes)
         fs::write(test_env.path().join("dirty.txt"), "This is uncommitted")?;
 
@@ -90,6 +112,17 @@ fn test_pre_check_function_dirty_working_directory() -> Result<()> {
 #[test]
 fn test_switch_to_function() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create feature branch and some content
         Command::new("git")
             .args(["checkout", "-b", "feature/test"])
@@ -161,6 +194,17 @@ fn test_switch_to_function() -> Result<()> {
 #[test]
 fn test_modify_metadata_function() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Test that hitch init creates proper metadata structure using access_metadata
         let hitch_path = test_env.hitch_binary();
 
@@ -232,6 +276,17 @@ fn test_modify_metadata_function() -> Result<()> {
 #[test]
 fn test_with_locked_env_function() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize Hitch to set up metadata
         let hitch_path = test_env.hitch_binary();
 
@@ -270,6 +325,17 @@ fn test_with_locked_env_function() -> Result<()> {
 fn test_global_flags_integration() -> Result<()> {
     // Test --verbose flag
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let hitch_path = test_env.hitch_binary();
 
         let verbose_output = Command::new(&hitch_path)
@@ -297,6 +363,17 @@ fn test_global_flags_integration() -> Result<()> {
 
     // Test --no-push flag
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let hitch_path = test_env.hitch_binary();
 
         let no_push_output = Command::new(&hitch_path)

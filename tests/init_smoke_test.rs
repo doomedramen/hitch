@@ -6,7 +6,18 @@ use common::{with_test_env, SetupLevel};
 
 #[test]
 fn test_init_smoke_test() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Run hitch init again to test the smoke test functionality
         let binary_path = test_env.hitch_binary();
         let output = Command::new(&binary_path).args(["init"]).output()?;
@@ -29,20 +40,13 @@ fn test_init_smoke_test() -> Result<()> {
         );
 
         // Check that hitch-metadata branch exists
-        std::env::set_current_dir(test_env.path())?;
-        let branch_output = Command::new("git").args(["branch"]).output()?;
-
-        let branches = String::from_utf8(branch_output.stdout)?;
         assert!(
-            branches.contains("hitch-metadata"),
-            "hitch-metadata branch should exist. Got branches: {}",
-            branches
+            git_ops.branch_exists("hitch-metadata")?,
+            "hitch-metadata branch should exist"
         );
 
         // Check that .gitignore and hitch.json files exist in hitch-metadata branch
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
 
         assert!(
             test_env.path().join(".gitignore").exists(),

@@ -4,7 +4,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel};
+use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Simple ANSI code stripper for test assertions
 fn strip_ansi_codes(text: &str) -> String {
@@ -33,7 +33,18 @@ fn strip_ansi_codes(text: &str) -> String {
 
 #[test]
 fn test_status_basic_display() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with environments
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -114,7 +125,7 @@ fn test_status_basic_display() -> Result<()> {
 
 #[test]
 fn test_status_locked_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
         // Initialize hitch with locked environment
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -215,7 +226,7 @@ fn test_status_not_initialized() -> Result<()> {
 
 #[test]
 fn test_status_verbose_output() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
         // Initialize hitch
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -281,7 +292,18 @@ fn test_status_verbose_output() -> Result<()> {
 
 #[test]
 fn test_status_unclean_working_directory() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -341,7 +363,18 @@ fn test_status_unclean_working_directory() -> Result<()> {
 
 #[test]
 fn test_status_empty_environments() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with empty environments
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -394,7 +427,18 @@ fn test_status_empty_environments() -> Result<()> {
 
 #[test]
 fn test_status_environmental_sorting() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with environments out of alphabetical order
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])

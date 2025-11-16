@@ -150,6 +150,21 @@ impl TestEnv {
         Ok(())
     }
 
+    /// Run hitch init command
+    pub fn run_hitch_init(&self) -> Result<()> {
+        // Initialize Hitch
+        let output = Command::new(self.hitch_binary()).args(["init"]).output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to run hitch init: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Get the path to the test directory
     pub fn path(&self) -> &Path {
         self.temp_dir.path()
@@ -182,9 +197,6 @@ pub enum SetupLevel {
     /// Git only - basic git repository setup
     #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
     GitOnly,
-    /// Complete setup - git repository + hitch initialized
-    #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
-    Complete,
 }
 
 /// Run a test with a managed test environment
@@ -199,7 +211,7 @@ where
 
     let test_env = match level {
         SetupLevel::Basic => TestEnv::new_with_git(false)?,
-        SetupLevel::GitOnly | SetupLevel::Complete => TestEnv::new_with_git(true)?,
+        SetupLevel::GitOnly => TestEnv::new_with_git(true)?,
     };
 
     // Ensure we're in the test directory before running any setup
@@ -270,7 +282,6 @@ where
             }
             Ok(())
         }
-        SetupLevel::Complete => test_env.setup_complete_hitch_env(),
     };
 
     // If setup failed, return to original directory and return error

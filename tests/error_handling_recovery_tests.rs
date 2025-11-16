@@ -142,6 +142,17 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Set up environments with promoted branches
         test_env.create_environment_config("dev", "main", &["feature/test"])?;
         test_env.create_branch_and_commit("feature/test", "Add test feature")?;
@@ -221,6 +232,17 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Add dev environment
         test_env.create_environment_config("dev", "main", &["feature/same-as-main"])?;
 
@@ -263,6 +285,17 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
 #[test]
 fn test_rebuild_cleanup_verification() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 

@@ -141,6 +141,17 @@ impl TestEnvExt for TestEnv {
 #[test]
 fn test_rebuild_basic_success() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create feature branch with content
         test_env.create_branch_with_content("feature/login", "login.md", "# Login feature\n")?;
 
@@ -198,6 +209,17 @@ fn test_rebuild_basic_success() -> Result<()> {
 #[test]
 fn test_rebuild_empty_environment() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with empty environment
         test_env.create_hitch_config_with_environment("staging", "main", &[], false)?;
 
@@ -234,6 +256,17 @@ fn test_rebuild_empty_environment() -> Result<()> {
 #[test]
 fn test_rebuild_nonexistent_environment() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with dev environment only
         test_env.create_hitch_config_with_environment("dev", "main", &[], false)?;
 
@@ -255,6 +288,17 @@ fn test_rebuild_nonexistent_environment() -> Result<()> {
 #[test]
 fn test_rebuild_locked_environment() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with locked environment
         test_env.create_hitch_config_with_environment("production", "main", &[], true)?;
 
@@ -285,6 +329,17 @@ fn test_rebuild_locked_environment() -> Result<()> {
 #[test]
 fn test_rebuild_missing_branch() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with environment that references non-existent branch
         test_env.create_hitch_config_with_environment(
             "dev",
@@ -311,6 +366,17 @@ fn test_rebuild_missing_branch() -> Result<()> {
 #[test]
 fn test_rebuild_missing_base_branch() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Initialize hitch with environment that references non-existent base branch
         test_env.create_hitch_config_with_environment("dev", "nonexistent-base", &[], false)?;
 
@@ -332,6 +398,17 @@ fn test_rebuild_missing_base_branch() -> Result<()> {
 #[test]
 fn test_rebuild_multiple_branches() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create multiple feature branches
         let branches = vec!["feature/login", "feature/ui", "feature/api"];
 
@@ -418,6 +495,17 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 #[test]
 fn test_rebuild_with_git_hooks() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create feature branch
         test_env.create_branch_with_content("feature/test", "feature.txt", "# Feature\n")?;
 
@@ -486,6 +574,17 @@ exit 0
 #[test]
 fn test_rebuild_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Try to rebuild without hitch being initialized
         let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
 

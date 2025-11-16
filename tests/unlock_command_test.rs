@@ -81,7 +81,18 @@ impl TestEnvExt for TestEnv {
 /// Test unlock command with valid locked environment
 #[test]
 fn test_unlock_valid_locked_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_environment_config("dev", "main", true)?;
 
         // Try to unlock
@@ -98,7 +109,18 @@ fn test_unlock_valid_locked_environment() -> Result<()> {
 /// Test unlock command with non-existent environment
 #[test]
 fn test_unlock_nonexistent_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Try to unlock non-existent environment
         let output = test_env.run_hitch_command(&["unlock", "nonexistent"])?;
         assert!(
@@ -115,7 +137,18 @@ fn test_unlock_nonexistent_environment() -> Result<()> {
 /// Test unlock command with unlocked environment
 #[test]
 fn test_unlock_unlocked_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_environment_config("dev", "main", false)?;
 
         // Try to unlock already unlocked environment
@@ -135,6 +168,17 @@ fn test_unlock_unlocked_environment() -> Result<()> {
 #[test]
 fn test_unlock_missing_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Test missing arguments
         let output = test_env.run_hitch_command(&["unlock"])?;
         assert!(
@@ -155,6 +199,17 @@ fn test_unlock_missing_arguments() -> Result<()> {
 #[test]
 fn test_unlock_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Try to unlock without hitch init
         let output = test_env.run_hitch_command(&["unlock", "dev"])?;
         assert!(
@@ -171,7 +226,18 @@ fn test_unlock_not_initialized() -> Result<()> {
 /// Test unlock command with verbose flag
 #[test]
 fn test_unlock_verbose_output() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_environment_config("dev", "main", true)?;
 
         // Try to unlock with verbose flag
@@ -194,7 +260,18 @@ fn test_unlock_verbose_output() -> Result<()> {
 /// Test unlock command workflow integration
 #[test]
 fn test_unlock_workflow_integration() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         test_env.create_environment_config("dev", "main", true)?;
 
         // 1. Unlock the environment
@@ -212,7 +289,18 @@ fn test_unlock_workflow_integration() -> Result<()> {
 /// Test unlock command basic functionality
 #[test]
 fn test_unlock_basic_functionality() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create environment locked by different user
         let mut environments = std::collections::HashMap::new();
         environments.insert(

@@ -20,10 +20,10 @@ impl common::TestEnv {
             .current_dir(&remote_dir)
             .output()?;
 
-        Command::new("git")
-            .args(["remote", "add", "origin", remote_dir.to_str().unwrap()])
-            .current_dir(test_path)
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_path.to_str().unwrap(),
+        )?;
+        git_ops.run_git_command(&["remote", "add", "origin", remote_dir.to_str().unwrap()])?;
 
         Ok(())
     }
@@ -33,6 +33,17 @@ impl common::TestEnv {
 #[test]
 fn test_git_operations_create_orphan_branch() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -49,10 +60,7 @@ fn test_git_operations_create_orphan_branch() -> Result<()> {
         );
 
         // Verify the branch has no commits
-        let output = Command::new("git")
-            .args(["log", "--oneline"])
-            .current_dir(test_path)
-            .output()?;
+        let output = git_ops.run_git_command(&["log", "--oneline"])?;
         let log_output = String::from_utf8_lossy(&output.stdout);
         assert!(
             log_output.trim().is_empty(),
@@ -67,6 +75,17 @@ fn test_git_operations_create_orphan_branch() -> Result<()> {
 #[test]
 fn test_git_operations_new_at_path() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         // Create GitOperations instance with explicit path
@@ -93,6 +112,17 @@ fn test_git_operations_new_at_path() -> Result<()> {
 #[test]
 fn test_git_operations_add_and_commit() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -105,10 +135,7 @@ fn test_git_operations_add_and_commit() -> Result<()> {
         git_ops.add_and_commit(&["test.txt"], "Add test file")?;
 
         // Verify the commit was created
-        let output = Command::new("git")
-            .args(["log", "--oneline", "-1"])
-            .current_dir(test_path)
-            .output()?;
+        let output = git_ops.run_git_command(&["log", "--oneline", "-1"])?;
         let log_output = String::from_utf8_lossy(&output.stdout);
         assert!(
             log_output.contains("Add test file"),
@@ -123,6 +150,17 @@ fn test_git_operations_add_and_commit() -> Result<()> {
 #[test]
 fn test_git_operations_file_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -155,29 +193,28 @@ fn test_git_operations_file_operations() -> Result<()> {
 #[test]
 fn test_git_operations_branch_exists() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
             hitch::utils::git_operations::GitOperations::new_at_path(test_path.to_str().unwrap())?;
 
         // Create a test branch
-        Command::new("git")
-            .args(["checkout", "-b", "test-branch"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.run_git_command(&["checkout", "-b", "test-branch"])?;
         fs::write(test_path.join("test.txt"), "Test")?;
-        Command::new("git")
-            .args(["add", "test.txt"])
-            .current_dir(test_path)
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Test"])
-            .current_dir(test_path)
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.run_git_command(&["add", "test.txt"])?;
+        git_ops.run_git_command(&["commit", "-m", "Test"])?;
+        git_ops.checkout_branch("main")?;
 
         // Test branch_exists (local branches only)
         assert!(
@@ -211,6 +248,17 @@ fn test_git_operations_branch_exists() -> Result<()> {
 #[test]
 fn test_git_operations_branch_management() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -237,10 +285,7 @@ fn test_git_operations_branch_management() -> Result<()> {
         );
 
         // Test delete branch
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_path)
-            .output()?; // Switch off branch first
+        git_ops.checkout_branch("main")?; // Switch off branch first
         git_ops.delete_branch("renamed-branch", false)?;
         assert!(
             !git_ops.branch_exists_anywhere("renamed-branch")?,
@@ -249,23 +294,11 @@ fn test_git_operations_branch_management() -> Result<()> {
 
         // Test force delete (with unmerged changes)
         git_ops.create_branch_from("temp-branch", "main")?;
-        Command::new("git")
-            .args(["checkout", "temp-branch"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.checkout_branch("temp-branch")?;
         fs::write(test_path.join("temp.txt"), "temp")?;
-        Command::new("git")
-            .args(["add", "temp.txt"])
-            .current_dir(test_path)
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Temp"])
-            .current_dir(test_path)
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.run_git_command(&["add", "temp.txt"])?;
+        git_ops.run_git_command(&["commit", "-m", "Temp"])?;
+        git_ops.checkout_branch("main")?;
 
         git_ops.delete_branch("temp-branch", true)?;
         assert!(
@@ -281,6 +314,17 @@ fn test_git_operations_branch_management() -> Result<()> {
 #[test]
 fn test_git_operations_commit_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -307,6 +351,17 @@ fn test_git_operations_commit_operations() -> Result<()> {
 #[test]
 fn test_git_operations_remote_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         test_env.init_git_repo_with_remote()?;
@@ -317,20 +372,11 @@ fn test_git_operations_remote_operations() -> Result<()> {
         // Create a branch and push it
         git_ops.create_branch_from("test-remote", "main")?;
         fs::write(test_path.join("remote-test.txt"), "Remote test")?;
-        Command::new("git")
-            .args(["add", "remote-test.txt"])
-            .current_dir(test_path)
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Remote test"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.run_git_command(&["add", "remote-test.txt"])?;
+        git_ops.run_git_command(&["commit", "-m", "Remote test"])?;
 
         // Set upstream and push
-        Command::new("git")
-            .args(["push", "--set-upstream", "origin", "test-remote"])
-            .current_dir(test_path)
-            .output()?;
+        git_ops.run_git_command(&["push", "--set-upstream", "origin", "test-remote"])?;
 
         // Test fetch
         let _fetch_result = git_ops.fetch_branch("test-remote");
@@ -349,6 +395,17 @@ fn test_git_operations_remote_operations() -> Result<()> {
 #[test]
 fn test_git_operations_squash_merge() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         let git_ops =
@@ -372,10 +429,7 @@ fn test_git_operations_squash_merge() -> Result<()> {
         git_ops.squash_merge("feature-branch", "Squashed feature branch")?;
 
         // Verify the squash merge worked
-        let output = Command::new("git")
-            .args(["log", "--oneline", "-2"])
-            .current_dir(test_path)
-            .output()?;
+        let output = git_ops.run_git_command(&["log", "--oneline", "-2"])?;
         let log_output = String::from_utf8_lossy(&output.stdout);
         assert!(
             log_output.contains("Squashed feature branch"),
@@ -398,6 +452,17 @@ fn test_git_operations_squash_merge() -> Result<()> {
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let test_path = test_env.path();
 
         // Test operations in non-git directory - create a temp directory without git

@@ -9,6 +9,17 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_cli_basic_functionality() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         // Test help command
@@ -29,6 +40,17 @@ fn test_cli_basic_functionality() -> Result<()> {
 #[test]
 fn test_cli_version() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         let output = Command::new(&binary_path).args(["--version"]).output()?;
@@ -44,6 +66,17 @@ fn test_cli_version() -> Result<()> {
 #[test]
 fn test_cli_invalid_command() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         let output = Command::new(&binary_path)
@@ -63,6 +96,17 @@ fn test_cli_invalid_command() -> Result<()> {
 #[test]
 fn test_cli_missing_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         // Test promote without arguments
@@ -85,6 +129,17 @@ fn test_cli_missing_arguments() -> Result<()> {
 #[test]
 fn test_cli_global_flags() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         // Initialize hitch with verbose flag
@@ -111,6 +166,17 @@ fn test_cli_global_flags() -> Result<()> {
 #[test]
 fn test_cli_no_git_repository() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         // Test status command without hitch.json
@@ -138,6 +204,17 @@ fn test_cli_no_git_repository() -> Result<()> {
 #[test]
 fn test_cli_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         let binary_path = test_env.hitch_binary();
 
         // Test invalid flag

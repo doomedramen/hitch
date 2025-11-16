@@ -8,6 +8,17 @@ use common::{with_test_env, SetupLevel};
 #[test]
 fn test_init_with_environments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
@@ -39,10 +50,7 @@ fn test_init_with_environments() -> Result<()> {
         );
 
         // Switch to hitch-metadata branch and check hitch.json
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
 
         let hitch_json_content = std::fs::read_to_string(test_env.path().join("hitch.json"))?;
 
@@ -73,6 +81,17 @@ fn test_init_with_environments() -> Result<()> {
 #[test]
 fn test_init_with_verbose_flag() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
@@ -112,6 +131,17 @@ fn test_init_with_verbose_flag() -> Result<()> {
 #[test]
 fn test_init_with_no_push_flag() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
@@ -136,10 +166,7 @@ fn test_init_with_no_push_flag() -> Result<()> {
         );
 
         // Verify the commit was still made locally
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
 
         // Check that files exist
         assert!(
@@ -193,6 +220,17 @@ fn test_init_error_non_git_repo() -> Result<()> {
 #[test]
 fn test_init_error_dirty_working_directory() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Create dirty file (uncommitted changes)
         std::fs::write(test_env.path().join("dirty.txt"), "This is uncommitted")?;
 
