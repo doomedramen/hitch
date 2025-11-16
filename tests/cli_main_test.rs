@@ -12,7 +12,7 @@ fn test_cli_basic_functionality() -> Result<()> {
         let binary_path = test_env.hitch_binary();
 
         // Test help command
-        let output = Command::new(&binary_path).args(&["--help"]).output()?;
+        let output = Command::new(&binary_path).args(["--help"]).output()?;
         assert!(output.status.success(), "Help should succeed");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -31,7 +31,7 @@ fn test_cli_version() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         let binary_path = test_env.hitch_binary();
 
-        let output = Command::new(&binary_path).args(&["--version"]).output()?;
+        let output = Command::new(&binary_path).args(["--version"]).output()?;
         assert!(output.status.success(), "Version should succeed");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("hitch 1.0.0"));
@@ -47,7 +47,7 @@ fn test_cli_invalid_command() -> Result<()> {
         let binary_path = test_env.hitch_binary();
 
         let output = Command::new(&binary_path)
-            .args(&["invalid-command"])
+            .args(["invalid-command"])
             .output()?;
         assert!(!output.status.success(), "Invalid command should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -66,13 +66,13 @@ fn test_cli_missing_arguments() -> Result<()> {
         let binary_path = test_env.hitch_binary();
 
         // Test promote without arguments
-        let output = Command::new(&binary_path).args(&["promote"]).output()?;
+        let output = Command::new(&binary_path).args(["promote"]).output()?;
         assert!(!output.status.success(), "Promote without args should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("required") || stderr.contains("arguments"));
 
         // Test unlock without arguments
-        let output = Command::new(&binary_path).args(&["unlock"]).output()?;
+        let output = Command::new(&binary_path).args(["unlock"]).output()?;
         assert!(!output.status.success(), "Unlock without args should fail");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("required") || stderr.contains("arguments"));
@@ -89,7 +89,7 @@ fn test_cli_global_flags() -> Result<()> {
 
         // Initialize hitch with verbose flag
         let output = Command::new(&binary_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -115,7 +115,7 @@ fn test_cli_no_git_repository() -> Result<()> {
 
         // Test status command without hitch.json
         let output = Command::new(&binary_path)
-            .args(&["status"])
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
         assert!(
@@ -142,13 +142,13 @@ fn test_cli_error_handling() -> Result<()> {
 
         // Test invalid flag
         let output = Command::new(&binary_path)
-            .args(&["--invalid-flag"])
+            .args(["--invalid-flag"])
             .output()?;
         assert!(!output.status.success(), "Invalid flag should fail");
 
         // Test command that requires hitch init
         let output = Command::new(&binary_path)
-            .args(&["unlock", "test"])
+            .args(["unlock", "test"])
             .current_dir(test_env.path())
             .output()?;
         assert!(!output.status.success(), "Unlock without init should fail");
@@ -168,7 +168,7 @@ fn test_cli_complete_workflow() -> Result<()> {
 
         // Step 1: Add environment
         let output = Command::new(&binary_path)
-            .args(&["add", "test"])
+            .args(["add", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(output.status.success(), "Add command should succeed");
@@ -180,7 +180,7 @@ fn test_cli_complete_workflow() -> Result<()> {
 
         // Step 2: Lock environment
         let output = Command::new(&binary_path)
-            .args(&["lock", "test"])
+            .args(["lock", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(output.status.success(), "Lock command should succeed");
@@ -192,7 +192,7 @@ fn test_cli_complete_workflow() -> Result<()> {
 
         // Step 3: Try to lock again (should fail)
         let output = Command::new(&binary_path)
-            .args(&["lock", "test"])
+            .args(["lock", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -207,7 +207,7 @@ fn test_cli_complete_workflow() -> Result<()> {
 
         // Step 4: Unlock environment
         let output = Command::new(&binary_path)
-            .args(&["unlock", "test"])
+            .args(["unlock", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(output.status.success(), "Unlock command should succeed");
@@ -219,7 +219,7 @@ fn test_cli_complete_workflow() -> Result<()> {
 
         // Step 5: Remove environment
         let output = Command::new(&binary_path)
-            .args(&["remove", "test"])
+            .args(["remove", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -245,13 +245,13 @@ fn test_cli_error_validation() -> Result<()> {
 
         // Test duplicate environment addition
         let output = Command::new(&binary_path)
-            .args(&["add", "test"])
+            .args(["add", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(output.status.success(), "First add should succeed");
 
         let output = Command::new(&binary_path)
-            .args(&["add", "test"])
+            .args(["add", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -266,7 +266,7 @@ fn test_cli_error_validation() -> Result<()> {
 
         // Test operations on non-existent environment
         let output = Command::new(&binary_path)
-            .args(&["remove", "nonexistent"])
+            .args(["remove", "nonexistent"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -280,7 +280,7 @@ fn test_cli_error_validation() -> Result<()> {
         );
 
         let output = Command::new(&binary_path)
-            .args(&["lock", "nonexistent"])
+            .args(["lock", "nonexistent"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -289,7 +289,7 @@ fn test_cli_error_validation() -> Result<()> {
         );
 
         let output = Command::new(&binary_path)
-            .args(&["unlock", "nonexistent"])
+            .args(["unlock", "nonexistent"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -310,7 +310,7 @@ fn test_cli_guard_functionality() -> Result<()> {
 
         // Test guard when not on environment branch
         let output = Command::new(&binary_path)
-            .args(&["guard"])
+            .args(["guard"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -325,7 +325,7 @@ fn test_cli_guard_functionality() -> Result<()> {
 
         // Test guard for specific environment
         let output = Command::new(&binary_path)
-            .args(&["guard", "test"])
+            .args(["guard", "test"])
             .current_dir(_test_env.path())
             .output()?;
         assert!(
@@ -347,7 +347,7 @@ fn test_cli_promote_workflow() -> Result<()> {
 
         // Add environment for testing
         let output = Command::new(&binary_path)
-            .args(&["add", "dev"])
+            .args(["add", "dev"])
             .current_dir(_test_env.path())
             .output()?;
         if !output.status.success() {
@@ -364,18 +364,18 @@ fn test_cli_promote_workflow() -> Result<()> {
         // Create a simple test branch manually (from main to avoid conflicts)
         std::env::set_current_dir(_test_env.path())?;
         Command::new("git")
-            .args(&["checkout", "-b", "feature/test"])
+            .args(["checkout", "-b", "feature/test"])
             .output()?;
         std::fs::write("test.txt", "test content")?;
-        Command::new("git").args(&["add", "."]).output()?;
+        Command::new("git").args(["add", "."]).output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Test commit"])
+            .args(["commit", "-m", "Test commit"])
             .output()?;
-        Command::new("git").args(&["checkout", "main"]).output()?;
+        Command::new("git").args(["checkout", "main"]).output()?;
 
         // Test promote functionality (expect merge conflicts, but that's ok - we're testing the CLI)
         let output = Command::new(&binary_path)
-            .args(&["promote", "feature/test", "dev"])
+            .args(["promote", "feature/test", "dev"])
             .current_dir(_test_env.path())
             .output()?;
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -384,7 +384,7 @@ fn test_cli_promote_workflow() -> Result<()> {
         // Whether it succeeds or fails due to merge conflicts, the important thing is that it runs
         // and we can check the status
         let output = Command::new(&binary_path)
-            .args(&["status"])
+            .args(["status"])
             .current_dir(_test_env.path())
             .output()?;
         if !output.status.success() {

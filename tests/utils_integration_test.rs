@@ -12,24 +12,24 @@ impl common::TestEnv {
     /// Create a branch and commit for testing
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
         Command::new("git")
-            .args(&["checkout", "-b", branch_name])
+            .args(["checkout", "-b", branch_name])
             .current_dir(self.path())
             .output()?;
 
         fs::write(self.path().join("test.txt"), message)?;
 
         Command::new("git")
-            .args(&["add", "test.txt"])
+            .args(["add", "test.txt"])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", message])
+            .args(["commit", "-m", message])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -89,12 +89,12 @@ fn test_git_operations_integration() -> Result<()> {
 
         // Clean up
         Command::new("git")
-            .args(&["add", "dirty.txt"])
+            .args(["add", "dirty.txt"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add dirty file"])
+            .args(["commit", "-m", "Add dirty file"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -119,7 +119,7 @@ fn test_git_operations_detached_head() -> Result<()> {
 
         // Get current commit hash
         let output = Command::new("git")
-            .args(&["rev-parse", "HEAD"])
+            .args(["rev-parse", "HEAD"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -128,7 +128,7 @@ fn test_git_operations_detached_head() -> Result<()> {
 
         // Switch to detached HEAD
         Command::new("git")
-            .args(&["checkout", &commit_hash])
+            .args(["checkout", &commit_hash])
             .current_dir(test_env.path())
             .output()?;
 

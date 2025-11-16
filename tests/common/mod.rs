@@ -16,6 +16,7 @@ pub struct TestEnv {
 
 impl TestEnv {
     /// Create a new isolated test environment with git2 repository
+    #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
     pub fn new() -> Result<Self> {
         Self::new_with_git(true)
     }
@@ -89,34 +90,32 @@ impl TestEnv {
 
         // Set git config using command-line git (hitch needs this)
         Command::new("git")
-            .args(&["config", "user.name", "Test User"])
+            .args(["config", "user.name", "Test User"])
             .output()?;
         Command::new("git")
-            .args(&["config", "user.email", "test@example.com"])
+            .args(["config", "user.email", "test@example.com"])
             .output()?;
         Command::new("git")
-            .args(&["config", "core.autocrlf", "false"])
+            .args(["config", "core.autocrlf", "false"])
             .output()?;
         Command::new("git")
-            .args(&["config", "core.filemode", "false"])
+            .args(["config", "core.filemode", "false"])
             .output()?;
 
         // Ensure working tree is clean (git2 setup might leave uncommitted changes)
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
-            Command::new("git").args(&["add", "."]).output()?;
+            Command::new("git").args(["add", "."]).output()?;
             Command::new("git")
-                .args(&["commit", "-m", "Clean up initial setup"])
+                .args(["commit", "-m", "Clean up initial setup"])
                 .output()?;
         }
 
         // Initialize Hitch
-        let output = Command::new(&self.hitch_binary())
-            .args(&["init"])
-            .output()?;
+        let output = Command::new(self.hitch_binary()).args(["init"]).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -127,13 +126,13 @@ impl TestEnv {
 
         // Clean up any remaining changes from hitch init
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .output()?;
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
-            Command::new("git").args(&["add", "."]).output()?;
+            Command::new("git").args(["add", "."]).output()?;
             Command::new("git")
-                .args(&["commit", "-m", "Clean up after hitch init"])
+                .args(["commit", "-m", "Clean up after hitch init"])
                 .output()?;
         }
 
@@ -167,16 +166,20 @@ impl Drop for TestEnv {
 #[derive(Debug, Clone, Copy)]
 pub enum SetupLevel {
     /// Basic - minimal setup (alias for GitOnly)
+    #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
     Basic,
     /// Git only - basic git repository setup
+    #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
     GitOnly,
     /// Complete setup - git repository + hitch initialized
+    #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
     Complete,
 }
 
 /// Run a test with a managed test environment
 /// This function handles the creation and cleanup of the test environment
 /// and ensures proper setup based on the specified level
+#[allow(dead_code)] // Used by multiple test files
 pub fn with_test_env<F>(level: SetupLevel, test_fn: F) -> Result<()>
 where
     F: FnOnce(&TestEnv) -> Result<()>,
@@ -201,26 +204,26 @@ where
             // Basic git setup is already done in TestEnv::new()
             // Just need to ensure git config is set for hitch operations
             Command::new("git")
-                .args(&["config", "user.name", "Test User"])
+                .args(["config", "user.name", "Test User"])
                 .output()?;
             Command::new("git")
-                .args(&["config", "user.email", "test@example.com"])
+                .args(["config", "user.email", "test@example.com"])
                 .output()?;
             Command::new("git")
-                .args(&["config", "core.autocrlf", "false"])
+                .args(["config", "core.autocrlf", "false"])
                 .output()?;
             Command::new("git")
-                .args(&["config", "core.filemode", "false"])
+                .args(["config", "core.filemode", "false"])
                 .output()?;
 
             // Ensure working tree is clean (git2 setup might leave uncommitted changes)
             let output = Command::new("git")
-                .args(&["status", "--porcelain"])
+                .args(["status", "--porcelain"])
                 .output()?;
             let status_output = String::from_utf8_lossy(&output.stdout);
             if !status_output.trim().is_empty() {
                 // Add all changes including deleted files
-                let add_output = Command::new("git").args(&["add", "-A"]).output()?;
+                let add_output = Command::new("git").args(["add", "-A"]).output()?;
                 if !add_output.status.success() {
                     return Err(anyhow::anyhow!(
                         "Failed to add files: {}",
@@ -228,7 +231,7 @@ where
                     ));
                 }
                 let commit_output = Command::new("git")
-                    .args(&["commit", "-m", "Clean up initial setup"])
+                    .args(["commit", "-m", "Clean up initial setup"])
                     .output()?;
                 if !commit_output.status.success() {
                     let stderr = String::from_utf8_lossy(&commit_output.stderr);

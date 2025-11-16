@@ -205,8 +205,7 @@ fn test_branch_name_validation_patterns() -> Result<()> {
 
         if has_invalid_chars {
             // If it has invalid chars, that's expected to be caught
-            assert!(
-                false,
+            panic!(
                 "Common branch pattern contains unexpected invalid characters: {}",
                 branch_name
             );
@@ -331,6 +330,7 @@ fn test_error_message_formatting() -> Result<()> {
 
     // Simulate validation logic (same as in commands)
     let mut error_found = false;
+    #[allow(clippy::const_is_empty)]
     if invalid_name.is_empty() {
         error_found = true;
     }

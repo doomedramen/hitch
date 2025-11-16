@@ -80,7 +80,7 @@ impl TestEnvExt for TestEnv {
 
         // Write to hitch-metadata branch
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
 
@@ -94,17 +94,17 @@ impl TestEnvExt for TestEnv {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -119,25 +119,25 @@ impl TestEnvExt for TestEnv {
     ) -> Result<()> {
         // Create branch
         Command::new("git")
-            .args(&["checkout", "-b", branch_name])
+            .args(["checkout", "-b", branch_name])
             .current_dir(self.path())
             .output()?;
 
         // Write content and commit
         fs::write(self.path().join(filename), content)?;
         Command::new("git")
-            .args(&["add", filename])
+            .args(["add", filename])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", &format!("Add {}", filename)])
+            .args(["commit", "-m", &format!("Add {}", filename)])
             .current_dir(self.path())
             .output()?;
 
         // Return to main
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -145,7 +145,7 @@ impl TestEnvExt for TestEnv {
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new(&self.hitch_binary())
+        let output = Command::new(self.hitch_binary())
             .args(args)
             .current_dir(self.path())
             .output()?;
@@ -155,7 +155,7 @@ impl TestEnvExt for TestEnv {
 
     fn get_current_branch(&self) -> Result<String> {
         let output = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .current_dir(self.path())
             .output()?;
 
@@ -194,7 +194,7 @@ fn test_rebuild_basic_success() -> Result<()> {
 
         // Verify dev branch exists and has the expected content
         Command::new("git")
-            .args(&["checkout", "dev"])
+            .args(["checkout", "dev"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -209,7 +209,7 @@ fn test_rebuild_basic_success() -> Result<()> {
 
         // Verify rebuiltAt timestamp was updated
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -246,7 +246,7 @@ fn test_rebuild_empty_environment() -> Result<()> {
 
         // Verify staging branch exists and matches main branch
         Command::new("git")
-            .args(&["checkout", "staging"])
+            .args(["checkout", "staging"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -392,7 +392,7 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
         // Write to hitch-metadata branch
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -401,17 +401,17 @@ fn test_rebuild_multiple_branches() -> Result<()> {
             serde_json::to_string_pretty(&config)?,
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -447,7 +447,7 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
         // Verify dev branch exists and has content from all feature branches
         Command::new("git")
-            .args(&["checkout", "dev"])
+            .args(["checkout", "dev"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -520,7 +520,7 @@ exit 0
 
         // Verify dev branch exists and has the expected content
         Command::new("git")
-            .args(&["checkout", "dev"])
+            .args(["checkout", "dev"])
             .current_dir(test_env.path())
             .output()?;
 

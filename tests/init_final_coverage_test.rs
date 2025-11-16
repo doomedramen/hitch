@@ -12,16 +12,12 @@ fn test_init_line69_remote_push_success() -> Result<()> {
 
         // Run init and check for the specific line 69 message
         let output = Command::new(&hitch_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
         // Should succeed even if remote push fails
         assert!(output.status.success(), "init should succeed");
-
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
-        let full_output = format!("{}{}", stdout, stderr);
 
         // The test is checking that even if remote push fails, init succeeds
         // This is a coverage test for line 69 in init.rs
@@ -36,7 +32,7 @@ fn test_init_with_custom_environments() -> Result<()> {
 
         // Run init with custom environments
         let output = Command::new(&hitch_path)
-            .args(&["init", "--environments", "dev,staging,production"])
+            .args(["init", "--environments", "dev,staging,production"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -67,7 +63,7 @@ fn test_init_skip_push_flag() -> Result<()> {
 
         // Run init with --no-push flag
         let output = Command::new(&hitch_path)
-            .args(&["init", "--no-push", "--verbose"])
+            .args(["init", "--no-push", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -94,7 +90,7 @@ fn test_init_default_environments() -> Result<()> {
 
         // Run init with default settings
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -122,7 +118,7 @@ fn test_init_already_initialized() -> Result<()> {
 
         // First init should succeed
         let output1 = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -130,7 +126,7 @@ fn test_init_already_initialized() -> Result<()> {
 
         // Second init should fail gracefully
         let output2 = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -155,7 +151,7 @@ fn test_init_verbose_output() -> Result<()> {
 
         // Run init with verbose output
         let output = Command::new(&hitch_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -184,7 +180,7 @@ fn test_init_coverage_edge_cases() -> Result<()> {
 
         // Test edge case: init with invalid environment names
         let output = Command::new(&hitch_path)
-            .args(&["init", "--environments", "dev,invalid-env-with-dashes"])
+            .args(["init", "--environments", "dev,invalid-env-with-dashes"])
             .current_dir(test_env.path())
             .output()?;
 

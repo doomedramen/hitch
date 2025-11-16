@@ -8,6 +8,7 @@ use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
+    #[allow(dead_code)]
     fn run_hitch_init(&self) -> Result<()>;
     fn create_environment_config(
         &self,
@@ -22,9 +23,10 @@ trait TestEnvExt {
 }
 
 impl TestEnvExt for TestEnv {
+    #[allow(dead_code)]
     fn run_hitch_init(&self) -> Result<()> {
-        let output = Command::new(&self.hitch_binary())
-            .args(&["init"])
+        let output = Command::new(self.hitch_binary())
+            .args(["init"])
             .current_dir(self.path())
             .output()?;
 
@@ -71,7 +73,7 @@ impl TestEnvExt for TestEnv {
 
         // Write to hitch-metadata branch
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
         fs::write(
@@ -79,15 +81,15 @@ impl TestEnvExt for TestEnv {
             serde_json::to_string_pretty(&config)?,
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Initialize hitch configuration"])
+            .args(["commit", "-m", "Initialize hitch configuration"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -96,20 +98,20 @@ impl TestEnvExt for TestEnv {
 
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
         Command::new("git")
-            .args(&["checkout", "-b", branch_name])
+            .args(["checkout", "-b", branch_name])
             .current_dir(self.path())
             .output()?;
         fs::write(self.path().join("test.txt"), message)?;
         Command::new("git")
-            .args(&["add", "test.txt"])
+            .args(["add", "test.txt"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", message])
+            .args(["commit", "-m", message])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
         Ok(())
@@ -117,7 +119,7 @@ impl TestEnvExt for TestEnv {
 
     fn get_current_branch(&self) -> Result<String> {
         let output = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .current_dir(self.path())
             .output()?;
 
@@ -126,7 +128,7 @@ impl TestEnvExt for TestEnv {
 
     fn branch_exists(&self, branch: &str) -> Result<bool> {
         let output = Command::new("git")
-            .args(&["branch", "--list", branch])
+            .args(["branch", "--list", branch])
             .current_dir(self.path())
             .output()?;
 
@@ -134,7 +136,7 @@ impl TestEnvExt for TestEnv {
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new(&self.hitch_binary())
+        let output = Command::new(self.hitch_binary())
             .args(args)
             .current_dir(self.path())
             .output()?;
@@ -172,7 +174,7 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
 
         // Verify the hook exists and will fail
         let output = Command::new("git")
-            .args(&["commit", "--allow-empty", "-m", "test hook"])
+            .args(["commit", "--allow-empty", "-m", "test hook"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -224,11 +226,11 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
 
         // Create feature branch but don't add any commits to it
         Command::new("git")
-            .args(&["checkout", "-b", "feature/same-as-main"])
+            .args(["checkout", "-b", "feature/same-as-main"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -273,7 +275,7 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
 
         // Get list of branches before rebuild
         let branches_before = Command::new("git")
-            .args(&["branch", "-a"])
+            .args(["branch", "-a"])
             .current_dir(test_env.path())
             .output()?;
         let branches_before_str = String::from_utf8_lossy(&branches_before.stdout);
@@ -294,7 +296,7 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
 
         // Get list of branches after rebuild
         let branches_after = Command::new("git")
-            .args(&["branch", "-a"])
+            .args(["branch", "-a"])
             .current_dir(test_env.path())
             .output()?;
         let branches_after_str = String::from_utf8_lossy(&branches_after.stdout);

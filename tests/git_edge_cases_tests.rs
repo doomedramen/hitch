@@ -20,7 +20,9 @@ trait TestEnvExt {
     fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output>;
     fn create_git_hook(&self, hook_name: &str, script: &str) -> Result<()>;
     fn get_current_branch(&self) -> Result<String>;
+    #[allow(dead_code)]
     fn create_conflicting_files(&self) -> Result<()>;
+    #[allow(dead_code)]
     fn modify_files_for_conflict(&self) -> Result<()>;
 }
 
@@ -58,7 +60,7 @@ impl TestEnvExt for TestEnv {
 
         // Write to hitch-metadata branch (not orphan - it should already exist from hitch init)
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
 
@@ -68,15 +70,15 @@ impl TestEnvExt for TestEnv {
             serde_json::to_string_pretty(&config)?,
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", &format!("Add environment '{}'", env_name)])
+            .args(["commit", "-m", &format!("Add environment '{}'", env_name)])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -86,18 +88,18 @@ impl TestEnvExt for TestEnv {
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
         // Ensure we're on main branch first to avoid hitch-metadata .gitignore issues
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
         Command::new("git")
-            .args(&["checkout", "-b", branch_name])
+            .args(["checkout", "-b", branch_name])
             .current_dir(self.path())
             .output()?;
 
         // Clean any ignored files from previous operations
         Command::new("git")
-            .args(&["clean", "-fd"])
+            .args(["clean", "-fd"])
             .current_dir(self.path())
             .output()?;
 
@@ -107,22 +109,22 @@ impl TestEnvExt for TestEnv {
         let filename = format!("{}.txt", branch_name.replace("/", "_"));
         fs::write(self.path().join(&filename), message)?;
         Command::new("git")
-            .args(&["add", "-f", &filename])
+            .args(["add", "-f", &filename])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", message])
+            .args(["commit", "-m", message])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
         Ok(())
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new(&self.hitch_binary())
+        let output = Command::new(self.hitch_binary())
             .args(args)
             .current_dir(self.path())
             .output()?;
@@ -165,7 +167,7 @@ impl TestEnvExt for TestEnv {
 
     fn get_current_branch(&self) -> Result<String> {
         let output = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .current_dir(self.path())
             .output()?;
 
@@ -176,7 +178,7 @@ impl TestEnvExt for TestEnv {
             } else {
                 // Handle detached HEAD - get the commit hash instead
                 let rev_output = Command::new("git")
-                    .args(&["rev-parse", "HEAD"])
+                    .args(["rev-parse", "HEAD"])
                     .current_dir(self.path())
                     .output()?;
 
@@ -200,6 +202,7 @@ impl TestEnvExt for TestEnv {
         }
     }
 
+    #[allow(dead_code)]
     fn create_conflicting_files(&self) -> Result<()> {
         // Create files that might conflict during operations
         fs::write(self.path().join("conflict1.txt"), "Original content")?;
@@ -207,17 +210,18 @@ impl TestEnvExt for TestEnv {
 
         // Commit them
         Command::new("git")
-            .args(&["add", "."])
+            .args(["add", "."])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Add conflicting files"])
+            .args(["commit", "-m", "Add conflicting files"])
             .current_dir(self.path())
             .output()?;
 
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn modify_files_for_conflict(&self) -> Result<()> {
         // Modify files in a way that would create merge conflicts
         fs::write(
@@ -231,11 +235,11 @@ impl TestEnvExt for TestEnv {
 
         // Commit changes to create diverging history
         Command::new("git")
-            .args(&["add", "."])
+            .args(["add", "."])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Create conflict potential"])
+            .args(["commit", "-m", "Create conflict potential"])
             .current_dir(self.path())
             .output()?;
 
@@ -351,7 +355,7 @@ fn test_detached_head_operations() -> Result<()> {
         let commit_hash_binding = String::from_utf8_lossy(&commit_hash_output.stdout);
         let commit_hash = commit_hash_binding.trim();
 
-        test_env.run_git_command(&["checkout", &commit_hash])?;
+        test_env.run_git_command(&["checkout", commit_hash])?;
 
         // Verify we're in detached HEAD
         let current_branch = test_env.get_current_branch()?;
@@ -532,25 +536,25 @@ fn test_git_state_inconsistencies() -> Result<()> {
 
         // Create some commits on feature branch
         Command::new("git")
-            .args(&["checkout", "feature/test"])
+            .args(["checkout", "feature/test"])
             .current_dir(test_env.path())
             .output()?;
         for i in 1..=5 {
             fs::write(
-                test_env.path().join(&format!("file{}.txt", i)),
-                &format!("Content {}", i),
+                test_env.path().join(format!("file{}.txt", i)),
+                format!("Content {}", i),
             )?;
             Command::new("git")
-                .args(&["add", "."])
+                .args(["add", "."])
                 .current_dir(test_env.path())
                 .output()?;
             Command::new("git")
-                .args(&["commit", "-m", &format!("Commit {}", i)])
+                .args(["commit", "-m", &format!("Commit {}", i)])
                 .current_dir(test_env.path())
                 .output()?;
         }
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -577,7 +581,7 @@ fn test_corrupted_hitch_json() -> Result<()> {
 
         // Corrupt the hitch.json file
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
         fs::write(
@@ -585,15 +589,15 @@ fn test_corrupted_hitch_json() -> Result<()> {
             "invalid json content that is not parseable",
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Corrupt config"])
+            .args(["commit", "-m", "Corrupt config"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -622,20 +626,20 @@ fn test_missing_hitch_json() -> Result<()> {
 
         // Delete hitch.json
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
         fs::remove_file(test_env.path().join("hitch.json"))?;
         Command::new("git")
-            .args(&["add", "--all"])
+            .args(["add", "--all"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Remove hitch.json"])
+            .args(["commit", "-m", "Remove hitch.json"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 

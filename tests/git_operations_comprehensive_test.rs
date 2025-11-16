@@ -16,12 +16,12 @@ impl common::TestEnv {
         let remote_dir = test_path.join("remote");
         fs::create_dir_all(&remote_dir)?;
         Command::new("git")
-            .args(&["init", "--bare"])
+            .args(["init", "--bare"])
             .current_dir(&remote_dir)
             .output()?;
 
         Command::new("git")
-            .args(&["remote", "add", "origin", remote_dir.to_str().unwrap()])
+            .args(["remote", "add", "origin", remote_dir.to_str().unwrap()])
             .current_dir(test_path)
             .output()?;
 
@@ -50,7 +50,7 @@ fn test_git_operations_create_orphan_branch() -> Result<()> {
 
         // Verify the branch has no commits
         let output = Command::new("git")
-            .args(&["log", "--oneline"])
+            .args(["log", "--oneline"])
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);
@@ -106,7 +106,7 @@ fn test_git_operations_add_and_commit() -> Result<()> {
 
         // Verify the commit was created
         let output = Command::new("git")
-            .args(&["log", "--oneline", "-1"])
+            .args(["log", "--oneline", "-1"])
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);
@@ -161,20 +161,20 @@ fn test_git_operations_branch_exists() -> Result<()> {
 
         // Create a test branch
         Command::new("git")
-            .args(&["checkout", "-b", "test-branch"])
+            .args(["checkout", "-b", "test-branch"])
             .current_dir(test_path)
             .output()?;
         fs::write(test_path.join("test.txt"), "Test")?;
         Command::new("git")
-            .args(&["add", "test.txt"])
+            .args(["add", "test.txt"])
             .current_dir(test_path)
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Test"])
+            .args(["commit", "-m", "Test"])
             .current_dir(test_path)
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_path)
             .output()?;
 
@@ -237,7 +237,7 @@ fn test_git_operations_branch_management() -> Result<()> {
 
         // Test delete branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_path)
             .output()?; // Switch off branch first
         git_ops.delete_branch("renamed-branch", false)?;
@@ -249,20 +249,20 @@ fn test_git_operations_branch_management() -> Result<()> {
         // Test force delete (with unmerged changes)
         git_ops.create_branch_from("temp-branch", "main")?;
         Command::new("git")
-            .args(&["checkout", "temp-branch"])
+            .args(["checkout", "temp-branch"])
             .current_dir(test_path)
             .output()?;
         fs::write(test_path.join("temp.txt"), "temp")?;
         Command::new("git")
-            .args(&["add", "temp.txt"])
+            .args(["add", "temp.txt"])
             .current_dir(test_path)
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Temp"])
+            .args(["commit", "-m", "Temp"])
             .current_dir(test_path)
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_path)
             .output()?;
 
@@ -317,17 +317,17 @@ fn test_git_operations_remote_operations() -> Result<()> {
         git_ops.create_branch_from("test-remote", "main")?;
         fs::write(test_path.join("remote-test.txt"), "Remote test")?;
         Command::new("git")
-            .args(&["add", "remote-test.txt"])
+            .args(["add", "remote-test.txt"])
             .current_dir(test_path)
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Remote test"])
+            .args(["commit", "-m", "Remote test"])
             .current_dir(test_path)
             .output()?;
 
         // Set upstream and push
         Command::new("git")
-            .args(&["push", "--set-upstream", "origin", "test-remote"])
+            .args(["push", "--set-upstream", "origin", "test-remote"])
             .current_dir(test_path)
             .output()?;
 
@@ -372,7 +372,7 @@ fn test_git_operations_squash_merge() -> Result<()> {
 
         // Verify the squash merge worked
         let output = Command::new("git")
-            .args(&["log", "--oneline", "-2"])
+            .args(["log", "--oneline", "-2"])
             .current_dir(test_path)
             .output()?;
         let log_output = String::from_utf8_lossy(&output.stdout);

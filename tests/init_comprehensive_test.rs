@@ -13,7 +13,7 @@ fn test_init_with_environments() -> Result<()> {
 
         // Run hitch init with environments
         let output = Command::new(&hitch_path)
-            .args(&["init", "--environments", "dev,qa,staging"])
+            .args(["init", "--environments", "dev,qa,staging"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -40,7 +40,7 @@ fn test_init_with_environments() -> Result<()> {
 
         // Switch to hitch-metadata branch and check hitch.json
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -78,7 +78,7 @@ fn test_init_with_verbose_flag() -> Result<()> {
 
         // Run hitch init with verbose flag
         let output = Command::new(&hitch_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -117,7 +117,7 @@ fn test_init_with_no_push_flag() -> Result<()> {
 
         // Run hitch init with no-push flag
         let output = Command::new(&hitch_path)
-            .args(&["init", "--no-push", "--verbose"])
+            .args(["init", "--no-push", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -137,7 +137,7 @@ fn test_init_with_no_push_flag() -> Result<()> {
 
         // Verify the commit was still made locally
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -165,7 +165,7 @@ fn test_init_error_non_git_repo() -> Result<()> {
         // Run hitch init in non-git directory
         // Note: SetupLevel::Basic provides a temp directory without git initialization
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -201,7 +201,7 @@ fn test_init_error_dirty_working_directory() -> Result<()> {
 
         // Run hitch init in dirty directory
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 

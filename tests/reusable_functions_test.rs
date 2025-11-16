@@ -15,7 +15,7 @@ fn test_pre_check_function() -> Result<()> {
 
         // Run hitch init (this will internally call pre-check and should succeed)
         let output = Command::new(&hitch_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -38,7 +38,7 @@ fn test_pre_check_function_failures() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -67,7 +67,7 @@ fn test_pre_check_function_dirty_working_directory() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -92,18 +92,18 @@ fn test_switch_to_function() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| {
         // Create feature branch and some content
         Command::new("git")
-            .args(&["checkout", "-b", "feature/test"])
+            .args(["checkout", "-b", "feature/test"])
             .current_dir(test_env.path())
             .output()?;
 
         fs::write(test_env.path().join("feature.txt"), "Feature content\n")?;
         Command::new("git")
-            .args(&["add", "feature.txt"])
+            .args(["add", "feature.txt"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add feature"])
+            .args(["commit", "-m", "Add feature"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -111,7 +111,7 @@ fn test_switch_to_function() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let output = Command::new(&hitch_path)
-            .args(&["init"])
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -119,7 +119,7 @@ fn test_switch_to_function() -> Result<()> {
 
         // Verify that switch-to preserved the original branch structure
         let branch_output = Command::new("git")
-            .args(&["branch"])
+            .args(["branch"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -139,12 +139,12 @@ fn test_switch_to_function() -> Result<()> {
 
         // Verify we can switch back to main
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         let current_branch = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -165,7 +165,7 @@ fn test_modify_metadata_function() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let output = Command::new(&hitch_path)
-            .args(&["init", "--environments", "dev,qa"])
+            .args(["init", "--environments", "dev,qa"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -173,7 +173,7 @@ fn test_modify_metadata_function() -> Result<()> {
 
         // Verify access_metadata created proper structure
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -215,7 +215,7 @@ fn test_modify_metadata_function() -> Result<()> {
 
         // Verify that metadata was committed
         let log_output = Command::new("git")
-            .args(&["log", "--oneline"])
+            .args(["log", "--oneline"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -236,7 +236,7 @@ fn test_with_locked_env_function() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let output = Command::new(&hitch_path)
-            .args(&["init", "--environments", "dev"])
+            .args(["init", "--environments", "dev"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -245,7 +245,7 @@ fn test_with_locked_env_function() -> Result<()> {
         // Test that with_locked_env function concept exists
         // Check that hitch.json contains dev environment
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -273,7 +273,7 @@ fn test_global_flags_integration() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let verbose_output = Command::new(&hitch_path)
-            .args(&["init", "--verbose"])
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -300,7 +300,7 @@ fn test_global_flags_integration() -> Result<()> {
         let hitch_path = test_env.hitch_binary();
 
         let no_push_output = Command::new(&hitch_path)
-            .args(&["init", "--no-push", "--verbose"])
+            .args(["init", "--no-push", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 

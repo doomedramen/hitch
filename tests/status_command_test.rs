@@ -36,7 +36,7 @@ fn test_status_basic_display() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch with environments
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -69,24 +69,24 @@ fn test_status_basic_display() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run status command
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -117,7 +117,7 @@ fn test_status_locked_environment() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch with locked environment
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -146,24 +146,24 @@ fn test_status_locked_environment() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run status command
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -192,8 +192,8 @@ fn test_status_locked_environment() -> Result<()> {
 fn test_status_not_initialized() -> Result<()> {
     with_test_env(SetupLevel::Basic, |test_env| -> Result<()> {
         // Run status command without hitch being initialized
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -218,7 +218,7 @@ fn test_status_verbose_output() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -243,24 +243,24 @@ fn test_status_verbose_output() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run status command with verbose flag
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status", "--verbose"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -284,7 +284,7 @@ fn test_status_unclean_working_directory() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -300,18 +300,18 @@ fn test_status_unclean_working_directory() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -319,8 +319,8 @@ fn test_status_unclean_working_directory() -> Result<()> {
         std::fs::write(test_env.path().join("README.md"), "# Test Modified\n")?;
 
         // Run status command with verbose flag to see which method is used
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status", "--verbose"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -344,7 +344,7 @@ fn test_status_empty_environments() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch with empty environments
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -360,24 +360,24 @@ fn test_status_empty_environments() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run status command
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -397,7 +397,7 @@ fn test_status_environmental_sorting() -> Result<()> {
     with_test_env(SetupLevel::Complete, |test_env| -> Result<()> {
         // Initialize hitch with environments out of alphabetical order
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -438,24 +438,24 @@ fn test_status_environmental_sorting() -> Result<()> {
         )?;
 
         Command::new("git")
-            .args(&["add", "hitch.json", ".gitignore"])
+            .args(["add", "hitch.json", ".gitignore"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Add hitch configuration"])
+            .args(["commit", "-m", "Add hitch configuration"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run status command
-        let output = Command::new(&test_env.hitch_path)
-            .args(&["status"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["status"])
             .current_dir(test_env.path())
             .output()?;
 

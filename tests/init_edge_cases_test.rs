@@ -11,49 +11,49 @@ fn test_init_already_initialized_error() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Ensure working tree is clean before creating hitch-metadata branch
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .current_dir(test_env.path())
             .output()?;
 
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
             Command::new("git")
-                .args(&["add", "."])
+                .args(["add", "."])
                 .current_dir(test_env.path())
                 .output()?;
 
             Command::new("git")
-                .args(&["commit", "-m", "Clean up before hitch init test"])
+                .args(["commit", "-m", "Clean up before hitch init test"])
                 .current_dir(test_env.path())
                 .output()?;
         }
 
         // Manually create hitch-metadata branch to simulate already initialized state
         Command::new("git")
-            .args(&["checkout", "--orphan", "hitch-metadata"])
+            .args(["checkout", "--orphan", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
 
         fs::write(test_env.path().join("hitch.json"), "{}\n")?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(test_env.path())
             .output()?;
 
         Command::new("git")
-            .args(&["commit", "-m", "Initialize Hitch"])
+            .args(["commit", "-m", "Initialize Hitch"])
             .current_dir(test_env.path())
             .output()?;
 
         // Return to main branch
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
         // Now init should fail because hitch-metadata branch already exists
-        let output = Command::new(&test_env.hitch_binary())
-            .args(&["init"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -82,26 +82,26 @@ fn test_init_remote_push_success() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Ensure working tree is clean before running hitch init
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .current_dir(test_env.path())
             .output()?;
 
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
             Command::new("git")
-                .args(&["add", "."])
+                .args(["add", "."])
                 .current_dir(test_env.path())
                 .output()?;
 
             Command::new("git")
-                .args(&["commit", "-m", "Clean up before hitch init test"])
+                .args(["commit", "-m", "Clean up before hitch init test"])
                 .current_dir(test_env.path())
                 .output()?;
         }
 
         // Set up a fake remote
         Command::new("git")
-            .args(&[
+            .args([
                 "remote",
                 "add",
                 "origin",
@@ -111,8 +111,8 @@ fn test_init_remote_push_success() -> Result<()> {
             .output()?;
 
         // Run init to test remote push (will fail but should try)
-        let output = Command::new(&test_env.hitch_binary())
-            .args(&["init"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["init"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -143,32 +143,32 @@ fn test_init_original_branch_check() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
         // Ensure working tree is clean before running hitch init
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .current_dir(test_env.path())
             .output()?;
 
         let status_output = String::from_utf8_lossy(&output.stdout);
         if !status_output.trim().is_empty() {
             Command::new("git")
-                .args(&["add", "."])
+                .args(["add", "."])
                 .current_dir(test_env.path())
                 .output()?;
 
             Command::new("git")
-                .args(&["commit", "-m", "Clean up before hitch init test"])
+                .args(["commit", "-m", "Clean up before hitch init test"])
                 .current_dir(test_env.path())
                 .output()?;
         }
 
         // Create and switch to a different branch
         Command::new("git")
-            .args(&["checkout", "-b", "feature"])
+            .args(["checkout", "-b", "feature"])
             .current_dir(test_env.path())
             .output()?;
 
         // Run init with verbose to see branch checking
-        let output = Command::new(&test_env.hitch_binary())
-            .args(&["init", "--verbose"])
+        let output = Command::new(test_env.hitch_binary())
+            .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
@@ -187,7 +187,7 @@ fn test_init_original_branch_check() -> Result<()> {
 
         // Check current branch - the init command leaves us on hitch-metadata branch
         let current_branch_output = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .current_dir(test_env.path())
             .output()?;
 

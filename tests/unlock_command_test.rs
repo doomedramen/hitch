@@ -45,7 +45,7 @@ impl TestEnvExt for TestEnv {
         });
 
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(self.path())
             .output()?;
         fs::write(
@@ -53,15 +53,15 @@ impl TestEnvExt for TestEnv {
             serde_json::to_string_pretty(&config)?,
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Update environment configuration"])
+            .args(["commit", "-m", "Update environment configuration"])
             .current_dir(self.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(self.path())
             .output()?;
 
@@ -69,7 +69,7 @@ impl TestEnvExt for TestEnv {
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
-        let output = Command::new(&self.hitch_binary())
+        let output = Command::new(self.hitch_binary())
             .args(args)
             .current_dir(self.path())
             .output()?;
@@ -233,7 +233,7 @@ fn test_unlock_basic_functionality() -> Result<()> {
         });
 
         Command::new("git")
-            .args(&["checkout", "hitch-metadata"])
+            .args(["checkout", "hitch-metadata"])
             .current_dir(test_env.path())
             .output()?;
         fs::write(
@@ -241,15 +241,15 @@ fn test_unlock_basic_functionality() -> Result<()> {
             serde_json::to_string_pretty(&config)?,
         )?;
         Command::new("git")
-            .args(&["add", "hitch.json"])
+            .args(["add", "hitch.json"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Create locked environment"])
+            .args(["commit", "-m", "Create locked environment"])
             .current_dir(test_env.path())
             .output()?;
         Command::new("git")
-            .args(&["checkout", "main"])
+            .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
 
