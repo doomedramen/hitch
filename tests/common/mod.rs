@@ -153,8 +153,11 @@ impl TestEnv {
 
     /// Run hitch init command
     pub fn run_hitch_init(&self) -> Result<()> {
-        // Initialize Hitch
-        let output = Command::new(self.hitch_binary()).args(["init"]).output()?;
+        // Initialize Hitch in the test directory
+        let output = Command::new(self.hitch_binary())
+            .args(["init"])
+            .current_dir(self.path())
+            .output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -208,18 +211,13 @@ pub fn with_test_env<F>(level: SetupLevel, test_fn: F) -> Result<()>
 where
     F: FnOnce(&TestEnv) -> Result<()>,
 {
-    let original_dir = std::env::current_dir()?;
-
     let test_env = match level {
         SetupLevel::Basic => TestEnv::new_with_git(false)?,
         SetupLevel::GitOnly => TestEnv::new_with_git(true)?,
     };
 
-    // Ensure we're in the test directory before running any setup
-    std::env::set_current_dir(test_env.path())?;
-
     // Setup based on level
-    let setup_result = match level {
+    let setup_result: Result<()> = match level {
         SetupLevel::Basic => {
             // No setup needed - just a plain temp directory
             Ok(())
@@ -285,17 +283,9 @@ where
         }
     };
 
-    // If setup failed, return to original directory and return error
-    if let Err(e) = setup_result {
-        let _ = std::env::set_current_dir(&original_dir);
-        return Err(e);
-    }
+    // If setup failed, return error
+    setup_result?;
 
     // Run the test function
-    let test_result = test_fn(&test_env);
-
-    // Always return to original directory
-    let _ = std::env::set_current_dir(&original_dir);
-
-    test_result
+    test_fn(&test_env)
 }

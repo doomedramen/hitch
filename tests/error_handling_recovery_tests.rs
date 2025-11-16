@@ -142,9 +142,6 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
         // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -232,9 +229,6 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
 
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
-
         // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
@@ -295,9 +289,6 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
         if !git_ops.is_working_directory_clean()? {
             git_ops.clean_working_directory("Clean up after hitch init")?;
         }
-
-        // Initialize hitch first
-        test_env.run_hitch_init()?;
 
         // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
