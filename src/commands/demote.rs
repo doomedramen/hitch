@@ -13,6 +13,10 @@ pub struct DemoteCommand {
     /// The environment to demote the branch from
     #[arg()]
     pub env_name: String,
+
+    /// Replace the remote branch (force push) after rebuilding
+    #[arg(long)]
+    pub replace_remote: bool,
 }
 
 pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
@@ -30,7 +34,7 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 2-4: Execute demotion with automatic locking and unlocking
     // This will remove the branch from environment, commit metadata, and trigger rebuild
     crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-        demote_branch_from_environment(context, &args.branch, &args.env_name)
+        demote_branch_from_environment(context, &args.branch, &args.env_name, args.replace_remote)
     })?;
 
     context.log_success(&format!(
@@ -90,6 +94,7 @@ fn demote_branch_from_environment(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
+    replace_remote: bool,
 ) -> anyhow::Result<()> {
     context.log_verbose(&format!(
         "Removing '{}' from environment '{}'...",
@@ -117,7 +122,7 @@ fn demote_branch_from_environment(
         "Triggering rebuild for environment '{}'...",
         env_name
     ));
-    crate::utils::prelude::rebuild_environment(context, env_name)?;
+    crate::utils::prelude::rebuild_environment(context, env_name, replace_remote)?;
 
     context.log_verbose(&format!(
         "✓ Environment '{}' rebuilt successfully",

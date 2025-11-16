@@ -16,6 +16,10 @@ pub struct PromoteCommand {
     /// The environment to promote the branch to
     #[arg()]
     pub env_name: String,
+
+    /// Replace the remote branch (force push) after rebuilding
+    #[arg(long)]
+    pub replace_remote: bool,
 }
 
 pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
@@ -33,7 +37,7 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 2-4: Execute promotion with automatic locking and unlocking
     // This will add the branch to environment, commit metadata, and trigger rebuild
     crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-        promote_branch_to_environment(context, &args.branch, &args.env_name)
+        promote_branch_to_environment(context, &args.branch, &args.env_name, args.replace_remote)
     })?;
 
     context.log_success(&format!(
@@ -96,6 +100,7 @@ fn promote_branch_to_environment(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
+    replace_remote: bool,
 ) -> anyhow::Result<()> {
     context.log_verbose(&format!(
         "Adding '{}' to environment '{}'...",
@@ -123,7 +128,7 @@ fn promote_branch_to_environment(
         "Triggering rebuild for environment '{}'...",
         env_name
     ));
-    crate::utils::prelude::rebuild_environment(context, env_name)?;
+    crate::utils::prelude::rebuild_environment(context, env_name, replace_remote)?;
 
     context.log_verbose(&format!(
         "✓ Environment '{}' rebuilt successfully",

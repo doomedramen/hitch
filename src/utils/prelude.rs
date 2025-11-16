@@ -312,7 +312,11 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
 /// - Step 4: Merge temp branch into real environment branch
 /// - Step 5: Update rebuiltAt timestamp (handled automatically on success)
 /// - Automatic rollback on any failure
-pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
+pub fn rebuild_environment(
+    context: &GlobalContext,
+    env_name: &str,
+    replace_remote: bool,
+) -> Result<()> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
         env_name
@@ -358,8 +362,12 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             "Replacing '{}' branch with rebuilt content",
             env_name
         ));
-        let backup_branch =
-            safe_replace_environment_branch_for_rebuild(context, env_name, &temp_branch)?;
+        let backup_branch = safe_replace_environment_branch_for_rebuild(
+            context,
+            env_name,
+            &temp_branch,
+            replace_remote,
+        )?;
 
         // Update rebuiltAt timestamp on success
         update_rebuilt_timestamp_for_rebuild(context, env_name)?;
@@ -590,6 +598,7 @@ fn safe_replace_environment_branch_for_rebuild(
     context: &GlobalContext,
     env_name: &str,
     temp_branch: &str,
+    replace_remote: bool,
 ) -> Result<String> {
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let backup_branch = format!("hitch-backup-{}-{}", env_name, timestamp);
@@ -612,6 +621,70 @@ fn safe_replace_environment_branch_for_rebuild(
         env_name
     ));
     context.git().create_branch_from(env_name, temp_branch)?;
+
+    // Step 4c: Handle remote branch replacement if requested
+    if replace_remote && context.should_push() {
+        // Interactive confirmation for force push
+        context.log_info(&format!(
+            "This will replace the remote '{}' branch with the rebuilt version.",
+            env_name
+        ));
+        context.log_warning("This action cannot be undone and will overwrite the remote branch.");
+
+        // Ask for user confirmation
+        use std::io::{self, Write};
+        print!("Do you want to proceed? [y/N]: ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim().to_lowercase();
+
+        if input == "y" || input == "yes" {
+            context.log_info(&format!(
+                "Force pushing rebuilt '{}' branch to replace remote",
+                env_name
+            ));
+            if let Err(e) = context.git().force_push_branch(env_name) {
+                context.log_error(&format!(
+                    "Failed to force push rebuilt '{}' branch: {}",
+                    env_name, e
+                ));
+                context.log_error(&format!(
+                    "You may need to manually run: git push origin {} --force",
+                    env_name
+                ));
+            } else {
+                context.log_success(&format!(
+                    "✓ Force pushed rebuilt '{}' branch to remote",
+                    env_name
+                ));
+            }
+        } else {
+            context.log_info(&format!(
+                "Skipping remote replacement for '{}' branch.",
+                env_name
+            ));
+            context.log_info(&format!(
+                "The local '{}' branch has been rebuilt. To push manually, run: git push origin {} --force",
+                env_name, env_name
+            ));
+        }
+    } else if !replace_remote && context.should_push() {
+        context.log_verbose(&format!(
+            "Skipping remote replacement for '{}' branch (use --replace-remote to enable)",
+            env_name
+        ));
+        context.log_info(&format!(
+            "The local '{}' branch has been rebuilt. To push manually, run: git push origin {} --force",
+            env_name, env_name
+        ));
+    } else {
+        context.log_verbose(&format!(
+            "Skipping remote operations for '{}' branch due to --no-push flag",
+            env_name
+        ));
+    }
 
     // Return to original branch
     context.git().checkout_branch(&original_branch)?;

@@ -12,7 +12,7 @@ use commands::global_context::GlobalContext;
 #[command(
     long_about = "Hitch is a CLI tool that brings environment branch management to Git. It helps you organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation—turning chaotic branch-based releases into a structured, auditable process."
 )]
-#[command(version = "1.0.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(author = "Martin Page")]
 struct Cli {
     /// Print detailed step-by-step logs for commands

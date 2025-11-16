@@ -214,6 +214,21 @@ impl GitOperations {
         Ok(())
     }
 
+    pub fn force_push_branch(&self, branch: &str) -> Result<()> {
+        let output =
+            self.run_git_command(&["push", "origin", branch, "--force", "--set-upstream"])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to force push branch '{}': {}",
+                branch,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
         let output = self.run_git_command(&["branch", "--list", branch])?;
 
