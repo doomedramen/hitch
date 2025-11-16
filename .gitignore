@@ -1,1 +1,7 @@
 /target
+
+# Test coverage reports
+lcov.info
+*.profraw
+/coverage/
+/htmlcov/
