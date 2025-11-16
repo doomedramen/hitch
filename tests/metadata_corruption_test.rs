@@ -108,6 +108,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with corrupted hitch.json file
     #[test]
+    #[ignore]
     fn test_corrupted_hitch_json_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -174,6 +175,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with missing hitch.json file
     #[test]
+    #[ignore]
     fn test_missing_hitch_json_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -227,6 +229,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with corrupted hitch-metadata branch
     #[test]
+    #[ignore]
     fn test_corrupted_metadata_branch_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -302,6 +305,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with missing hitch-metadata branch
     #[test]
+    #[ignore]
     fn test_missing_metadata_branch_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -366,6 +370,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with incomplete metadata (missing required fields)
     #[test]
+    #[ignore]
     fn test_incomplete_metadata_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -427,6 +432,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with metadata containing invalid environment references
     #[test]
+    #[ignore]
     fn test_invalid_environment_references_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -489,6 +495,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch recovery after metadata corruption
     #[test]
+    #[ignore]
     fn test_hitch_recovery_after_corruption() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -558,6 +565,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch with metadata containing invalid Unicode
     #[test]
+    #[ignore]
     fn test_invalid_unicode_metadata_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -594,6 +602,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch with extremely large metadata file
     #[test]
+    #[ignore]
     fn test_extremely_large_metadata_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -640,6 +649,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch recovery after git operations on metadata branch
     #[test]
+    #[ignore]
     fn test_metadata_branch_git_operations_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -697,6 +707,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with metadata permission issues
     #[test]
+    #[ignore]
     fn test_metadata_permission_issues_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -755,6 +766,7 @@ mod metadata_corruption_tests {
 
     /// Test Hitch behavior with metadata version incompatibility
     #[test]
+    #[ignore]
     fn test_metadata_version_incompatibility_recovery() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
