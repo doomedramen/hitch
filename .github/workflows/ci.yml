@@ -18,7 +18,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.75.0  # Minimum supported version
+          - 1.72.0  # Minimum supported version (supports Cargo.lock v4)
 
     steps:
     - name: Checkout repository
@@ -75,10 +75,11 @@ jobs:
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Install OpenSSL@3 via Homebrew and verify paths exist
+        # Install OpenSSL@3 via Homebrew with correct paths for each architecture
         if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
           brew install openssl@3
-          OPENSSL_PATH=$(brew --prefix openssl@3)
+          # For x86_64 on GitHub Actions, use /usr/local/opt (Intel Homebrew)
+          OPENSSL_PATH="/usr/local/opt/openssl@3"
           echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
@@ -86,7 +87,8 @@ jobs:
           ls -la "$OPENSSL_PATH/lib" || echo "Lib directory not found"
         elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
           brew install openssl@3
-          OPENSSL_PATH=$(brew --prefix openssl@3)
+          # For aarch64 on GitHub Actions, use /opt/homebrew/opt (ARM64 Homebrew)
+          OPENSSL_PATH="/opt/homebrew/opt/openssl@3"
           echo "OPENSSL_DIR=$OPENSSL_PATH" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$OPENSSL_PATH/lib" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PATH/include" >> $GITHUB_ENV
