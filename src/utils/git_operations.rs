@@ -226,6 +226,33 @@ impl GitOperations {
         Ok(output.stdout.is_empty())
     }
 
+    /// Clean working directory by adding all changes and committing them
+    pub fn clean_working_directory(&self, message: &str) -> Result<()> {
+        let add_output = self.run_git_command(&["add", "--all"])?;
+        if !add_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to add all files: {}",
+                String::from_utf8_lossy(&add_output.stderr)
+            ));
+        }
+
+        let commit_output = self.run_git_command(&["commit", "-m", message])?;
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
+            let stdout = String::from_utf8_lossy(&commit_output.stdout);
+            // Don't fail if there's nothing to commit
+            if !(stderr.contains("nothing to commit") || stdout.contains("nothing to commit")) {
+                return Err(anyhow::anyhow!(
+                    "Failed to commit changes: stderr={}, stdout={}",
+                    stderr,
+                    stdout
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn get_user_email(&self) -> Result<String> {
         let output = self.run_git_command(&["config", "user.email"])?;
 
@@ -465,6 +492,12 @@ impl GitOperations {
                 || stderr.contains("Non-fast-forward commit does not make sense into an empty head")
             {
                 return Err(anyhow::anyhow!("Branch '{}' does not exist", source_branch));
+            }
+
+            // Check if it's unrelated histories error
+            if stderr.contains("refusing to merge unrelated histories") {
+                // This is not a merge conflict, but a git history issue
+                return Ok(true); // We'll treat this as a conflict for now
             }
 
             // If merge fails for other reasons, it's likely due to conflicts

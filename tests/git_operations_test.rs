@@ -267,3 +267,70 @@ fn test_git_operations_error_handling() -> Result<()> {
         Ok(())
     })
 }
+
+#[test]
+fn test_debug_merge_conflicts_scenario() -> Result<()> {
+    with_test_env(SetupLevel::Complete, |test_env| {
+        // Recreate the scenario from the failing rebuild test exactly
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+
+        // Create feature branch with content (exactly like rebuild test)
+        git_ops.create_branch_from("feature/login", "main")?;
+        fs::write(test_env.path().join("login.md"), "# Login feature\n")?;
+        git_ops.add_and_commit(&["login.md"], "Add login feature")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create hitch config manually (simplified version of what rebuild test does)
+        use std::collections::HashMap;
+        let mut environments = HashMap::new();
+        let branches_vec: Vec<String> = vec!["feature/login".to_string()];
+
+        environments.insert(
+            "dev".to_string(),
+            serde_json::json!({
+                "base": "main",
+                "branches": branches_vec,
+                "locked": false
+            }),
+        );
+
+        let config = serde_json::json!({
+            "environments": environments
+        });
+
+        // Switch to hitch-metadata branch and write config
+        git_ops.checkout_branch("hitch-metadata")?;
+        std::fs::write(
+            test_env.path().join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
+        std::fs::write(
+            test_env.path().join(".gitignore"),
+            "*\n!.gitignore\n!hitch.json\n",
+        )?;
+        git_ops.add_and_commit(&["hitch.json", ".gitignore"], "Add hitch configuration")?;
+        git_ops.checkout_branch("main")?;
+
+        // Check for merge conflicts
+        let has_conflicts = git_ops.check_merge_conflicts("feature/login")?;
+
+        println!("Current branch: {}", git_ops.get_current_branch()?);
+        println!(
+            "feature/login exists: {}",
+            git_ops.branch_exists("feature/login")?
+        );
+        println!("Merge conflicts detected: {}", has_conflicts);
+
+        // This might detect conflicts if hitch init changed files
+        println!("Files in main:");
+        let output = std::process::Command::new("git")
+            .args(["ls-tree", "--name-only", "HEAD"])
+            .current_dir(test_env.path())
+            .output()?;
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+
+        Ok(())
+    })
+}

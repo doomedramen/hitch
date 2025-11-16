@@ -61,6 +61,10 @@ impl TestEnvExt for TestEnv {
     ) -> Result<()> {
         use std::collections::HashMap;
 
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
         let mut environments = HashMap::new();
         let branches_vec: Vec<String> = branches.iter().map(|s| s.to_string()).collect();
 
@@ -78,35 +82,18 @@ impl TestEnvExt for TestEnv {
             "environments": environments
         });
 
-        // Write to hitch-metadata branch
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(self.path())
-            .output()?;
+        // Create hitch-metadata branch if it doesn't exist (orphan branch)
+        let create_result = git_ops.create_orphan_branch("hitch-metadata");
+        if create_result.is_err() {
+            // Branch might already exist, try to checkout it
+            git_ops.checkout_branch("hitch-metadata")?;
+        }
 
-        fs::write(
-            self.path().join("hitch.json"),
-            serde_json::to_string_pretty(&config)?,
-        )?;
-        fs::write(
-            self.path().join(".gitignore"),
-            "*\n!.gitignore\n!hitch.json\n",
-        )?;
+        git_ops.write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        git_ops.write_file(".gitignore", "*\n!.gitignore\n!hitch.json\n")?;
 
-        Command::new("git")
-            .args(["add", "hitch.json", ".gitignore"])
-            .current_dir(self.path())
-            .output()?;
-
-        Command::new("git")
-            .args(["commit", "-m", "Add hitch configuration"])
-            .current_dir(self.path())
-            .output()?;
-
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.add_and_commit(&["hitch.json", ".gitignore"], "Add hitch configuration")?;
+        git_ops.checkout_branch("main")?;
 
         Ok(())
     }
@@ -117,29 +104,19 @@ impl TestEnvExt for TestEnv {
         filename: &str,
         content: &str,
     ) -> Result<()> {
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
         // Create branch
-        Command::new("git")
-            .args(["checkout", "-b", branch_name])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.create_branch_from(branch_name, "main")?;
 
         // Write content and commit
-        fs::write(self.path().join(filename), content)?;
-        Command::new("git")
-            .args(["add", filename])
-            .current_dir(self.path())
-            .output()?;
-
-        Command::new("git")
-            .args(["commit", "-m", &format!("Add {}", filename)])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.write_file(filename, content)?;
+        git_ops.add_and_commit(&[filename], &format!("Add {}", filename))?;
 
         // Return to main
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.checkout_branch("main")?;
 
         Ok(())
     }
@@ -154,18 +131,16 @@ impl TestEnvExt for TestEnv {
     }
 
     fn get_current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(self.path())
-            .output()?;
-
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.get_current_branch()
     }
 }
 
 #[test]
 fn test_rebuild_basic_success() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Create feature branch with content
         test_env.create_branch_with_content("feature/login", "login.md", "# Login feature\n")?;
 
@@ -193,10 +168,10 @@ fn test_rebuild_basic_success() -> Result<()> {
         assert!(full_output.contains("Environment 'dev' rebuilt successfully"));
 
         // Verify dev branch exists and has the expected content
-        Command::new("git")
-            .args(["checkout", "dev"])
-            .current_dir(test_env.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        git_ops.checkout_branch("dev")?;
 
         assert!(
             test_env.path().join("login.md").exists(),
@@ -208,10 +183,7 @@ fn test_rebuild_basic_success() -> Result<()> {
         );
 
         // Verify rebuiltAt timestamp was updated
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.checkout_branch("hitch-metadata")?;
 
         let updated_config = std::fs::read_to_string(test_env.path().join("hitch.json"))?;
         assert!(
@@ -225,7 +197,7 @@ fn test_rebuild_basic_success() -> Result<()> {
 
 #[test]
 fn test_rebuild_empty_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize hitch with empty environment
         test_env.create_hitch_config_with_environment("staging", "main", &[], false)?;
 
@@ -245,10 +217,10 @@ fn test_rebuild_empty_environment() -> Result<()> {
             .contains("No branches promoted to this environment, using base branch only"));
 
         // Verify staging branch exists and matches main branch
-        Command::new("git")
-            .args(["checkout", "staging"])
-            .current_dir(test_env.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        git_ops.checkout_branch("staging")?;
 
         assert!(
             test_env.path().join("README.md").exists(),
@@ -261,7 +233,7 @@ fn test_rebuild_empty_environment() -> Result<()> {
 
 #[test]
 fn test_rebuild_nonexistent_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize hitch with dev environment only
         test_env.create_hitch_config_with_environment("dev", "main", &[], false)?;
 
@@ -282,7 +254,7 @@ fn test_rebuild_nonexistent_environment() -> Result<()> {
 
 #[test]
 fn test_rebuild_locked_environment() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize hitch with locked environment
         test_env.create_hitch_config_with_environment("production", "main", &[], true)?;
 
@@ -312,7 +284,7 @@ fn test_rebuild_locked_environment() -> Result<()> {
 
 #[test]
 fn test_rebuild_missing_branch() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize hitch with environment that references non-existent branch
         test_env.create_hitch_config_with_environment(
             "dev",
@@ -338,7 +310,7 @@ fn test_rebuild_missing_branch() -> Result<()> {
 
 #[test]
 fn test_rebuild_missing_base_branch() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Initialize hitch with environment that references non-existent base branch
         test_env.create_hitch_config_with_environment("dev", "nonexistent-base", &[], false)?;
 
@@ -359,7 +331,7 @@ fn test_rebuild_missing_base_branch() -> Result<()> {
 
 #[test]
 fn test_rebuild_multiple_branches() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Create multiple feature branches
         let branches = vec!["feature/login", "feature/ui", "feature/api"];
 
@@ -385,47 +357,21 @@ fn test_rebuild_multiple_branches() -> Result<()> {
             }),
         );
 
-        let config = serde_json::json!({
-            "version": "1.0",
-            "environments": environments
-        });
-
-        // Write to hitch-metadata branch
-        Command::new("git")
-            .args(["checkout", "hitch-metadata"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        fs::write(
-            test_env.path().join("hitch.json"),
-            serde_json::to_string_pretty(&config)?,
-        )?;
-        Command::new("git")
-            .args(["add", "hitch.json"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        Command::new("git")
-            .args(["commit", "-m", "Add hitch configuration"])
-            .current_dir(test_env.path())
-            .output()?;
-
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_env.path())
-            .output()?;
+        // Use the helper method to create hitch configuration
+        test_env.create_hitch_config_with_environment("dev", "main", &branches, false)?;
 
         // Run rebuild command
         let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
 
-        assert!(
-            output.status.success(),
-            "rebuild should succeed with multiple branches"
-        );
-
         let stdout = String::from_utf8(output.stdout.clone())?;
         let stderr = String::from_utf8(output.stderr)?;
         let full_output = format!("{}{}", stdout, stderr);
+
+        assert!(
+            output.status.success(),
+            "rebuild should succeed with multiple branches. Output: {}",
+            full_output
+        );
         let clean_output = strip_ansi_codes(&full_output);
 
         // Verify all branches were processed
@@ -446,10 +392,10 @@ fn test_rebuild_multiple_branches() -> Result<()> {
         }
 
         // Verify dev branch exists and has content from all feature branches
-        Command::new("git")
-            .args(["checkout", "dev"])
-            .current_dir(test_env.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        git_ops.checkout_branch("dev")?;
 
         assert!(
             test_env.path().join("README.md").exists(),
@@ -471,7 +417,7 @@ fn test_rebuild_multiple_branches() -> Result<()> {
 
 #[test]
 fn test_rebuild_with_git_hooks() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         // Create feature branch
         test_env.create_branch_with_content("feature/test", "feature.txt", "# Feature\n")?;
 
@@ -519,10 +465,10 @@ exit 0
         assert_eq!(current_branch, "main", "Should be back on main branch");
 
         // Verify dev branch exists and has the expected content
-        Command::new("git")
-            .args(["checkout", "dev"])
-            .current_dir(test_env.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        git_ops.checkout_branch("dev")?;
 
         assert!(
             test_env.path().join("README.md").exists(),

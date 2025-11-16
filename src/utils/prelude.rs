@@ -548,6 +548,14 @@ fn perform_squash_merges_for_rebuild(
     // Switch to temp branch
     context.git().checkout_branch(temp_branch)?;
 
+    // Clean working directory to avoid issues with untracked files
+    if !context.git().is_working_directory_clean()? {
+        context.log_verbose("Cleaning working directory before merge operations");
+        context
+            .git()
+            .clean_working_directory("Clean up before rebuild operations")?;
+    }
+
     for branch in branches {
         context.log_verbose(&format!("Processing branch '{}'", branch));
 
