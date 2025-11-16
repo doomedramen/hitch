@@ -182,6 +182,141 @@ impl TestEnv {
             .join("debug")
             .join("hitch")
     }
+
+    /// Run a hitch command and return the output
+    pub fn hitch_command(&self) -> std::process::Command {
+        let mut cmd = Command::new(self.hitch_binary());
+        cmd.current_dir(self.path());
+        cmd
+    }
+
+    /// Run hitch add command
+    pub fn hitch_add(&self, env_name: &str) -> Result<()> {
+        let output = self.hitch_command()
+            .args(["add", env_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to add environment '{}': {}",
+                env_name,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Run hitch promote command
+    pub fn hitch_promote(&self, branch: &str, env_name: &str) -> Result<()> {
+        let output = self.hitch_command()
+            .args(["promote", branch, env_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to promote '{}' to '{}': {}",
+                branch,
+                env_name,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Run hitch demote command
+    pub fn hitch_demote(&self, branch: &str, env_name: &str) -> Result<()> {
+        let output = self.hitch_command()
+            .args(["demote", branch, env_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to demote '{}' from '{}': {}",
+                branch,
+                env_name,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Run hitch lock command
+    pub fn hitch_lock(&self, env_name: &str) -> Result<()> {
+        let output = self.hitch_command()
+            .args(["lock", env_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to lock environment '{}': {}",
+                env_name,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Run hitch unlock command
+    pub fn hitch_unlock(&self, env_name: &str) -> Result<()> {
+        let output = self.hitch_command()
+            .args(["unlock", env_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to unlock environment '{}': {}",
+                env_name,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Create a file and commit it
+    pub fn create_and_commit_file(&self, filename: &str, content: &str) -> Result<()> {
+        let file_path = self.path().join(filename);
+        fs::write(file_path, content)?;
+
+        self.run_git_command(&["add", filename])?;
+        self.run_git_command(&["commit", "-m", &format!("Add {}", filename)])?;
+
+        Ok(())
+    }
+
+    /// Create a branch
+    pub fn create_branch(&self, branch_name: &str) -> Result<()> {
+        self.run_git_command(&["checkout", "-b", branch_name])?;
+        Ok(())
+    }
+
+    /// Checkout a branch
+    pub fn checkout_branch(&self, branch_name: &str) -> Result<()> {
+        self.run_git_command(&["checkout", branch_name])?;
+        Ok(())
+    }
+
+    /// Run a git command
+    pub fn run_git_command(&self, args: &[&str]) -> Result<()> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(self.path())
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Git command failed: git {} - {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for TestEnv {
@@ -190,6 +325,68 @@ impl Drop for TestEnv {
         let _ = std::env::set_current_dir(&self.original_dir);
 
         // TempDir automatically cleans up when it goes out of scope
+    }
+}
+
+/// Type alias for TestEnv used in the new closure-based framework
+pub type TestEnvironment = TestEnv;
+
+impl TestEnvironment {
+    /// Create a new test environment and run a closure with it
+    pub fn with_env<F>(test_fn: F) -> Result<()>
+    where
+        F: FnOnce(&TestEnvironment) -> Result<()>,
+    {
+        let test_env = TestEnv::new_with_git(true)?;
+
+        // Configure git for hitch operations
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["config", "core.filemode", "false"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        // Ensure working tree is clean by running git status and checking
+        let status_output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        let status_str = String::from_utf8_lossy(&status_output.stdout);
+        if !status_str.trim().is_empty() {
+            // There are uncommitted changes, commit them
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(test_env.path())
+                .output()?;
+            Command::new("git")
+                .args(["commit", "-m", "Clean up test environment"])
+                .current_dir(test_env.path())
+                .output()?;
+        }
+
+        // Run the test function
+        test_fn(&test_env)
+    }
+
+    /// Create a new test environment with git repository (no git config)
+    pub fn with_env_without_git<F>(test_fn: F) -> Result<()>
+    where
+        F: FnOnce(&TestEnvironment) -> Result<()>,
+    {
+        let test_env = TestEnv::new_with_git(false)?;
+        test_fn(&test_env)
     }
 }
 
