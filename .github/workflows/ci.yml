@@ -170,7 +170,6 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: target/doc
         publish_branch: gh-pages
-        force_orphan: true
 
   # Temporarily disabled jobs due to resource constraints
   # benchmark:
