@@ -1,12 +1,13 @@
 use anyhow::Result;
 use std::process::Command;
-use std::path::Path;
 
 // Import the proper test framework
 mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
 #[cfg(test)]
+#[allow(unused_variables)]
+#[allow(dead_code)]
 mod cross_platform_tests {
     use super::*;
 
@@ -179,7 +180,10 @@ mod cross_platform_tests {
             let output = run_hitch_command(test_env, &["promote", branch_name, "dev"])?;
 
             // Should work with platform-specific paths
-            assert!(output.status.success(), "Should work with platform-specific file paths");
+            assert!(
+                output.status.success(),
+                "Should work with platform-specific file paths"
+            );
 
             Ok(())
         })
@@ -234,7 +238,10 @@ mod cross_platform_tests {
 
             // Should work with different line endings
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with different line endings");
+            assert!(
+                status_output.status.success(),
+                "Should work with different line endings"
+            );
 
             Ok(())
         })
@@ -299,7 +306,10 @@ mod cross_platform_tests {
 
             // Should work with different file permissions
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with different file permissions");
+            assert!(
+                status_output.status.success(),
+                "Should work with different file permissions"
+            );
 
             Ok(())
         })
@@ -345,7 +355,10 @@ mod cross_platform_tests {
 
             // Should work with special characters
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with special characters in names");
+            assert!(
+                status_output.status.success(),
+                "Should work with special characters in names"
+            );
 
             Ok(())
         })
@@ -390,7 +403,10 @@ mod cross_platform_tests {
 
             // Should work with different encodings
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with different character encodings");
+            assert!(
+                status_output.status.success(),
+                "Should work with different character encodings"
+            );
 
             Ok(())
         })
@@ -432,7 +448,10 @@ mod cross_platform_tests {
 
             // Should work with case-sensitive files
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with case-sensitive file systems");
+            assert!(
+                status_output.status.success(),
+                "Should work with case-sensitive file systems"
+            );
 
             Ok(())
         })
@@ -451,7 +470,10 @@ mod cross_platform_tests {
             let long_name = "a".repeat(200); // 200 characters
             let long_filename = format!("{}.txt", long_name);
 
-            std::fs::write(test_env.path().join(&long_filename), "Long filename content")?;
+            std::fs::write(
+                test_env.path().join(&long_filename),
+                "Long filename content",
+            )?;
 
             // Create nested directories with long names
             let mut current_path = test_env.path().to_path_buf();
@@ -480,7 +502,10 @@ mod cross_platform_tests {
 
             // Should work with long file names
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with long file and directory names");
+            assert!(
+                status_output.status.success(),
+                "Should work with long file and directory names"
+            );
 
             Ok(())
         })
@@ -502,14 +527,20 @@ mod cross_platform_tests {
                     .args(["config", "core.symlinks", "false"])
                     .current_dir(test_env.path())
                     .output()?;
-                assert!(output.status.success(), "Should configure Windows-specific settings");
+                assert!(
+                    output.status.success(),
+                    "Should configure Windows-specific settings"
+                );
             } else {
                 // Unix-specific commands
                 let output = Command::new("git")
                     .args(["config", "core.symlinks", "true"])
                     .current_dir(test_env.path())
                     .output()?;
-                assert!(output.status.success(), "Should configure Unix-specific settings");
+                assert!(
+                    output.status.success(),
+                    "Should configure Unix-specific settings"
+                );
 
                 // Create symbolic link (if supported)
                 let link_target = test_env.path().join("target.txt");
@@ -525,7 +556,10 @@ mod cross_platform_tests {
 
             // Should work with platform-specific configurations
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with platform-specific commands");
+            assert!(
+                status_output.status.success(),
+                "Should work with platform-specific commands"
+            );
 
             Ok(())
         })
@@ -552,7 +586,10 @@ mod cross_platform_tests {
 
             // Should work with custom environment variables
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with custom environment variables");
+            assert!(
+                status_output.status.success(),
+                "Should work with custom environment variables"
+            );
 
             // Clean up environment variables
             std::env::remove_var("HITCH_LOG_LEVEL");
@@ -579,7 +616,10 @@ mod cross_platform_tests {
 
             // Add environment
             let output1 = run_hitch_command(test_env, &["add", "dev"])?;
-            assert!(output1.status.success(), "Should work with xterm-256color terminal");
+            assert!(
+                output1.status.success(),
+                "Should work with xterm-256color terminal"
+            );
 
             std::env::set_var("TERM", "dumb");
             std::env::remove_var("COLORTERM");
@@ -638,7 +678,10 @@ mod cross_platform_tests {
 
             // Should work with filesystem edge cases
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work with filesystem edge cases");
+            assert!(
+                status_output.status.success(),
+                "Should work with filesystem edge cases"
+            );
 
             Ok(())
         })
@@ -690,7 +733,10 @@ mod cross_platform_tests {
 
             // Should work with resource constraints
             let status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(status_output.status.success(), "Should work within resource limits");
+            assert!(
+                status_output.status.success(),
+                "Should work within resource limits"
+            );
 
             Ok(())
         })

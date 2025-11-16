@@ -6,6 +6,8 @@ mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
 #[cfg(test)]
+#[allow(unused_variables)]
+#[allow(dead_code)]
 mod git_edge_cases_tests {
     use super::*;
 
@@ -86,7 +88,10 @@ mod git_edge_cases_tests {
     }
 
     /// Helper to run hitch command and expect failure
-    fn run_hitch_command_expect_failure(test_env: &TestEnv, args: &[&str]) -> Result<std::process::Output> {
+    fn run_hitch_command_expect_failure(
+        test_env: &TestEnv,
+        args: &[&str],
+    ) -> Result<std::process::Output> {
         let binary_path = test_env.hitch_binary();
         let output = Command::new(&binary_path)
             .args(args)
@@ -158,10 +163,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about not being on a branch
-            assert!(stderr.contains("branch") ||
-                   stderr.contains("HEAD") ||
-                   stderr.contains("detached") ||
-                   stderr.contains("checkout"));
+            assert!(
+                stderr.contains("branch")
+                    || stderr.contains("HEAD")
+                    || stderr.contains("detached")
+                    || stderr.contains("checkout")
+            );
 
             Ok(())
         })
@@ -185,10 +192,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about dirty working tree
-            assert!(stderr.contains("clean") ||
-                   stderr.contains("commit") ||
-                   stderr.contains("stashed") ||
-                   stderr.contains("changes"));
+            assert!(
+                stderr.contains("clean")
+                    || stderr.contains("commit")
+                    || stderr.contains("stashed")
+                    || stderr.contains("changes")
+            );
 
             Ok(())
         })
@@ -216,10 +225,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about staged changes
-            assert!(stderr.contains("clean") ||
-                   stderr.contains("commit") ||
-                   stderr.contains("staged") ||
-                   stderr.contains("changes"));
+            assert!(
+                stderr.contains("clean")
+                    || stderr.contains("commit")
+                    || stderr.contains("staged")
+                    || stderr.contains("changes")
+            );
 
             Ok(())
         })
@@ -239,28 +250,40 @@ mod git_edge_cases_tests {
             std::fs::create_dir_all(&worktree_path)?;
 
             Command::new("git")
-                .args(["worktree", "add", "-b", "worktree-branch", worktree_path.to_str().unwrap()])
+                .args([
+                    "worktree",
+                    "add",
+                    "-b",
+                    "worktree-branch",
+                    worktree_path.to_str().unwrap(),
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
             // Try to run hitch command from worktree
-            let output = run_hitch_command_expect_failure_from_path(&worktree_path, &["add", "dev"])?;
+            let output =
+                run_hitch_command_expect_failure_from_path(&worktree_path, &["add", "dev"])?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Hitch should work from worktrees or give clear error
             // The exact behavior depends on implementation
-            assert!(stderr.contains("worktree") ||
-                   stderr.contains("main") ||
-                   stderr.contains("repository") ||
-                   output.status.success()); // Or it might work fine
+            assert!(
+                stderr.contains("worktree")
+                    || stderr.contains("main")
+                    || stderr.contains("repository")
+                    || output.status.success()
+            ); // Or it might work fine
 
             Ok(())
         })
     }
 
     /// Helper to run hitch command from specific path
-    fn run_hitch_command_expect_failure_from_path(path: &std::path::Path, args: &[&str]) -> Result<std::process::Output> {
+    fn run_hitch_command_expect_failure_from_path(
+        path: &std::path::Path,
+        args: &[&str],
+    ) -> Result<std::process::Output> {
         let binary_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("debug")
@@ -297,10 +320,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about empty repository or missing commits
-            assert!(stderr.contains("commit") ||
-                   stderr.contains("empty") ||
-                   stderr.contains("HEAD") ||
-                   stderr.contains("exists"));
+            assert!(
+                stderr.contains("commit")
+                    || stderr.contains("empty")
+                    || stderr.contains("HEAD")
+                    || stderr.contains("exists")
+            );
 
             Ok(())
         })
@@ -322,9 +347,11 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about bare repository
-            assert!(stderr.contains("bare") ||
-                   stderr.contains("working tree") ||
-                   stderr.contains("not supported"));
+            assert!(
+                stderr.contains("bare")
+                    || stderr.contains("working tree")
+                    || stderr.contains("not supported")
+            );
 
             Ok(())
         })
@@ -344,10 +371,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about corrupted repository
-            assert!(stderr.contains("repository") ||
-                   stderr.contains("corrupted") ||
-                   stderr.contains("git") ||
-                   stderr.contains("HEAD"));
+            assert!(
+                stderr.contains("repository")
+                    || stderr.contains("corrupted")
+                    || stderr.contains("git")
+                    || stderr.contains("HEAD")
+            );
 
             Ok(())
         })
@@ -385,16 +414,22 @@ mod git_edge_cases_tests {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
 
-            assert!(output.status.success() ||
-                   stderr.contains("submodule") ||
-                   stderr.contains("nested"));
+            assert!(
+                output.status.success()
+                    || stderr.contains("submodule")
+                    || stderr.contains("nested")
+            );
 
             Ok(())
         })
     }
 
     /// Helper to create and commit file from specific path
-    fn create_and_commit_file_from_path(path: &std::path::Path, filename: &str, content: &str) -> Result<()> {
+    fn create_and_commit_file_from_path(
+        path: &std::path::Path,
+        filename: &str,
+        content: &str,
+    ) -> Result<()> {
         let file_path = path.join(filename);
         std::fs::write(file_path, content)?;
 
@@ -422,7 +457,11 @@ mod git_edge_cases_tests {
 
             // Create many branches
             for i in 0..50 {
-                create_and_commit_file(test_env, &format!("file{}.txt", i), &format!("content {}", i))?;
+                create_and_commit_file(
+                    test_env,
+                    &format!("file{}.txt", i),
+                    &format!("content {}", i),
+                )?;
                 Command::new("git")
                     .args(["checkout", "-b", &format!("branch-{}", i)])
                     .current_dir(test_env.path())
@@ -500,10 +539,12 @@ mod git_edge_cases_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Might warn about not being on main branch
-            assert!(output.status.success() ||
-                   stdout.contains("main") ||
-                   stderr.contains("main") ||
-                   stdout.contains("branch"));
+            assert!(
+                output.status.success()
+                    || stdout.contains("main")
+                    || stderr.contains("main")
+                    || stdout.contains("branch")
+            );
 
             Ok(())
         })
@@ -539,8 +580,9 @@ mod git_edge_cases_tests {
 
             // Hitch should handle git hooks gracefully
             // The exact behavior depends on how git hooks interact with Hitch
-            assert!(output.status.success() ||
-                   String::from_utf8_lossy(&output.stderr).contains("hook"));
+            assert!(
+                output.status.success() || String::from_utf8_lossy(&output.stderr).contains("hook")
+            );
 
             Ok(())
         })
@@ -556,7 +598,10 @@ mod git_edge_cases_tests {
             cleanup_after_hitch_init(test_env)?;
 
             // Create a .gitattributes file for LFS
-            std::fs::write(test_env.path().join(".gitattributes"), "*.lfs filter=lfs diff=lfs merge=lfs -text")?;
+            std::fs::write(
+                test_env.path().join(".gitattributes"),
+                "*.lfs filter=lfs diff=lfs merge=lfs -text",
+            )?;
 
             // Create a large file that would be tracked by LFS
             let large_content = "x".repeat(1000);

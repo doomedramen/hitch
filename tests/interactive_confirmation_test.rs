@@ -94,7 +94,11 @@ mod interactive_confirmation_tests {
     }
 
     /// Helper to run hitch command with specific input
-    fn run_hitch_command_with_input(test_env: &TestEnv, args: &[&str], input: &str) -> Result<std::process::Output> {
+    fn run_hitch_command_with_input(
+        test_env: &TestEnv,
+        args: &[&str],
+        input: &str,
+    ) -> Result<std::process::Output> {
         use std::io::Write;
         use std::process::Stdio;
 
@@ -176,7 +180,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote and confirm 'y'
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -213,7 +221,11 @@ mod interactive_confirmation_tests {
             create_branch(test_env, "feature1")?;
 
             // Promote with --replace-remote and confirm 'yes'
-            let output = run_hitch_command_with_input(test_env, &["promote", "feature1", "dev", "--replace-remote"], "yes\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["promote", "feature1", "dev", "--replace-remote"],
+                "yes\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -261,7 +273,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote but decline 'n'
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "n\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "n\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -300,7 +316,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Demote with --replace-remote but decline 'N'
-            let output = run_hitch_command_with_input(test_env, &["demote", "feature1", "dev", "--replace-remote"], "N\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["demote", "feature1", "dev", "--replace-remote"],
+                "N\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -348,7 +368,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote and provide empty input
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -396,7 +420,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote and provide invalid input
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "maybe\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "maybe\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -444,7 +472,11 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote and confirm 'Y'
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "Y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "Y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -492,15 +524,21 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote but decline to see warnings
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "n\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "n\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should show the warning about replacing remote branch
-            assert!(stdout.contains("This will replace the remote 'dev' branch with the rebuilt version."));
+            assert!(stdout
+                .contains("This will replace the remote 'dev' branch with the rebuilt version."));
 
             // Should show the warning about inability to undo
-            assert!(stdout.contains("This action cannot be undone and will overwrite the remote branch."));
+            assert!(stdout
+                .contains("This action cannot be undone and will overwrite the remote branch."));
 
             // Should show the confirmation prompt
             assert!(stdout.contains("Do you want to proceed? [y/N]:"));
@@ -526,12 +564,20 @@ mod interactive_confirmation_tests {
             create_branch(test_env, "feature1")?;
 
             // Promote to dev with --replace-remote and confirm
-            let output1 = run_hitch_command_with_input(test_env, &["promote", "feature1", "dev", "--replace-remote"], "y\n")?;
+            let output1 = run_hitch_command_with_input(
+                test_env,
+                &["promote", "feature1", "dev", "--replace-remote"],
+                "y\n",
+            )?;
             let stdout1 = String::from_utf8_lossy(&output1.stdout);
             assert!(stdout1.contains("✓ Force pushed rebuilt 'dev' branch to remote"));
 
             // Promote to staging with --replace-remote and confirm
-            let output2 = run_hitch_command_with_input(test_env, &["promote", "feature1", "staging", "--replace-remote"], "y\n")?;
+            let output2 = run_hitch_command_with_input(
+                test_env,
+                &["promote", "feature1", "staging", "--replace-remote"],
+                "y\n",
+            )?;
             let stdout2 = String::from_utf8_lossy(&output2.stdout);
             assert!(stdout2.contains("✓ Force pushed rebuilt 'staging' branch to remote"));
 
@@ -571,7 +617,10 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with both --replace-remote and --no-push
-            let output = run_hitch_command(test_env, &["rebuild", "dev", "--replace-remote", "--no-push"])?;
+            let output = run_hitch_command(
+                test_env,
+                &["rebuild", "dev", "--replace-remote", "--no-push"],
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -579,7 +628,8 @@ mod interactive_confirmation_tests {
             assert!(!stdout.contains("Do you want to proceed? [y/N]:"));
 
             // Should show that remote operations are skipped
-            assert!(stdout.contains("Skipping remote operations for 'dev' branch due to --no-push flag"));
+            assert!(stdout
+                .contains("Skipping remote operations for 'dev' branch due to --no-push flag"));
 
             // Should NOT show force push operations
             assert!(!stdout.contains("✓ Force pushed rebuilt 'dev' branch to remote"));
@@ -619,12 +669,20 @@ mod interactive_confirmation_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Test with whitespace before 'y'
-            let output1 = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "  y  \n")?;
+            let output1 = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "  y  \n",
+            )?;
             let stdout1 = String::from_utf8_lossy(&output1.stdout);
             assert!(stdout1.contains("✓ Force pushed rebuilt 'dev' branch to remote"));
 
             // Test with whitespace before 'n'
-            let output2 = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "  n  \n")?;
+            let output2 = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "  n  \n",
+            )?;
             let stdout2 = String::from_utf8_lossy(&output2.stdout);
             assert!(stdout2.contains("Skipping remote replacement for 'dev' branch"));
 

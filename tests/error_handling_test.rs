@@ -86,7 +86,10 @@ mod error_handling_tests {
     }
 
     /// Helper to run hitch command and expect failure
-    fn run_hitch_command_expect_failure(test_env: &TestEnv, args: &[&str]) -> Result<std::process::Output> {
+    fn run_hitch_command_expect_failure(
+        test_env: &TestEnv,
+        args: &[&str],
+    ) -> Result<std::process::Output> {
         let binary_path = test_env.hitch_binary();
         let output = Command::new(&binary_path)
             .args(args)
@@ -152,14 +155,17 @@ mod error_handling_tests {
             create_and_commit_file(test_env, "config.txt", "feature config content")?;
 
             // Try to promote conflicting feature branch - should fail
-            let output = run_hitch_command_expect_failure(test_env, &["promote", "feature1", "dev"])?;
+            let output =
+                run_hitch_command_expect_failure(test_env, &["promote", "feature1", "dev"])?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show merge conflict error
-            assert!(stderr.contains("Merge conflict detected") ||
-                   stderr.contains("conflict") ||
-                   stderr.contains("resolve conflicts"));
+            assert!(
+                stderr.contains("Merge conflict detected")
+                    || stderr.contains("conflict")
+                    || stderr.contains("resolve conflicts")
+            );
 
             Ok(())
         })
@@ -210,9 +216,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show conflict error
-            assert!(stderr.contains("conflict") ||
-                   stderr.contains("Merge conflict") ||
-                   stderr.contains("resolve"));
+            assert!(
+                stderr.contains("conflict")
+                    || stderr.contains("Merge conflict")
+                    || stderr.contains("resolve")
+            );
 
             Ok(())
         })
@@ -233,9 +241,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show environment not found error
-            assert!(stderr.contains("not found") ||
-                   stderr.contains("does not exist") ||
-                   stderr.contains("No such environment"));
+            assert!(
+                stderr.contains("not found")
+                    || stderr.contains("does not exist")
+                    || stderr.contains("No such environment")
+            );
 
             Ok(())
         })
@@ -255,14 +265,19 @@ mod error_handling_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Try to promote non-existent branch
-            let output = run_hitch_command_expect_failure(test_env, &["promote", "nonexistent-branch", "dev"])?;
+            let output = run_hitch_command_expect_failure(
+                test_env,
+                &["promote", "nonexistent-branch", "dev"],
+            )?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show branch not found error
-            assert!(stderr.contains("not found") ||
-                   stderr.contains("does not exist") ||
-                   stderr.contains("No such branch"));
+            assert!(
+                stderr.contains("not found")
+                    || stderr.contains("does not exist")
+                    || stderr.contains("No such branch")
+            );
 
             Ok(())
         })
@@ -287,14 +302,19 @@ mod error_handling_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Try to promote to non-existent environment
-            let output = run_hitch_command_expect_failure(test_env, &["promote", "feature1", "nonexistent-env"])?;
+            let output = run_hitch_command_expect_failure(
+                test_env,
+                &["promote", "feature1", "nonexistent-env"],
+            )?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show environment not found error
-            assert!(stderr.contains("not found") ||
-                   stderr.contains("does not exist") ||
-                   stderr.contains("No such environment"));
+            assert!(
+                stderr.contains("not found")
+                    || stderr.contains("does not exist")
+                    || stderr.contains("No such environment")
+            );
 
             Ok(())
         })
@@ -320,9 +340,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show locked environment error
-            assert!(stderr.contains("locked") ||
-                   stderr.contains("cannot rebuild") ||
-                   stderr.contains("use --force"));
+            assert!(
+                stderr.contains("locked")
+                    || stderr.contains("cannot rebuild")
+                    || stderr.contains("use --force")
+            );
 
             Ok(())
         })
@@ -347,9 +369,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show duplicate environment error
-            assert!(stderr.contains("already exists") ||
-                   stderr.contains("duplicate") ||
-                   stderr.contains("already added"));
+            assert!(
+                stderr.contains("already exists")
+                    || stderr.contains("duplicate")
+                    || stderr.contains("already added")
+            );
 
             Ok(())
         })
@@ -378,14 +402,17 @@ mod error_handling_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Try to demote non-promoted branch
-            let output = run_hitch_command_expect_failure(test_env, &["demote", "feature1", "dev"])?;
+            let output =
+                run_hitch_command_expect_failure(test_env, &["demote", "feature1", "dev"])?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show not promoted error
-            assert!(stderr.contains("not promoted") ||
-                   stderr.contains("not found") ||
-                   stderr.contains("cannot demote"));
+            assert!(
+                stderr.contains("not promoted")
+                    || stderr.contains("not found")
+                    || stderr.contains("cannot demote")
+            );
 
             Ok(())
         })
@@ -410,10 +437,12 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show JSON parsing error or corrupted metadata error
-            assert!(stderr.contains("JSON") ||
-                   stderr.contains("parse") ||
-                   stderr.contains("invalid") ||
-                   stderr.contains("corrupted"));
+            assert!(
+                stderr.contains("JSON")
+                    || stderr.contains("parse")
+                    || stderr.contains("invalid")
+                    || stderr.contains("corrupted")
+            );
 
             Ok(())
         })
@@ -431,9 +460,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show not initialized error
-            assert!(stderr.contains("not initialized") ||
-                   stderr.contains("initialize") ||
-                   stderr.contains("hitch init"));
+            assert!(
+                stderr.contains("not initialized")
+                    || stderr.contains("initialize")
+                    || stderr.contains("hitch init")
+            );
 
             Ok(())
         })
@@ -452,9 +483,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show git repository error
-            assert!(stderr.contains("git") ||
-                   stderr.contains("repository") ||
-                   stderr.contains("not a git repository"));
+            assert!(
+                stderr.contains("git")
+                    || stderr.contains("repository")
+                    || stderr.contains("not a git repository")
+            );
 
             Ok(())
         })
@@ -486,16 +519,20 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show warning about remote failure but not crash
-            assert!(stdout.contains("Failed to force push") ||
-                   stdout.contains("warning") ||
-                   stderr.contains("Failed to force push") ||
-                   stderr.contains("remote"));
+            assert!(
+                stdout.contains("Failed to force push")
+                    || stdout.contains("warning")
+                    || stderr.contains("Failed to force push")
+                    || stderr.contains("remote")
+            );
 
             // Should provide manual instructions
-            assert!(stdout.contains("manually") ||
-                   stdout.contains("git push") ||
-                   stderr.contains("manually") ||
-                   stderr.contains("git push"));
+            assert!(
+                stdout.contains("manually")
+                    || stdout.contains("git push")
+                    || stderr.contains("manually")
+                    || stderr.contains("git push")
+            );
 
             Ok(())
         })
@@ -520,9 +557,11 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show not locked error
-            assert!(stderr.contains("not locked") ||
-                   stderr.contains("already unlocked") ||
-                   stderr.contains("cannot unlock"));
+            assert!(
+                stderr.contains("not locked")
+                    || stderr.contains("already unlocked")
+                    || stderr.contains("cannot unlock")
+            );
 
             Ok(())
         })
@@ -542,15 +581,20 @@ mod error_handling_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Try to promote with invalid branch name (contains invalid characters)
-            let output = run_hitch_command_expect_failure(test_env, &["promote", "invalid@branch#name", "dev"])?;
+            let output = run_hitch_command_expect_failure(
+                test_env,
+                &["promote", "invalid@branch#name", "dev"],
+            )?;
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show invalid branch name error
-            assert!(stderr.contains("invalid") ||
-                   stderr.contains("branch") ||
-                   stderr.contains("not found") ||
-                   stderr.contains("cannot"));
+            assert!(
+                stderr.contains("invalid")
+                    || stderr.contains("branch")
+                    || stderr.contains("not found")
+                    || stderr.contains("cannot")
+            );
 
             Ok(())
         })

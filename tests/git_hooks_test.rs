@@ -1,12 +1,12 @@
 use anyhow::Result;
 use std::process::Command;
-use std::fs;
 
 // Import the proper test framework
 mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
 #[cfg(test)]
+#[allow(unused_variables)]
 mod git_hooks_tests {
     use super::*;
 
@@ -148,8 +148,14 @@ exit 0
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should succeed with passing pre-commit hook
-            assert!(output.status.success(), "Should succeed with passing pre-commit hook");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should succeed with passing pre-commit hook"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             Ok(())
         })
@@ -178,10 +184,17 @@ exit 1
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should fail due to failing pre-commit hook
-            assert!(!output.status.success(), "Should fail with failing pre-commit hook");
-            assert!(stderr.contains("hook") || stderr.contains("pre-commit") ||
-                   stderr.contains("commit") || output.status.code() == Some(1),
-                   "Should show hook-related error");
+            assert!(
+                !output.status.success(),
+                "Should fail with failing pre-commit hook"
+            );
+            assert!(
+                stderr.contains("hook")
+                    || stderr.contains("pre-commit")
+                    || stderr.contains("commit")
+                    || output.status.code() == Some(1),
+                "Should show hook-related error"
+            );
 
             Ok(())
         })
@@ -226,7 +239,10 @@ exit 0
             let output = run_hitch_command(test_env, &["promote", "feature", "dev"])?;
 
             // Should succeed with passing pre-push hook
-            assert!(output.status.success(), "Should succeed with passing pre-push hook");
+            assert!(
+                output.status.success(),
+                "Should succeed with passing pre-push hook"
+            );
 
             Ok(())
         })
@@ -276,9 +292,13 @@ exit 1
             // Result depends on whether Hitch operations trigger pre-push hooks
             // Either succeeds (if Hitch doesn't trigger push) or fails with hook error
             if !output.status.success() {
-                assert!(stderr.contains("hook") || stderr.contains("pre-push") ||
-                       stderr.contains("push") || output.status.code() == Some(1),
-                       "Should show hook-related error if it fails");
+                assert!(
+                    stderr.contains("hook")
+                        || stderr.contains("pre-push")
+                        || stderr.contains("push")
+                        || output.status.code() == Some(1),
+                    "Should show hook-related error if it fails"
+                );
             }
 
             Ok(())
@@ -320,10 +340,17 @@ fi
 
             // Should succeed since Hitch likely creates appropriate commit messages
             if !output.status.success() {
-                assert!(stderr.contains("hook") || stderr.contains("commit-msg") ||
-                       stderr.contains("message"), "Should show commit-msg hook error if it fails");
+                assert!(
+                    stderr.contains("hook")
+                        || stderr.contains("commit-msg")
+                        || stderr.contains("message"),
+                    "Should show commit-msg hook error if it fails"
+                );
             } else {
-                assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+                assert!(
+                    stdout.contains("dev") || stdout.contains("environment"),
+                    "Should add environment successfully"
+                );
             }
 
             Ok(())
@@ -364,8 +391,14 @@ exit 0
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should succeed with all passing hooks
-            assert!(output.status.success(), "Should succeed with all passing hooks");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should succeed with all passing hooks"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             Ok(())
         })
@@ -392,8 +425,14 @@ exit 0
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should succeed without hooks
-            assert!(output.status.success(), "Should succeed without hooks directory");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should succeed without hooks directory"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             Ok(())
         })
@@ -447,8 +486,14 @@ exit 0
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should succeed with lefthook-style setup
-            assert!(output.status.success(), "Should succeed with lefthook-style setup");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should succeed with lefthook-style setup"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             Ok(())
         })
@@ -507,11 +552,20 @@ exit 0
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should pass validation
-            assert!(output.status.success(), "Should pass complex validation hook");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should pass complex validation hook"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // Test with a file that would fail validation
-            std::fs::write(test_env.path().join("test.txt"), "This file contains a secret password")?;
+            std::fs::write(
+                test_env.path().join("test.txt"),
+                "This file contains a secret password",
+            )?;
             Command::new("git")
                 .args(["add", "test.txt"])
                 .current_dir(test_env.path())
@@ -523,10 +577,17 @@ exit 0
             let stderr2 = String::from_utf8_lossy(&output2.stderr);
 
             // Should fail due to validation hook
-            assert!(!output2.status.success(), "Should fail due to sensitive content validation");
-            assert!(stderr2.contains("hook") || stderr2.contains("validation") ||
-                   stderr2.contains("sensitive") || output2.status.code() == Some(1),
-                   "Should show validation error");
+            assert!(
+                !output2.status.success(),
+                "Should fail due to sensitive content validation"
+            );
+            assert!(
+                stderr2.contains("hook")
+                    || stderr2.contains("validation")
+                    || stderr2.contains("sensitive")
+                    || output2.status.code() == Some(1),
+                "Should show validation error"
+            );
 
             Ok(())
         })
@@ -580,7 +641,10 @@ fi
             let output = run_hitch_command(test_env, &["promote", "feature-valid", "dev"])?;
 
             // Should succeed with valid feature branch
-            assert!(output.status.success(), "Should promote valid feature branch");
+            assert!(
+                output.status.success(),
+                "Should promote valid feature branch"
+            );
 
             // Create an invalid branch (not feature-*)
             create_and_commit_file(test_env, "invalid-content.txt", "Invalid branch content")?;
@@ -603,9 +667,13 @@ fi
 
             // Result depends on whether promote operations trigger hooks
             if !output2.status.success() {
-                assert!(stderr2.contains("hook") || stderr2.contains("validation") ||
-                       stderr2.contains("feature") || output2.status.code() == Some(1),
-                       "Should show validation error if hook is triggered");
+                assert!(
+                    stderr2.contains("hook")
+                        || stderr2.contains("validation")
+                        || stderr2.contains("feature")
+                        || output2.status.code() == Some(1),
+                    "Should show validation error if hook is triggered"
+                );
             }
 
             Ok(())
@@ -640,8 +708,14 @@ exit 0
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should succeed even with file-modifying hook
-            assert!(output.status.success(), "Should succeed with file-modifying hook");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should succeed with file-modifying hook"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // Check if the hook added its file
             let timestamp_exists = test_env.path().join(".hitch-timestamp").exists();
@@ -693,7 +767,10 @@ exit 0
 
             // Should succeed with async hooks
             assert!(output.status.success(), "Should succeed with async hooks");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             Ok(())
         })

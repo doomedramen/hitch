@@ -6,6 +6,7 @@ mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
 /// Simple ANSI code stripper for test assertions
+#[allow(dead_code)]
 fn strip_ansi_codes(text: &str) -> String {
     let mut result = String::new();
     let mut chars = text.chars().peekable();
@@ -31,6 +32,7 @@ fn strip_ansi_codes(text: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod replace_remote_tests {
     use super::*;
 
@@ -54,7 +56,11 @@ mod replace_remote_tests {
     }
 
     /// Helper to run hitch command with input
-    fn run_hitch_command_with_input(test_env: &TestEnv, args: &[&str], input: &str) -> Result<std::process::Output> {
+    fn run_hitch_command_with_input(
+        test_env: &TestEnv,
+        args: &[&str],
+        _input: &str,
+    ) -> Result<std::process::Output> {
         let binary_path = test_env.hitch_binary();
         let output = Command::new(&binary_path)
             .args(args)
@@ -121,7 +127,11 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Now rebuild with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -151,7 +161,11 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with --replace-remote but answer "no"
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "n\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "n\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -182,7 +196,11 @@ mod replace_remote_tests {
             create_branch(test_env, "feature1")?;
 
             // Promote with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(test_env, &["promote", "feature1", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["promote", "feature1", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -211,7 +229,11 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Now demote with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(test_env, &["demote", "feature1", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["demote", "feature1", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -240,13 +262,17 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
             // Rebuild with both --replace-remote and --no-push
-            let output = run_hitch_command(test_env, &["rebuild", "dev", "--replace-remote", "--no-push"])?;
+            let output = run_hitch_command(
+                test_env,
+                &["rebuild", "dev", "--replace-remote", "--no-push"],
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should show rebuild success but skip remote operations due to --no-push
             assert!(stdout.contains("Environment 'dev' rebuilt successfully"));
-            assert!(stdout.contains("Skipping remote operations for 'dev' branch due to --no-push flag"));
+            assert!(stdout
+                .contains("Skipping remote operations for 'dev' branch due to --no-push flag"));
 
             // Should NOT show force push operations
             assert!(!stdout.contains("Force pushing rebuilt 'dev' branch"));
@@ -267,12 +293,18 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["add", "dev"])?;
 
             // Rebuild with --replace-remote
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
             // Should handle empty environment gracefully
-            assert!(stdout.contains("No branches promoted to this environment, using base branch only"));
+            assert!(
+                stdout.contains("No branches promoted to this environment, using base branch only")
+            );
             assert!(stdout.contains("✓ Force pushed rebuilt 'dev' branch to remote"));
 
             Ok(())
@@ -300,7 +332,11 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["promote", "feature2", "dev"])?;
 
             // Rebuild with --replace-remote
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -331,13 +367,15 @@ mod replace_remote_tests {
                 .current_dir(test_env.path())
                 .output()?;
 
-            assert!(!output.status.success(), "Rebuild locked environment should fail");
+            assert!(
+                !output.status.success(),
+                "Rebuild locked environment should fail"
+            );
 
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should show error about locked environment
-            assert!(stderr.contains("Environment 'dev' is locked") ||
-                   stderr.contains("locked by"));
+            assert!(stderr.contains("Environment 'dev' is locked") || stderr.contains("locked by"));
 
             Ok(())
         })
@@ -362,7 +400,11 @@ mod replace_remote_tests {
             run_hitch_command(test_env, &["lock", "dev"])?;
 
             // Rebuild with both --replace-remote and --force
-            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote", "--force"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["rebuild", "dev", "--replace-remote", "--force"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 

@@ -7,6 +7,9 @@ mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
 #[cfg(test)]
+#[allow(unused_variables)]
+#[allow(dead_code)]
+#[allow(clippy::needless_borrows_for_generic_args)]
 mod performance_tests {
     use super::*;
 
@@ -140,24 +143,48 @@ mod performance_tests {
 
             let total_time = start_time.elapsed();
 
-            println!("Successfully added {}/{} environments in {:?}", successful_envs, environment_count, total_time);
-            println!("Average time per environment: {:?}", total_time / environment_count as u32);
+            println!(
+                "Successfully added {}/{} environments in {:?}",
+                successful_envs, environment_count, total_time
+            );
+            println!(
+                "Average time per environment: {:?}",
+                total_time / environment_count as u32
+            );
 
             // Performance assertions
-            assert!(successful_envs >= 15, "Should successfully add at least 15 environments");
-            assert!(total_time < Duration::from_secs(30), "Should complete within 30 seconds");
+            assert!(
+                successful_envs >= 15,
+                "Should successfully add at least 15 environments"
+            );
+            assert!(
+                total_time < Duration::from_secs(30),
+                "Should complete within 30 seconds"
+            );
 
             // Test status performance with many environments
             let status_start = Instant::now();
             let status_output = run_hitch_command(test_env, &["status"])?;
             let status_duration = status_start.elapsed();
 
-            assert!(status_output.status.success(), "Status should work with many environments");
-            println!("Status command with {} environments took {:?}", successful_envs, status_duration);
-            assert!(status_duration < Duration::from_secs(5), "Status should complete within 5 seconds");
+            assert!(
+                status_output.status.success(),
+                "Status should work with many environments"
+            );
+            println!(
+                "Status command with {} environments took {:?}",
+                successful_envs, status_duration
+            );
+            assert!(
+                status_duration < Duration::from_secs(5),
+                "Status should complete within 5 seconds"
+            );
 
             let status_stdout = String::from_utf8_lossy(&status_output.stdout);
-            assert!(status_stdout.contains("env-"), "Status should show environment names");
+            assert!(
+                status_stdout.contains("env-"),
+                "Status should show environment names"
+            );
 
             Ok(())
         })
@@ -199,7 +226,10 @@ mod performance_tests {
             }
 
             let repo_creation_time = start_time.elapsed();
-            println!("Created large repository ({} files, {} commits) in {:?}", file_count, commit_count, repo_creation_time);
+            println!(
+                "Created large repository ({} files, {} commits) in {:?}",
+                file_count, commit_count, repo_creation_time
+            );
 
             // Test Hitch performance with large repository
             let hitch_start = Instant::now();
@@ -208,7 +238,10 @@ mod performance_tests {
             let add_start = Instant::now();
             run_hitch_command(test_env, &["add", "dev"])?;
             let add_duration = add_start.elapsed();
-            println!("Hitch add environment on large repo took {:?}", add_duration);
+            println!(
+                "Hitch add environment on large repo took {:?}",
+                add_duration
+            );
 
             ensure_clean_working_tree(test_env)?;
 
@@ -218,7 +251,10 @@ mod performance_tests {
                 .current_dir(test_env.path())
                 .output()?;
 
-            std::fs::write(test_env.path().join("large-feature.txt"), "Large feature content")?;
+            std::fs::write(
+                test_env.path().join("large-feature.txt"),
+                "Large feature content",
+            )?;
             Command::new("git")
                 .args(["add", "large-feature.txt"])
                 .current_dir(test_env.path())
@@ -241,7 +277,10 @@ mod performance_tests {
             let promote_duration = promote_start.elapsed();
             println!("Hitch promote on large repo took {:?}", promote_duration);
 
-            assert!(promote_output.status.success(), "Promote should work on large repository");
+            assert!(
+                promote_output.status.success(),
+                "Promote should work on large repository"
+            );
 
             // Rebuild environment
             let rebuild_start = Instant::now();
@@ -249,15 +288,30 @@ mod performance_tests {
             let rebuild_duration = rebuild_start.elapsed();
             println!("Hitch rebuild on large repo took {:?}", rebuild_duration);
 
-            assert!(rebuild_output.status.success(), "Rebuild should work on large repository");
+            assert!(
+                rebuild_output.status.success(),
+                "Rebuild should work on large repository"
+            );
 
             let total_hitch_time = hitch_start.elapsed();
-            println!("Total Hitch operations on large repo took {:?}", total_hitch_time);
+            println!(
+                "Total Hitch operations on large repo took {:?}",
+                total_hitch_time
+            );
 
             // Performance assertions
-            assert!(add_duration < Duration::from_secs(10), "Add should complete within 10 seconds on large repo");
-            assert!(promote_duration < Duration::from_secs(15), "Promote should complete within 15 seconds on large repo");
-            assert!(rebuild_duration < Duration::from_secs(20), "Rebuild should complete within 20 seconds on large repo");
+            assert!(
+                add_duration < Duration::from_secs(10),
+                "Add should complete within 10 seconds on large repo"
+            );
+            assert!(
+                promote_duration < Duration::from_secs(15),
+                "Promote should complete within 15 seconds on large repo"
+            );
+            assert!(
+                rebuild_duration < Duration::from_secs(20),
+                "Rebuild should complete within 20 seconds on large repo"
+            );
 
             Ok(())
         })
@@ -286,8 +340,10 @@ mod performance_tests {
                 let branch_name = format!("feature-{:02}", i);
 
                 // Create feature branch
-                std::fs::write(test_env.path().join(&format!("{}.txt", branch_name)),
-                              format!("Content for {}", branch_name))?;
+                std::fs::write(
+                    test_env.path().join(&format!("{}.txt", branch_name)),
+                    format!("Content for {}", branch_name),
+                )?;
 
                 Command::new("git")
                     .args(["add", &format!("{}.txt", branch_name)])
@@ -321,26 +377,50 @@ mod performance_tests {
                     ensure_clean_working_tree(test_env)?;
                     println!("Promoted {} in {:?}", branch_name, promote_duration);
                 } else {
-                    println!("Failed to promote {} in {:?}", branch_name, promote_duration);
+                    println!(
+                        "Failed to promote {} in {:?}",
+                        branch_name, promote_duration
+                    );
                 }
             }
 
             let total_promotion_time = start_time.elapsed();
-            println!("Successfully promoted {}/{} branches in {:?}", successful_promotions, branch_count, total_promotion_time);
-            println!("Average promotion time: {:?}", total_promotion_time / branch_count as u32);
+            println!(
+                "Successfully promoted {}/{} branches in {:?}",
+                successful_promotions, branch_count, total_promotion_time
+            );
+            println!(
+                "Average promotion time: {:?}",
+                total_promotion_time / branch_count as u32
+            );
 
             // Performance assertions
-            assert!(successful_promotions >= 10, "Should successfully promote at least 10 branches");
-            assert!(total_promotion_time < Duration::from_secs(60), "Should complete promotions within 60 seconds");
+            assert!(
+                successful_promotions >= 10,
+                "Should successfully promote at least 10 branches"
+            );
+            assert!(
+                total_promotion_time < Duration::from_secs(60),
+                "Should complete promotions within 60 seconds"
+            );
 
             // Test rebuild performance with many promoted branches
             let rebuild_start = Instant::now();
             let rebuild_output = run_hitch_command(test_env, &["rebuild", "dev"])?;
             let rebuild_duration = rebuild_start.elapsed();
 
-            assert!(rebuild_output.status.success(), "Rebuild should work with many promoted branches");
-            println!("Rebuild with {} promoted branches took {:?}", successful_promotions, rebuild_duration);
-            assert!(rebuild_duration < Duration::from_secs(30), "Rebuild should complete within 30 seconds");
+            assert!(
+                rebuild_output.status.success(),
+                "Rebuild should work with many promoted branches"
+            );
+            println!(
+                "Rebuild with {} promoted branches took {:?}",
+                successful_promotions, rebuild_duration
+            );
+            assert!(
+                rebuild_duration < Duration::from_secs(30),
+                "Rebuild should complete within 30 seconds"
+            );
 
             Ok(())
         })
@@ -366,8 +446,10 @@ mod performance_tests {
                 for i in 0..branch_count {
                     let branch_name = format!("{}-feature-{}", env_name, i);
 
-                    std::fs::write(test_env.path().join(&format!("{}.txt", branch_name)),
-                                  format!("Content for {}", branch_name))?;
+                    std::fs::write(
+                        test_env.path().join(&format!("{}.txt", branch_name)),
+                        format!("Content for {}", branch_name),
+                    )?;
 
                     Command::new("git")
                         .args(["add", &format!("{}.txt", branch_name)])
@@ -405,27 +487,52 @@ mod performance_tests {
                 let status_output = run_hitch_command(test_env, &["status"])?;
                 let status_duration = status_start.elapsed();
 
-                assert!(status_output.status.success(), "Status should work in iteration {}", i);
+                assert!(
+                    status_output.status.success(),
+                    "Status should work in iteration {}",
+                    i
+                );
                 total_status_time += status_duration;
 
                 println!("Status iteration {} took {:?}", i, status_duration);
             }
 
             let average_status_time = total_status_time / status_iterations as u32;
-            println!("Average status time over {} iterations: {:?}", status_iterations, average_status_time);
+            println!(
+                "Average status time over {} iterations: {:?}",
+                status_iterations, average_status_time
+            );
 
             // Performance assertions
-            assert!(average_status_time < Duration::from_millis(500), "Average status should complete within 500ms");
+            assert!(
+                average_status_time < Duration::from_millis(500),
+                "Average status should complete within 500ms"
+            );
 
             // Run one more status to get output for verification
             let final_status_output = run_hitch_command(test_env, &["status"])?;
-            assert!(final_status_output.status.success(), "Final status should work");
+            assert!(
+                final_status_output.status.success(),
+                "Final status should work"
+            );
 
             let status_stdout = String::from_utf8_lossy(&final_status_output.stdout);
-            assert!(status_stdout.contains("dev"), "Status should show dev environment");
-            assert!(status_stdout.contains("staging"), "Status should show staging environment");
-            assert!(status_stdout.contains("prod"), "Status should show prod environment");
-            assert!(status_stdout.contains("qa"), "Status should show qa environment");
+            assert!(
+                status_stdout.contains("dev"),
+                "Status should show dev environment"
+            );
+            assert!(
+                status_stdout.contains("staging"),
+                "Status should show staging environment"
+            );
+            assert!(
+                status_stdout.contains("prod"),
+                "Status should show prod environment"
+            );
+            assert!(
+                status_stdout.contains("qa"),
+                "Status should show qa environment"
+            );
 
             Ok(())
         })
@@ -452,8 +559,10 @@ mod performance_tests {
                 // Create feature branch
                 let branch_name = format!("rapid-feature-{}", i);
 
-                std::fs::write(test_env.path().join(&format!("{}.txt", branch_name)),
-                              format!("Rapid content {}", i))?;
+                std::fs::write(
+                    test_env.path().join(&format!("{}.txt", branch_name)),
+                    format!("Rapid content {}", i),
+                )?;
 
                 Command::new("git")
                     .args(["add", &format!("{}.txt", branch_name)])
@@ -495,15 +604,27 @@ mod performance_tests {
             }
 
             let total_time = start_time.elapsed();
-            println!("Completed {} rapid operations in {:?}", operation_count, total_time);
-            println!("Average time per operation: {:?}", total_time / operation_count as u32);
+            println!(
+                "Completed {} rapid operations in {:?}",
+                operation_count, total_time
+            );
+            println!(
+                "Average time per operation: {:?}",
+                total_time / operation_count as u32
+            );
 
             // Performance assertions
-            assert!(total_time < Duration::from_secs(120), "Should complete rapid operations within 2 minutes");
+            assert!(
+                total_time < Duration::from_secs(120),
+                "Should complete rapid operations within 2 minutes"
+            );
 
             // Final status should work (no memory corruption)
             let final_status = run_hitch_command(test_env, &["status"])?;
-            assert!(final_status.status.success(), "Final status should work after rapid operations");
+            assert!(
+                final_status.status.success(),
+                "Final status should work after rapid operations"
+            );
 
             Ok(())
         })
@@ -519,13 +640,16 @@ mod performance_tests {
             cleanup_after_hitch_init(test_env)?;
 
             let complexity_levels = vec![
-                ("simple", 1, 1),      // 1 environment, 1 branch
-                ("medium", 3, 3),     // 3 environments, 3 branches each
-                ("complex", 5, 5),    // 5 environments, 5 branches each
+                ("simple", 1, 1),  // 1 environment, 1 branch
+                ("medium", 3, 3),  // 3 environments, 3 branches each
+                ("complex", 5, 5), // 5 environments, 5 branches each
             ];
 
             for (level_name, env_count, branch_count) in complexity_levels {
-                println!("Testing {} complexity: {} environments, {} branches each", level_name, env_count, branch_count);
+                println!(
+                    "Testing {} complexity: {} environments, {} branches each",
+                    level_name, env_count, branch_count
+                );
 
                 let level_start = Instant::now();
 
@@ -539,8 +663,10 @@ mod performance_tests {
                     for branch_j in 0..branch_count {
                         let branch_name = format!("{}-{}-branch-{}", level_name, env_i, branch_j);
 
-                        std::fs::write(test_env.path().join(&format!("{}.txt", branch_name)),
-                                      format!("Content for {}", branch_name))?;
+                        std::fs::write(
+                            test_env.path().join(&format!("{}.txt", branch_name)),
+                            format!("Content for {}", branch_name),
+                        )?;
 
                         Command::new("git")
                             .args(["add", &format!("{}.txt", branch_name)])
@@ -587,8 +713,16 @@ mod performance_tests {
                 println!("{} status took {:?}", level_name, status_time);
 
                 // Reasonable performance expectations
-                assert!(rebuild_time < Duration::from_secs(30), "Rebuild should complete within 30 seconds for {} complexity", level_name);
-                assert!(status_time < Duration::from_secs(10), "Status should complete within 10 seconds for {} complexity", level_name);
+                assert!(
+                    rebuild_time < Duration::from_secs(30),
+                    "Rebuild should complete within 30 seconds for {} complexity",
+                    level_name
+                );
+                assert!(
+                    status_time < Duration::from_secs(10),
+                    "Status should complete within 10 seconds for {} complexity",
+                    level_name
+                );
             }
 
             Ok(())

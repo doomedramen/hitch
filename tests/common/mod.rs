@@ -14,6 +14,7 @@ pub struct TestEnv {
     _repo: Option<Repository>, // Used for drop behavior but not directly accessed
 }
 
+#[allow(dead_code)]
 impl TestEnv {
     /// Create a new isolated test environment with git2 repository
     #[allow(dead_code)] // Used by tests that haven't migrated to closure framework yet
@@ -192,9 +193,7 @@ impl TestEnv {
 
     /// Run hitch add command
     pub fn hitch_add(&self, env_name: &str) -> Result<()> {
-        let output = self.hitch_command()
-            .args(["add", env_name])
-            .output()?;
+        let output = self.hitch_command().args(["add", env_name]).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -209,7 +208,8 @@ impl TestEnv {
 
     /// Run hitch promote command
     pub fn hitch_promote(&self, branch: &str, env_name: &str) -> Result<()> {
-        let output = self.hitch_command()
+        let output = self
+            .hitch_command()
             .args(["promote", branch, env_name])
             .output()?;
 
@@ -227,7 +227,8 @@ impl TestEnv {
 
     /// Run hitch demote command
     pub fn hitch_demote(&self, branch: &str, env_name: &str) -> Result<()> {
-        let output = self.hitch_command()
+        let output = self
+            .hitch_command()
             .args(["demote", branch, env_name])
             .output()?;
 
@@ -245,9 +246,7 @@ impl TestEnv {
 
     /// Run hitch lock command
     pub fn hitch_lock(&self, env_name: &str) -> Result<()> {
-        let output = self.hitch_command()
-            .args(["lock", env_name])
-            .output()?;
+        let output = self.hitch_command().args(["lock", env_name]).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -262,9 +261,7 @@ impl TestEnv {
 
     /// Run hitch unlock command
     pub fn hitch_unlock(&self, env_name: &str) -> Result<()> {
-        let output = self.hitch_command()
-            .args(["unlock", env_name])
-            .output()?;
+        let output = self.hitch_command().args(["unlock", env_name]).output()?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -329,8 +326,10 @@ impl Drop for TestEnv {
 }
 
 /// Type alias for TestEnv used in the new closure-based framework
+#[allow(dead_code)]
 pub type TestEnvironment = TestEnv;
 
+#[allow(dead_code)]
 impl TestEnvironment {
     /// Create a new test environment and run a closure with it
     pub fn with_env<F>(test_fn: F) -> Result<()>

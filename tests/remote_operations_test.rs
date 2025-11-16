@@ -1,7 +1,7 @@
 use anyhow::Result;
-use std::process::Command;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 
 // Import the proper test framework
 mod common;
@@ -153,16 +153,24 @@ mod remote_operations_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should work with valid remote
-            assert!(output.status.success(), "Should work with valid remote repository");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should work with valid remote repository"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // May show warnings about push failures to non-existent remote
             if !stderr.is_empty() {
-                assert!(stderr.contains("warning") ||
-                       stderr.contains("Failed to push") ||
-                       stderr.contains("remote") ||
-                       stderr.contains("permission"),
-                       "Should handle remote operations gracefully");
+                assert!(
+                    stderr.contains("warning")
+                        || stderr.contains("Failed to push")
+                        || stderr.contains("remote")
+                        || stderr.contains("permission"),
+                    "Should handle remote operations gracefully"
+                );
             }
 
             Ok(())
@@ -180,7 +188,12 @@ mod remote_operations_tests {
 
             // Add invalid remote URL
             let output = Command::new("git")
-                .args(["remote", "add", "origin", "https://invalid-url-that-will-fail.com/repo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://invalid-url-that-will-fail.com/repo.git",
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
@@ -193,19 +206,23 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show remote-related error
-                    assert!(stderr.contains("remote") ||
-                           stderr.contains("push") ||
-                           stderr.contains("permission") ||
-                           stderr.contains("authentication") ||
-                           stderr.contains("connection"),
-                           "Should show remote-related error");
+                    assert!(
+                        stderr.contains("remote")
+                            || stderr.contains("push")
+                            || stderr.contains("permission")
+                            || stderr.contains("authentication")
+                            || stderr.contains("connection"),
+                        "Should show remote-related error"
+                    );
                 }
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(stderr.contains("invalid") ||
-                       stderr.contains("permission") ||
-                       stderr.contains("URL"),
-                       "Should show URL validation error");
+                assert!(
+                    stderr.contains("invalid")
+                        || stderr.contains("permission")
+                        || stderr.contains("URL"),
+                    "Should show URL validation error"
+                );
             }
 
             Ok(())
@@ -230,16 +247,24 @@ mod remote_operations_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should work without remote (local operations only)
-            assert!(output.status.success(), "Should work without remote repository");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                output.status.success(),
+                "Should work without remote repository"
+            );
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // May show warnings about missing remote for push operations
             if !stderr.is_empty() {
-                assert!(stderr.contains("no remote") ||
-                       stderr.contains("remote not configured") ||
-                       stderr.contains("origin") ||
-                       stderr.contains("not found"),
-                       "Should handle missing remote gracefully");
+                assert!(
+                    stderr.contains("no remote")
+                        || stderr.contains("remote not configured")
+                        || stderr.contains("origin")
+                        || stderr.contains("not found"),
+                    "Should handle missing remote gracefully"
+                );
             }
 
             Ok(())
@@ -257,7 +282,12 @@ mod remote_operations_tests {
 
             // Set up remote that will require authentication
             let output = Command::new("git")
-                .args(["remote", "add", "origin", "https://github.com/private/repo-requiring-auth.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/private/repo-requiring-auth.git",
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
@@ -269,20 +299,24 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show authentication error
-                    assert!(stderr.contains("authentication") ||
-                           stderr.contains("permission") ||
-                           stderr.contains("denied") ||
-                           stderr.contains("credentials") ||
-                           stderr.contains("login"),
-                           "Should show authentication error");
+                    assert!(
+                        stderr.contains("authentication")
+                            || stderr.contains("permission")
+                            || stderr.contains("denied")
+                            || stderr.contains("credentials")
+                            || stderr.contains("login"),
+                        "Should show authentication error"
+                    );
                 } else {
                     let hitch_stderr = String::from_utf8_lossy(&hitch_output.stderr);
                     // May still work for local operations but show auth warnings
                     if !hitch_stderr.is_empty() {
-                        assert!(hitch_stderr.contains("auth") ||
-                               hitch_stderr.contains("permission") ||
-                               hitch_stderr.contains("warning"),
-                               "Should show authentication-related warnings");
+                        assert!(
+                            hitch_stderr.contains("auth")
+                                || hitch_stderr.contains("permission")
+                                || hitch_stderr.contains("warning"),
+                            "Should show authentication-related warnings"
+                        );
                     }
                 }
             }
@@ -302,7 +336,12 @@ mod remote_operations_tests {
 
             // Set up remote with invalid hostname
             let output = Command::new("git")
-                .args(["remote", "add", "origin", "https://nonexistent-host-that-will-timeout.com/repo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://nonexistent-host-that-will-timeout.com/repo.git",
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
@@ -314,20 +353,24 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show network/connectivity error
-                    assert!(stderr.contains("network") ||
-                           stderr.contains("connection") ||
-                           stderr.contains("timeout") ||
-                           stderr.contains("resolve") ||
-                           stderr.contains("host"),
-                           "Should show network connectivity error");
+                    assert!(
+                        stderr.contains("network")
+                            || stderr.contains("connection")
+                            || stderr.contains("timeout")
+                            || stderr.contains("resolve")
+                            || stderr.contains("host"),
+                        "Should show network connectivity error"
+                    );
                 } else {
                     let hitch_stderr = String::from_utf8_lossy(&hitch_output.stderr);
                     // May still work locally but show connectivity warnings
                     if !hitch_stderr.is_empty() {
-                        assert!(hitch_stderr.contains("network") ||
-                               hitch_stderr.contains("connection") ||
-                               hitch_stderr.contains("timeout"),
-                               "Should show network-related warnings");
+                        assert!(
+                            hitch_stderr.contains("network")
+                                || hitch_stderr.contains("connection")
+                                || hitch_stderr.contains("timeout"),
+                            "Should show network-related warnings"
+                        );
                     }
                 }
             }
@@ -346,7 +389,11 @@ mod remote_operations_tests {
             cleanup_after_hitch_init(test_env)?;
 
             // Set up local remote with restricted permissions
-            let remote_path = test_env.path().parent().unwrap().join("restricted-remote.git");
+            let remote_path = test_env
+                .path()
+                .parent()
+                .unwrap()
+                .join("restricted-remote.git");
             std::fs::create_dir_all(&remote_path)?;
 
             // Create bare repository
@@ -378,11 +425,13 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show permission error
-                    assert!(stderr.contains("permission") ||
-                           stderr.contains("denied") ||
-                           stderr.contains("access") ||
-                           stderr.contains("write"),
-                           "Should show permission denied error");
+                    assert!(
+                        stderr.contains("permission")
+                            || stderr.contains("denied")
+                            || stderr.contains("access")
+                            || stderr.contains("write"),
+                        "Should show permission denied error"
+                    );
                 }
             }
 
@@ -433,13 +482,18 @@ mod remote_operations_tests {
             // Should work unless disk space is actually insufficient
             if !output.status.success() {
                 // May show disk space error
-                assert!(stderr.contains("space") ||
-                       stderr.contains("disk") ||
-                       stderr.contains("quota") ||
-                       stderr.contains("insufficient"),
-                       "Should show disk space error if it occurs");
+                assert!(
+                    stderr.contains("space")
+                        || stderr.contains("disk")
+                        || stderr.contains("quota")
+                        || stderr.contains("insufficient"),
+                    "Should show disk space error if it occurs"
+                );
             } else {
-                assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+                assert!(
+                    stdout.contains("dev") || stdout.contains("environment"),
+                    "Should add environment successfully"
+                );
             }
 
             Ok(())
@@ -485,14 +539,19 @@ mod remote_operations_tests {
             // Should work locally, but may show warnings about remote branch protection
             if !output.status.success() {
                 // Might fail due to branch protection on remote
-                assert!(stderr.contains("protected") ||
-                       stderr.contains("branch") ||
-                       stderr.contains("push") ||
-                       stderr.contains("rejected") ||
-                       stderr.contains("permission"),
-                       "Should show branch protection error if it occurs");
+                assert!(
+                    stderr.contains("protected")
+                        || stderr.contains("branch")
+                        || stderr.contains("push")
+                        || stderr.contains("rejected")
+                        || stderr.contains("permission"),
+                    "Should show branch protection error if it occurs"
+                );
             } else {
-                assert!(stdout.contains("promoted") || stdout.contains("Successfully promoted"), "Should promote feature successfully");
+                assert!(
+                    stdout.contains("promoted") || stdout.contains("Successfully promoted"),
+                    "Should promote feature successfully"
+                );
             }
 
             Ok(())
@@ -541,14 +600,19 @@ mod remote_operations_tests {
 
             // Should work with multiple remotes
             assert!(output.status.success(), "Should work with multiple remotes");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // May show warnings about which remote is being used
             if !stderr.is_empty() {
-                assert!(stderr.contains("remote") ||
-                       stderr.contains("origin") ||
-                       stderr.contains("pushing"),
-                       "Should handle multiple remotes gracefully");
+                assert!(
+                    stderr.contains("remote")
+                        || stderr.contains("origin")
+                        || stderr.contains("pushing"),
+                    "Should handle multiple remotes gracefully"
+                );
             }
 
             Ok(())
@@ -574,16 +638,22 @@ mod remote_operations_tests {
 
             // Should work without pushing to remote
             assert!(output.status.success(), "Should work with --no-push flag");
-            assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+            assert!(
+                stdout.contains("dev") || stdout.contains("environment"),
+                "Should add environment successfully"
+            );
 
             // Should skip remote operations or work without mentioning them
             let stdout_lower = stdout.to_lowercase();
-            assert!(stdout.contains("no-push") ||
+            assert!(
+                stdout.contains("no-push") ||
                    stdout_lower.contains("skipping") ||
                    stdout_lower.contains("remote") ||
                    stdout.contains("dev") || // If it works without any remote messages
                    stdout.contains("environment"),
-                   "Should handle --no-push flag gracefully. Actual output: {}", stdout);
+                "Should handle --no-push flag gracefully. Actual output: {}",
+                stdout
+            );
 
             Ok(())
         })
@@ -620,25 +690,38 @@ mod remote_operations_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Promote with --replace-remote (which should use force push)
-            let output = run_hitch_command_with_input(test_env, &["promote", "feature", "dev", "--replace-remote"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["promote", "feature", "dev", "--replace-remote"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
 
             // Should handle force push operations
             if output.status.success() {
-                assert!(stdout.contains("promoted") || stdout.contains("Successfully promoted"), "Should promote with force push");
-                assert!(stdout.contains("force") || stdout.contains("remote"), "Should mention remote operations");
+                assert!(
+                    stdout.contains("promoted") || stdout.contains("Successfully promoted"),
+                    "Should promote with force push"
+                );
+                assert!(
+                    stdout.contains("force") || stdout.contains("remote"),
+                    "Should mention remote operations"
+                );
             } else {
                 // May fail due to remote issues, but should handle gracefully
                 let stderr_lower = stderr.to_lowercase();
-                assert!(stderr_lower.contains("remote") ||
-                       stderr_lower.contains("push") ||
-                       stderr_lower.contains("force") ||
-                       stderr_lower.contains("permission") ||
-                       stderr_lower.contains("error") ||
-                       stderr.is_empty(), // Also accept empty stderr if it succeeds
-                       "Should handle force push operations gracefully. stderr: {}", stderr);
+                assert!(
+                    stderr_lower.contains("remote")
+                        || stderr_lower.contains("push")
+                        || stderr_lower.contains("force")
+                        || stderr_lower.contains("permission")
+                        || stderr_lower.contains("error")
+                        || stderr.is_empty(), // Also accept empty stderr if it succeeds
+                    "Should handle force push operations gracefully. stderr: {}",
+                    stderr
+                );
             }
 
             Ok(())
@@ -646,7 +729,11 @@ mod remote_operations_tests {
     }
 
     /// Helper to run hitch command with input
-    fn run_hitch_command_with_input(test_env: &TestEnv, args: &[&str], input: &str) -> Result<std::process::Output> {
+    fn run_hitch_command_with_input(
+        test_env: &TestEnv,
+        args: &[&str],
+        input: &str,
+    ) -> Result<std::process::Output> {
         use std::io::Write;
         use std::process::Stdio;
 
@@ -692,19 +779,23 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show SSH authentication error
-                    assert!(stderr.contains("ssh") ||
-                           stderr.contains("authentication") ||
-                           stderr.contains("key") ||
-                           stderr.contains("permission") ||
-                           stderr.contains("connection refused"),
-                           "Should show SSH authentication error");
+                    assert!(
+                        stderr.contains("ssh")
+                            || stderr.contains("authentication")
+                            || stderr.contains("key")
+                            || stderr.contains("permission")
+                            || stderr.contains("connection refused"),
+                        "Should show SSH authentication error"
+                    );
                 }
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(stderr.contains("ssh") ||
-                       stderr.contains("authentication") ||
-                       stderr.contains("key"),
-                       "Should show SSH-related error during remote setup");
+                assert!(
+                    stderr.contains("ssh")
+                        || stderr.contains("authentication")
+                        || stderr.contains("key"),
+                    "Should show SSH-related error during remote setup"
+                );
             }
 
             Ok(())
@@ -722,7 +813,12 @@ mod remote_operations_tests {
 
             // Set up HTTPS remote with certificate issues
             let output = Command::new("git")
-                .args(["remote", "add", "origin", "https://self-signed-certificate.com/repo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://self-signed-certificate.com/repo.git",
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
@@ -734,12 +830,14 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show certificate error
-                    assert!(stderr.contains("certificate") ||
-                           stderr.contains("SSL") ||
-                           stderr.contains("TLS") ||
-                           stderr.contains("verification") ||
-                           stderr.contains("self-signed"),
-                           "Should show certificate verification error");
+                    assert!(
+                        stderr.contains("certificate")
+                            || stderr.contains("SSL")
+                            || stderr.contains("TLS")
+                            || stderr.contains("verification")
+                            || stderr.contains("self-signed"),
+                        "Should show certificate verification error"
+                    );
                 }
             }
 
@@ -770,11 +868,13 @@ mod remote_operations_tests {
 
                 if !hitch_output.status.success() {
                     // Should show timeout error
-                    assert!(stderr.contains("timeout") ||
-                           stderr.contains("connection") ||
-                           stderr.contains("timed out") ||
-                           stderr.contains("slow"),
-                           "Should show timeout error");
+                    assert!(
+                        stderr.contains("timeout")
+                            || stderr.contains("connection")
+                            || stderr.contains("timed out")
+                            || stderr.contains("slow"),
+                        "Should show timeout error"
+                    );
                 }
             }
 
@@ -806,12 +906,14 @@ mod remote_operations_tests {
                     if i == 0 && !hitch_output.status.success() {
                         let stderr = String::from_utf8_lossy(&hitch_output.stderr);
                         // Check for rate limiting indicators
-                        assert!(stderr.contains("rate") ||
-                               stderr.contains("limit") ||
-                               stderr.contains("too many") ||
-                               stderr.contains("quota") ||
-                               stderr.contains("429"),
-                               "Should show rate limiting error if it occurs");
+                        assert!(
+                            stderr.contains("rate")
+                                || stderr.contains("limit")
+                                || stderr.contains("too many")
+                                || stderr.contains("quota")
+                                || stderr.contains("429"),
+                            "Should show rate limiting error if it occurs"
+                        );
                         break;
                     }
 
@@ -861,13 +963,18 @@ mod remote_operations_tests {
             // Should work unless size limits are exceeded
             if !output.status.success() {
                 // May show size limit error
-                assert!(stderr.contains("size") ||
-                       stderr.contains("large") ||
-                       stderr.contains("limit") ||
-                       stderr.contains("quota"),
-                       "Should show size limit error if it occurs");
+                assert!(
+                    stderr.contains("size")
+                        || stderr.contains("large")
+                        || stderr.contains("limit")
+                        || stderr.contains("quota"),
+                    "Should show size limit error if it occurs"
+                );
             } else {
-                assert!(stdout.contains("dev") || stdout.contains("environment"), "Should add environment successfully");
+                assert!(
+                    stdout.contains("dev") || stdout.contains("environment"),
+                    "Should add environment successfully"
+                );
             }
 
             Ok(())

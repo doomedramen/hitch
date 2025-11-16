@@ -139,12 +139,14 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show JSON parsing error or corrupted metadata error
-                assert!(stderr.contains("JSON") ||
-                       stderr.contains("parse") ||
-                       stderr.contains("invalid") ||
-                       stderr.contains("corrupted") ||
-                       stderr.contains("hitch.json"),
-                       "Should show JSON parsing error for corrupted hitch.json");
+                assert!(
+                    stderr.contains("JSON")
+                        || stderr.contains("parse")
+                        || stderr.contains("invalid")
+                        || stderr.contains("corrupted")
+                        || stderr.contains("hitch.json"),
+                    "Should show JSON parsing error for corrupted hitch.json"
+                );
             }
 
             // Try to fix by creating a valid hitch.json
@@ -161,7 +163,10 @@ mod metadata_corruption_tests {
 
             // Should work after fixing the JSON
             let output2 = run_hitch_command(test_env, &["status"])?;
-            assert!(output2.status.success(), "Should work after fixing hitch.json");
+            assert!(
+                output2.status.success(),
+                "Should work after fixing hitch.json"
+            );
 
             Ok(())
         })
@@ -187,11 +192,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show missing file error
-                assert!(stderr.contains("not found") ||
-                       stderr.contains("missing") ||
-                       stderr.contains("hitch.json") ||
-                       stderr.contains("No such file"),
-                       "Should show missing file error");
+                assert!(
+                    stderr.contains("not found")
+                        || stderr.contains("missing")
+                        || stderr.contains("hitch.json")
+                        || stderr.contains("No such file"),
+                    "Should show missing file error"
+                );
             }
 
             // Try to add environment - might create new hitch.json
@@ -200,13 +207,18 @@ mod metadata_corruption_tests {
             // Either succeeds (creates new config) or fails gracefully
             if output2.status.success() {
                 let stdout = String::from_utf8_lossy(&output2.stdout);
-                assert!(stdout.contains("dev"), "Should successfully add environment");
+                assert!(
+                    stdout.contains("dev"),
+                    "Should successfully add environment"
+                );
             } else {
                 let stderr2 = String::from_utf8_lossy(&output2.stderr);
-                assert!(stderr2.contains("hitch.json") ||
-                       stderr2.contains("configuration") ||
-                       stderr2.contains("missing"),
-                       "Should show configuration-related error");
+                assert!(
+                    stderr2.contains("hitch.json")
+                        || stderr2.contains("configuration")
+                        || stderr2.contains("missing"),
+                    "Should show configuration-related error"
+                );
             }
 
             Ok(())
@@ -275,11 +287,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show metadata corruption error
-                assert!(stderr.contains("metadata") ||
-                       stderr.contains("corrupted") ||
-                       stderr.contains("JSON") ||
-                       stderr.contains("parse"),
-                       "Should show metadata corruption error");
+                assert!(
+                    stderr.contains("metadata")
+                        || stderr.contains("corrupted")
+                        || stderr.contains("JSON")
+                        || stderr.contains("parse"),
+                    "Should show metadata corruption error"
+                );
             }
 
             Ok(())
@@ -308,11 +322,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show missing branch error
-                assert!(stderr.contains("metadata") ||
-                       stderr.contains("branch") ||
-                       stderr.contains("hitch-metadata") ||
-                       stderr.contains("not found"),
-                       "Should show missing metadata branch error");
+                assert!(
+                    stderr.contains("metadata")
+                        || stderr.contains("branch")
+                        || stderr.contains("hitch-metadata")
+                        || stderr.contains("not found"),
+                    "Should show missing metadata branch error"
+                );
             }
 
             // Try to add environment - might recreate metadata branch
@@ -320,7 +336,10 @@ mod metadata_corruption_tests {
 
             if output2.status.success() {
                 let stdout = String::from_utf8_lossy(&output2.stdout);
-                assert!(stdout.contains("dev"), "Should successfully add environment");
+                assert!(
+                    stdout.contains("dev"),
+                    "Should successfully add environment"
+                );
 
                 // Check if metadata branch was recreated
                 let branch_output = Command::new("git")
@@ -329,12 +348,16 @@ mod metadata_corruption_tests {
                     .output()?;
 
                 let branch_stdout = String::from_utf8_lossy(&branch_output.stdout);
-                assert!(branch_stdout.contains("hitch-metadata"), "Should recreate metadata branch");
+                assert!(
+                    branch_stdout.contains("hitch-metadata"),
+                    "Should recreate metadata branch"
+                );
             } else {
                 let stderr2 = String::from_utf8_lossy(&output2.stderr);
-                assert!(stderr2.contains("metadata") ||
-                       stderr2.contains("branch"),
-                       "Should show metadata-related error");
+                assert!(
+                    stderr2.contains("metadata") || stderr2.contains("branch"),
+                    "Should show metadata-related error"
+                );
             }
 
             Ok(())
@@ -369,12 +392,14 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show incomplete metadata error
-                assert!(stderr.contains("required") ||
-                       stderr.contains("missing") ||
-                       stderr.contains("field") ||
-                       stderr.contains("incomplete") ||
-                       stderr.contains("base_branch"),
-                       "Should show incomplete metadata error");
+                assert!(
+                    stderr.contains("required")
+                        || stderr.contains("missing")
+                        || stderr.contains("field")
+                        || stderr.contains("incomplete")
+                        || stderr.contains("base_branch"),
+                    "Should show incomplete metadata error"
+                );
             }
 
             // Fix the metadata by adding missing field
@@ -391,7 +416,10 @@ mod metadata_corruption_tests {
 
             // Should work after fixing metadata
             let output2 = run_hitch_command(test_env, &["status"])?;
-            assert!(output2.status.success(), "Should work after fixing metadata");
+            assert!(
+                output2.status.success(),
+                "Should work after fixing metadata"
+            );
 
             Ok(())
         })
@@ -426,15 +454,20 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show invalid branch reference error
-                assert!(stderr.contains("branch") ||
-                       stderr.contains("not found") ||
-                       stderr.contains("non-existent") ||
-                       stderr.contains("invalid"),
-                       "Should show invalid branch reference error");
+                assert!(
+                    stderr.contains("branch")
+                        || stderr.contains("not found")
+                        || stderr.contains("non-existent")
+                        || stderr.contains("invalid"),
+                    "Should show invalid branch reference error"
+                );
             } else {
                 // Might succeed but show warnings about missing branches
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                assert!(stdout.contains("dev"), "Should show environment despite invalid references");
+                assert!(
+                    stdout.contains("dev"),
+                    "Should show environment despite invalid references"
+                );
             }
 
             // Try to rebuild with invalid references
@@ -442,10 +475,12 @@ mod metadata_corruption_tests {
 
             if !rebuild_output.status.success() {
                 let rebuild_stderr = String::from_utf8_lossy(&rebuild_output.stderr);
-                assert!(rebuild_stderr.contains("branch") ||
-                       rebuild_stderr.contains("not found") ||
-                       rebuild_stderr.contains("non-existent"),
-                       "Should show branch not found error during rebuild");
+                assert!(
+                    rebuild_stderr.contains("branch")
+                        || rebuild_stderr.contains("not found")
+                        || rebuild_stderr.contains("non-existent"),
+                    "Should show branch not found error during rebuild"
+                );
             }
 
             Ok(())
@@ -487,7 +522,10 @@ mod metadata_corruption_tests {
 
             // Try to use hitch - should fail
             let output = run_hitch_command(test_env, &["status"])?;
-            assert!(!output.status.success(), "Should fail with corrupted metadata");
+            assert!(
+                !output.status.success(),
+                "Should fail with corrupted metadata"
+            );
 
             // Try to recover by reinitializing hitch
             let init_output = run_hitch_command(test_env, &["init"])?;
@@ -498,15 +536,20 @@ mod metadata_corruption_tests {
 
                 if add_output.status.success() {
                     let stdout = String::from_utf8_lossy(&add_output.stdout);
-                    assert!(stdout.contains("staging"), "Should be able to add environment after recovery");
+                    assert!(
+                        stdout.contains("staging"),
+                        "Should be able to add environment after recovery"
+                    );
                 }
             } else {
                 // If reinit fails, at least it should fail gracefully
                 let init_stderr = String::from_utf8_lossy(&init_output.stderr);
-                assert!(init_stderr.contains("already initialized") ||
-                       init_stderr.contains("exists") ||
-                       init_stderr.contains("corrupted"),
-                       "Should handle reinit gracefully");
+                assert!(
+                    init_stderr.contains("already initialized")
+                        || init_stderr.contains("exists")
+                        || init_stderr.contains("corrupted"),
+                    "Should handle reinit gracefully"
+                );
             }
 
             Ok(())
@@ -535,12 +578,14 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show encoding/Unicode error
-                assert!(stderr.contains("encoding") ||
-                       stderr.contains("UTF") ||
-                       stderr.contains("unicode") ||
-                       stderr.contains("invalid") ||
-                       stderr.contains("parse"),
-                       "Should show encoding error for invalid Unicode");
+                assert!(
+                    stderr.contains("encoding")
+                        || stderr.contains("UTF")
+                        || stderr.contains("unicode")
+                        || stderr.contains("invalid")
+                        || stderr.contains("parse"),
+                    "Should show encoding error for invalid Unicode"
+                );
             }
 
             Ok(())
@@ -579,12 +624,14 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show size or memory error
-                assert!(stderr.contains("large") ||
-                       stderr.contains("size") ||
-                       stderr.contains("memory") ||
-                       stderr.contains("too many") ||
-                       stderr.contains("limit"),
-                       "Should show size-related error for extremely large metadata");
+                assert!(
+                    stderr.contains("large")
+                        || stderr.contains("size")
+                        || stderr.contains("memory")
+                        || stderr.contains("too many")
+                        || stderr.contains("limit"),
+                    "Should show size-related error for extremely large metadata"
+                );
             }
 
             Ok(())
@@ -635,11 +682,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show conflict or corruption error
-                assert!(stderr.contains("conflict") ||
-                       stderr.contains("corrupted") ||
-                       stderr.contains("metadata") ||
-                       stderr.contains("hitch-metadata"),
-                       "Should show metadata conflict error");
+                assert!(
+                    stderr.contains("conflict")
+                        || stderr.contains("corrupted")
+                        || stderr.contains("metadata")
+                        || stderr.contains("hitch-metadata"),
+                    "Should show metadata conflict error"
+                );
             }
 
             Ok(())
@@ -673,11 +722,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show permission error
-                assert!(stderr.contains("permission") ||
-                       stderr.contains("denied") ||
-                       stderr.contains("read-only") ||
-                       stderr.contains("access"),
-                       "Should show permission error");
+                assert!(
+                    stderr.contains("permission")
+                        || stderr.contains("denied")
+                        || stderr.contains("read-only")
+                        || stderr.contains("access"),
+                    "Should show permission error"
+                );
             }
 
             // Restore permissions and try again
@@ -692,7 +743,10 @@ mod metadata_corruption_tests {
 
             if output2.status.success() {
                 let stdout = String::from_utf8_lossy(&output2.stdout);
-                assert!(stdout.contains("staging"), "Should work after fixing permissions");
+                assert!(
+                    stdout.contains("staging"),
+                    "Should work after fixing permissions"
+                );
             }
 
             Ok(())
@@ -729,11 +783,13 @@ mod metadata_corruption_tests {
 
             if !output.status.success() {
                 // Should show version incompatibility error
-                assert!(stderr.contains("version") ||
-                       stderr.contains("incompatible") ||
-                       stderr.contains("unsupported") ||
-                       stderr.contains("migrate"),
-                       "Should show version incompatibility error");
+                assert!(
+                    stderr.contains("version")
+                        || stderr.contains("incompatible")
+                        || stderr.contains("unsupported")
+                        || stderr.contains("migrate"),
+                    "Should show version incompatibility error"
+                );
             }
 
             Ok(())

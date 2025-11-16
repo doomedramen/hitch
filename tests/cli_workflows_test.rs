@@ -430,7 +430,9 @@ mod cli_workflow_tests {
             // Rebuild with --no-push
             let rebuild_output = run_hitch_command(test_env, &["rebuild", "dev", "--no-push"])?;
             let rebuild_stdout = String::from_utf8_lossy(&rebuild_output.stdout);
-            assert!(rebuild_stdout.contains("no-push") || rebuild_stdout.contains("Skipping remote"));
+            assert!(
+                rebuild_stdout.contains("no-push") || rebuild_stdout.contains("Skipping remote")
+            );
 
             Ok(())
         })
@@ -491,7 +493,8 @@ mod cli_workflow_tests {
             ensure_clean_working_tree(test_env)?;
 
             // Promote to dev for testing
-            let promote_output = run_hitch_command(test_env, &["promote", "feature/user-auth", "dev"])?;
+            let promote_output =
+                run_hitch_command(test_env, &["promote", "feature/user-auth", "dev"])?;
             let promote_stdout = String::from_utf8_lossy(&promote_output.stdout);
             assert!(promote_stdout.contains("dev"));
 

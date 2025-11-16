@@ -68,7 +68,7 @@ mod force_push_tests {
             if line.contains(branch_name) {
                 if let Some(start) = line.find('[') {
                     if let Some(end) = line.find(']') {
-                        return Ok(line[start..end+1].to_string());
+                        return Ok(line[start..end + 1].to_string());
                     }
                 }
             }
@@ -85,19 +85,28 @@ mod force_push_tests {
             run_git_command(test_env, &["checkout", "-b", "test-branch"])?;
 
             // Verify no upstream tracking exists
-            assert!(!has_upstream_tracking(test_env, "test-branch")?,
-                   "test-branch should not have upstream tracking initially");
+            assert!(
+                !has_upstream_tracking(test_env, "test-branch")?,
+                "test-branch should not have upstream tracking initially"
+            );
 
             // Push with --force --set-upstream (simulating what Hitch does)
-            run_git_command(test_env, &["push", "origin", "test-branch", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &["push", "origin", "test-branch", "--force", "--set-upstream"],
+            )?;
 
             // Verify that upstream tracking is now set up
-            assert!(has_upstream_tracking(test_env, "test-branch")?,
-                   "test-branch should have upstream tracking after push with --set-upstream");
+            assert!(
+                has_upstream_tracking(test_env, "test-branch")?,
+                "test-branch should have upstream tracking after push with --set-upstream"
+            );
 
             let tracking_info = get_upstream_tracking(test_env, "test-branch")?;
-            assert!(tracking_info.contains("[origin/test-branch]"),
-                   "Upstream tracking should point to origin/test-branch");
+            assert!(
+                tracking_info.contains("[origin/test-branch]"),
+                "Upstream tracking should point to origin/test-branch"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
@@ -118,8 +127,10 @@ mod force_push_tests {
             run_git_command(test_env, &["push", "origin", "test-branch-2", "--force"])?;
 
             // Verify that upstream tracking is NOT set up
-            assert!(!has_upstream_tracking(test_env, "test-branch-2")?,
-                   "test-branch-2 should not have upstream tracking after push without --set-upstream");
+            assert!(
+                !has_upstream_tracking(test_env, "test-branch-2")?,
+                "test-branch-2 should not have upstream tracking after push without --set-upstream"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
@@ -137,11 +148,22 @@ mod force_push_tests {
             run_git_command(test_env, &["checkout", "-b", "test-branch-3"])?;
 
             // Initial push with --force --set-upstream
-            run_git_command(test_env, &["push", "origin", "test-branch-3", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "push",
+                    "origin",
+                    "test-branch-3",
+                    "--force",
+                    "--set-upstream",
+                ],
+            )?;
 
             // Verify upstream tracking exists
-            assert!(has_upstream_tracking(test_env, "test-branch-3")?,
-                   "test-branch-3 should have upstream tracking after initial push");
+            assert!(
+                has_upstream_tracking(test_env, "test-branch-3")?,
+                "test-branch-3 should have upstream tracking after initial push"
+            );
 
             // Make a change and push again with --force only (tracking should be preserved)
             run_git_command(test_env, &["touch", "test-file.txt"])?;
@@ -150,8 +172,10 @@ mod force_push_tests {
             run_git_command(test_env, &["push", "origin", "test-branch-3", "--force"])?;
 
             // Verify upstream tracking is still there
-            assert!(has_upstream_tracking(test_env, "test-branch-3")?,
-                   "test-branch-3 should still have upstream tracking after subsequent pushes");
+            assert!(
+                has_upstream_tracking(test_env, "test-branch-3")?,
+                "test-branch-3 should still have upstream tracking after subsequent pushes"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
@@ -169,20 +193,39 @@ mod force_push_tests {
             run_git_command(test_env, &["checkout", "-b", "test-branch-4"])?;
 
             // Add a non-existent remote
-            run_git_command(test_env, &["remote", "add", "nonexistent", "https://github.com/invalid/repo.git"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "remote",
+                    "add",
+                    "nonexistent",
+                    "https://github.com/invalid/repo.git",
+                ],
+            )?;
 
             // Try to push to non-existent remote with --set-upstream (should fail)
             let output = Command::new("git")
-                .args(["push", "nonexistent", "test-branch-4", "--force", "--set-upstream"])
+                .args([
+                    "push",
+                    "nonexistent",
+                    "test-branch-4",
+                    "--force",
+                    "--set-upstream",
+                ])
                 .current_dir(test_env.path())
                 .output()?;
 
             // Should fail
-            assert!(!output.status.success(), "Push to non-existent remote should fail");
+            assert!(
+                !output.status.success(),
+                "Push to non-existent remote should fail"
+            );
 
             // Verify no upstream tracking was set up
-            assert!(!has_upstream_tracking(test_env, "test-branch-4")?,
-                   "test-branch-4 should not have upstream tracking after failed push");
+            assert!(
+                !has_upstream_tracking(test_env, "test-branch-4")?,
+                "test-branch-4 should not have upstream tracking after failed push"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
@@ -205,11 +248,22 @@ mod force_push_tests {
             run_git_command(test_env, &["commit", "-m", "Add new file"])?;
 
             // Push to a remote branch that doesn't exist yet with --set-upstream
-            run_git_command(test_env, &["push", "origin", "test-branch-5", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "push",
+                    "origin",
+                    "test-branch-5",
+                    "--force",
+                    "--set-upstream",
+                ],
+            )?;
 
             // Verify upstream tracking is set up (Git creates the remote branch and sets up tracking)
-            assert!(has_upstream_tracking(test_env, "test-branch-5")?,
-                   "test-branch-5 should have upstream tracking after push to new remote branch");
+            assert!(
+                has_upstream_tracking(test_env, "test-branch-5")?,
+                "test-branch-5 should have upstream tracking after push to new remote branch"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
@@ -240,11 +294,22 @@ mod force_push_tests {
             run_git_command(test_env, &["commit", "-m", "Test commit"])?;
 
             // Test the exact Hitch syntax
-            run_git_command(test_env, &["push", "origin", "hitch-syntax-test", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "push",
+                    "origin",
+                    "hitch-syntax-test",
+                    "--force",
+                    "--set-upstream",
+                ],
+            )?;
 
             // Verify it worked by checking upstream tracking
-            assert!(has_upstream_tracking(test_env, "hitch-syntax-test")?,
-                   "Hitch syntax should set up upstream tracking correctly");
+            assert!(
+                has_upstream_tracking(test_env, "hitch-syntax-test")?,
+                "Hitch syntax should set up upstream tracking correctly"
+            );
 
             // Test that we can push again (proving tracking is working)
             std::fs::write(test_env.path().join("test2.txt"), "test content 2")?;
@@ -267,10 +332,21 @@ mod force_push_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Create and set up upstream tracking for a branch
             run_git_command(test_env, &["checkout", "-b", "test-recreate"])?;
-            run_git_command(test_env, &["push", "origin", "test-recreate", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "push",
+                    "origin",
+                    "test-recreate",
+                    "--force",
+                    "--set-upstream",
+                ],
+            )?;
 
-            assert!(has_upstream_tracking(test_env, "test-recreate")?,
-                   "test-recreate should have upstream tracking after initial push");
+            assert!(
+                has_upstream_tracking(test_env, "test-recreate")?,
+                "test-recreate should have upstream tracking after initial push"
+            );
 
             // Switch back to main and delete the branch
             run_git_command(test_env, &["checkout", "main"])?;
@@ -279,14 +355,27 @@ mod force_push_tests {
             // Recreate the branch (should not inherit upstream tracking)
             run_git_command(test_env, &["checkout", "-b", "test-recreate"])?;
 
-            assert!(!has_upstream_tracking(test_env, "test-recreate")?,
-                   "Recreated branch should not have upstream tracking");
+            assert!(
+                !has_upstream_tracking(test_env, "test-recreate")?,
+                "Recreated branch should not have upstream tracking"
+            );
 
             // Push with --force --set-upstream again (Hitch behavior)
-            run_git_command(test_env, &["push", "origin", "test-recreate", "--force", "--set-upstream"])?;
+            run_git_command(
+                test_env,
+                &[
+                    "push",
+                    "origin",
+                    "test-recreate",
+                    "--force",
+                    "--set-upstream",
+                ],
+            )?;
 
-            assert!(has_upstream_tracking(test_env, "test-recreate")?,
-                   "Recreated branch should have upstream tracking after push with --set-upstream");
+            assert!(
+                has_upstream_tracking(test_env, "test-recreate")?,
+                "Recreated branch should have upstream tracking after push with --set-upstream"
+            );
 
             // Clean up
             run_git_command(test_env, &["checkout", "main"])?;
