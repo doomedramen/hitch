@@ -71,68 +71,50 @@ impl TestEnvExt for TestEnv {
             "environments": environments
         });
 
+        // Use GitOperations for all git operations
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
         // Write to hitch-metadata branch
-        Command::new("git")
-            .args(["checkout", "--orphan", "hitch-metadata"])
-            .current_dir(self.path())
-            .output()?;
+        if git_ops.branch_exists("hitch-metadata")? {
+            git_ops.checkout_branch("hitch-metadata")?;
+        } else {
+            git_ops.create_orphan_branch("hitch-metadata")?;
+        }
         fs::write(
             self.path().join("hitch.json"),
             serde_json::to_string_pretty(&config)?,
         )?;
-        Command::new("git")
-            .args(["add", "hitch.json"])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", "Initialize hitch configuration"])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.add_and_commit(&["hitch.json"], "Initialize hitch configuration")?;
+        git_ops.checkout_branch("main")?;
 
         Ok(())
     }
 
     fn create_branch_and_commit(&self, branch_name: &str, message: &str) -> Result<()> {
-        Command::new("git")
-            .args(["checkout", "-b", branch_name])
-            .current_dir(self.path())
-            .output()?;
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.create_branch_from(branch_name, "main")?;
         fs::write(self.path().join("test.txt"), message)?;
-        Command::new("git")
-            .args(["add", "test.txt"])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(self.path())
-            .output()?;
+        git_ops.add_and_commit(&["test.txt"], message)?;
+        git_ops.checkout_branch("main")?;
         Ok(())
     }
 
     fn get_current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(self.path())
-            .output()?;
-
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.get_current_branch()
     }
 
     fn branch_exists(&self, branch: &str) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["branch", "--list", branch])
-            .current_dir(self.path())
-            .output()?;
-
-        Ok(output.status.success() && !output.stdout.is_empty())
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+        git_ops.branch_exists(branch)
     }
 
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output> {
@@ -148,7 +130,18 @@ impl TestEnvExt for TestEnv {
 /// Test actual git hook interference by setting up a pre-commit hook that fails
 #[test]
 fn test_rebuild_with_actual_git_hooks() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
         // Set up environments with promoted branches
         test_env.create_environment_config("dev", "main", &["feature/test"])?;
         test_env.create_branch_and_commit("feature/test", "Add test feature")?;
@@ -173,10 +166,7 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
         }
 
         // Verify the hook exists and will fail
-        let output = Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "test hook"])
-            .current_dir(test_env.path())
-            .output()?;
+        let output = git_ops.run_git_command(&["commit", "--allow-empty", "-m", "test hook"])?;
 
         if output.status.success() {
             println!("WARNING: Git hook didn't execute as expected");
@@ -219,20 +209,24 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
 /// Test rebuild when there are no changes to commit (branches already up to date)
 #[test]
 fn test_rebuild_nothing_to_commit() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
-        // Set up environment with promoted branches that are already up to date
-        // Don't create any commits on the feature branch - it will be identical to main
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Add dev environment
         test_env.create_environment_config("dev", "main", &["feature/same-as-main"])?;
 
         // Create feature branch but don't add any commits to it
-        Command::new("git")
-            .args(["checkout", "-b", "feature/same-as-main"])
-            .current_dir(test_env.path())
-            .output()?;
-        Command::new("git")
-            .args(["checkout", "main"])
-            .current_dir(test_env.path())
-            .output()?;
+        git_ops.create_branch_from("feature/same-as-main", "main")?;
+        git_ops.checkout_branch("main")?;
 
         // Now attempt rebuild - should handle "nothing to commit" gracefully
         let output = test_env.run_hitch_command(&["rebuild", "dev"])?;
@@ -268,16 +262,24 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
 /// Test rebuild cleanup behavior and verify that temp/backup branches are properly cleaned up
 #[test]
 fn test_rebuild_cleanup_verification() -> Result<()> {
-    with_test_env(SetupLevel::Complete, |test_env| {
-        // Set up environment with promoted branches
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Set up environments with promoted branches
         test_env.create_environment_config("dev", "main", &["feature/test"])?;
         test_env.create_branch_and_commit("feature/test", "Add test feature")?;
 
         // Get list of branches before rebuild
-        let branches_before = Command::new("git")
-            .args(["branch", "-a"])
-            .current_dir(test_env.path())
-            .output()?;
+        let branches_before = git_ops.run_git_command(&["branch", "-a"])?;
         let branches_before_str = String::from_utf8_lossy(&branches_before.stdout);
         println!("Branches before rebuild:\n{}", branches_before_str);
 
@@ -295,10 +297,7 @@ fn test_rebuild_cleanup_verification() -> Result<()> {
         assert!(output.status.success(), "Rebuild should succeed");
 
         // Get list of branches after rebuild
-        let branches_after = Command::new("git")
-            .args(["branch", "-a"])
-            .current_dir(test_env.path())
-            .output()?;
+        let branches_after = git_ops.run_git_command(&["branch", "-a"])?;
         let branches_after_str = String::from_utf8_lossy(&branches_after.stdout);
         println!("Branches after rebuild:\n{}", branches_after_str);
 

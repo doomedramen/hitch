@@ -32,7 +32,7 @@ impl GitOperations {
         Ok(GitOperations { repo, repo_path })
     }
 
-    fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
+    pub fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
