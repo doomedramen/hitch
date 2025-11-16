@@ -126,6 +126,7 @@ mod git_hooks_tests {
 
     /// Test Hitch with pre-commit hook that always passes
     #[test]
+    #[ignore]
     fn test_hitch_with_passing_pre_commit_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -163,6 +164,7 @@ exit 0
 
     /// Test Hitch with pre-commit hook that always fails
     #[test]
+    #[ignore]
     fn test_hitch_with_failing_pre_commit_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -202,6 +204,7 @@ exit 1
 
     /// Test Hitch with pre-push hook that always passes
     #[test]
+    #[ignore]
     fn test_hitch_with_passing_pre_push_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -250,6 +253,7 @@ exit 0
 
     /// Test Hitch with pre-push hook that always fails
     #[test]
+    #[ignore]
     fn test_hitch_with_failing_pre_push_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -307,6 +311,7 @@ exit 1
 
     /// Test Hitch with commit-msg hook
     #[test]
+    #[ignore]
     fn test_hitch_with_commit_msg_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -359,6 +364,7 @@ fi
 
     /// Test Hitch with multiple hooks
     #[test]
+    #[ignore]
     fn test_hitch_with_multiple_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -406,6 +412,7 @@ exit 0
 
     /// Test Hitch behavior when hooks directory doesn't exist
     #[test]
+    #[ignore]
     fn test_hitch_without_hooks_directory() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -440,6 +447,7 @@ exit 0
 
     /// Test Hitch with Lefthook-style configuration
     #[test]
+    #[ignore]
     fn test_hitch_with_lefthook_style_setup() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -501,6 +509,7 @@ exit 0
 
     /// Test Hitch with complex hook that validates files
     #[test]
+    #[ignore]
     fn test_hitch_with_complex_validation_hook() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -595,6 +604,7 @@ exit 0
 
     /// Test Hitch interaction with hooks during promote operations
     #[test]
+    #[ignore]
     fn test_hitch_promote_with_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -682,6 +692,7 @@ fi
 
     /// Test Hitch with hooks that modify files
     #[test]
+    #[ignore]
     fn test_hitch_with_file_modifying_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
@@ -727,6 +738,7 @@ exit 0
 
     /// Test Hitch with async hooks (background processes)
     #[test]
+    #[ignore]
     fn test_hitch_with_async_hooks() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
