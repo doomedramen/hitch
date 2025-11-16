@@ -73,11 +73,12 @@ impl TestEnv {
             let tree_id = index.write_tree()?;
             let tree = repo.find_tree(tree_id)?;
 
-            let initial_commit =
-                repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+            // Set HEAD to point to main branch before creating commit
+            repo.set_head("refs/heads/main")?;
 
-            // Set up main branch explicitly
-            repo.branch("main", &repo.find_commit(initial_commit)?, true)?;
+            // Create initial commit on main branch
+            let _initial_commit =
+                repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
         } // tree is dropped here, releasing the borrow on repo
 
         Ok(repo)

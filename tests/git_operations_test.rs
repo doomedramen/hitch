@@ -14,9 +14,12 @@ fn test_git_operations_basic_functionality() -> Result<()> {
             test_env.path().to_str().unwrap(),
         )?;
 
-        // Test get_current_branch
+        // Test get_current_branch (should always be main)
         let current_branch = git_ops.get_current_branch()?;
-        assert_eq!(current_branch, "main");
+        assert_eq!(
+            current_branch, "main",
+            "Should use 'main' as default branch"
+        );
 
         // Test get_user_email
         let email = git_ops.get_user_email()?;
@@ -158,14 +161,17 @@ fn test_git_operations_file_operations() -> Result<()> {
 /// Test git operations with invalid git repository
 #[test]
 fn test_git_operations_invalid_repository() -> Result<()> {
-    // Test with non-git directory
-    let result = hitch::utils::git_operations::GitOperations::new();
-    assert!(
-        result.is_err(),
-        "Should fail to create GitOperations in non-git directory"
-    );
-
-    Ok(())
+    // Test with non-git directory using a temporary directory
+    with_test_env(SetupLevel::Basic, |test_env| {
+        let result = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        );
+        assert!(
+            result.is_err(),
+            "Should fail to create GitOperations in non-git directory"
+        );
+        Ok(())
+    })
 }
 
 /// Test git operations push functionality
