@@ -204,9 +204,9 @@ fn test_status_not_initialized() -> Result<()> {
 
         let stderr = String::from_utf8(output.stderr)?;
         assert!(
-            stderr.contains("Failed to read hitch.json")
-                || stderr.contains("Failed to access hitch metadata")
-                || stderr.contains("Failed to checkout branch")
+            stderr.contains("Not in a git repository"),
+            "Expected 'Not in a git repository' error in: {}",
+            stderr
         );
 
         Ok(())
