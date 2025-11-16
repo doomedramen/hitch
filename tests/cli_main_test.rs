@@ -186,7 +186,7 @@ fn test_cli_complete_workflow() -> Result<()> {
         assert!(output.status.success(), "Lock command should succeed");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            stdout.contains("Successfully locked environment 'test'"),
+            stdout.contains("Successfully locked 'test'!"),
             "Should confirm environment lock"
         );
 
