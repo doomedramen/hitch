@@ -296,9 +296,7 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
             }),
         );
 
-        let config = serde_json::json!({
-            "environments": environments
-        });
+        let config = serde_json::json!({ "environments": environments });
 
         // Create hitch-metadata branch and write config
         git_ops.create_orphan_branch("hitch-metadata")?;
