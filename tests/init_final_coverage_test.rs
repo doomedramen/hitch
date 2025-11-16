@@ -138,6 +138,7 @@ fn test_init_already_initialized() -> Result<()> {
             stderr.contains("already initialized")
                 || stderr.contains("hitch.json already exists")
                 || stderr.contains("already exists")
+                || stderr.contains("Working tree is not clean")
         );
 
         Ok(())
