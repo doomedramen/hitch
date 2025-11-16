@@ -139,11 +139,12 @@ fn test_git_operations_file_operations() -> Result<()> {
         );
 
         // Test read_file_from_branch on current branch
-        let content = git_ops.read_file_from_branch("main", "test.txt")?;
+        let current_branch = git_ops.get_current_branch()?;
+        let content = git_ops.read_file_from_branch(&current_branch, "test.txt")?;
         assert_eq!(content, "Test content", "Should read correct content");
 
         // Test reading non-existent file
-        let result = git_ops.read_file_from_branch("main", "nonexistent.txt");
+        let result = git_ops.read_file_from_branch(&current_branch, "nonexistent.txt");
         assert!(result.is_err(), "Should fail to read non-existent file");
 
         Ok(())
@@ -396,7 +397,7 @@ fn test_git_operations_squash_merge() -> Result<()> {
 /// Test error handling in git operations
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
-    with_test_env(SetupLevel::Basic, |test_env| {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
         let test_path = test_env.path();
 
         // Test operations in non-git directory - create a temp directory without git
