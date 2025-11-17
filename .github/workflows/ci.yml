@@ -179,6 +179,10 @@ jobs:
         mkdir -p target/docs
         cp -r target/doc/hitch/* target/docs/
 
+    - name: Add redirect
+      run: echo '<meta http-equiv="refresh" content="0;url=aoc/index.html">' > target/doc/index.html
+
+
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
