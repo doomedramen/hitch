@@ -36,7 +36,7 @@ jobs:
         components: rustfmt, clippy
 
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -91,7 +91,7 @@ jobs:
         file "$OPENSSL_PATH/lib/libcrypto.dylib" || echo "Could not check architecture"
 
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -116,7 +116,7 @@ jobs:
   #       components: llvm-tools-preview
   #
   #   - name: Cache dependencies
-  #     uses: actions/cache@v3
+  #     uses: actions/cache@v4
   #     with:
   #       path: |
   #         ~/.cargo/registry
@@ -163,7 +163,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -195,7 +195,7 @@ jobs:
   #     uses: dtolay/rust-toolchain@stable
   #
   #   - name: Cache dependencies
-  #     uses: actions/cache@v3
+  #     uses: actions/cache@v4
   #     with:
   #       path: |
   #         ~/.cargo/registry
