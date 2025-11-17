@@ -174,27 +174,28 @@ jobs:
     - name: Generate documentation
       run: cargo doc --no-deps --all-features --document-private-items
 
-    - name: Copy documentation to docs directory
+    - name: Prepare documentation for GitHub Pages
       run: |
-        mkdir -p target/docs
-        cp -r target/doc/hitch/* target/docs/
-        cp -r target/doc/static.files target/docs/
-        cp target/doc/*.js target/docs/ 2>/dev/null || true
-        cp target/doc/*.html target/docs/ 2>/dev/null || true
-        cp -r target/doc/search.desc target/docs/ 2>/dev/null || true
-
-    - name: Add redirect
-      run: echo '<meta http-equiv="refresh" content="0;url=hitch/index.html">' > target/doc/index.html
-
+        # Create a clean directory structure for GitHub Pages
+        mkdir -p target/gh-pages
+        # Copy hitch docs to docs subdirectory
+        mkdir -p target/gh-pages/docs
+        cp -r target/doc/hitch/* target/gh-pages/docs/
+        # Copy static files to root level for relative paths to work
+        cp -r target/doc/static.files target/gh-pages/
+        cp target/doc/*.js target/gh-pages/ 2>/dev/null || true
+        cp target/doc/*.html target/gh-pages/ 2>/dev/null || true
+        cp -r target/doc/search.desc target/gh-pages/ 2>/dev/null || true
+        # Add redirect at root
+        echo '<meta http-equiv="refresh" content="0;url=docs/hitch/index.html">' > target/gh-pages/index.html
 
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: target/docs
+        publish_dir: target/gh-pages
         publish_branch: gh-pages
-        destination_dir: docs
 
   # Temporarily disabled jobs due to resource constraints
   # benchmark:
