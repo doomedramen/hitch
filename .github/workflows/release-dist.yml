@@ -23,15 +23,6 @@ jobs:
         with:
           go-version: stable
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install zig and cargo-zigbuild
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zig
-          cargo install cargo-zigbuild
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
