@@ -17,7 +17,7 @@ jobs:
       announcement: ${{ steps.plan.outputs.announcement }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install cargo-dist
         uses: axodotdev/cargo-dist-installer@v0.13.3
@@ -81,7 +81,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,7 +96,7 @@ jobs:
           cargo dist build --target=${{ matrix.target }} --output-pattern=artifacts
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: artifacts-${{ matrix.target }}
           path: artifacts/
@@ -111,10 +111,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v6
         with:
           pattern: artifacts-*
           merge-multiple: true
@@ -124,7 +124,7 @@ jobs:
         uses: axodotdev/cargo-dist-installer@v0.13.3
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           body_path: ${{ needs.plan.outputs.announcement }}
