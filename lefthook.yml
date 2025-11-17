@@ -45,9 +45,9 @@ pre-push:
 
         Fix build errors before pushing.
 
-    # Run basic test suite to debug hanging issue
+    # Run core tests (lib + binary) to avoid integration test hanging
     test:
-      run: cargo test --lib --release
+      run: cargo test --lib --bins --release
       fail_text: |
         🚨 Tests failed!
 
