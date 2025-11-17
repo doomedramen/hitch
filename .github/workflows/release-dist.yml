@@ -124,7 +124,7 @@ jobs:
         uses: axodotdev/cargo-dist-installer@v0.13.3
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           body_path: ${{ needs.plan.outputs.announcement }}
