@@ -37,7 +37,7 @@ pre-commit:
 
 pre-push:
   commands:
-    # Build check - ensure code compiles before pushing
+    # Build check (run first to fail fast on compilation issues)
     build:
       run: cargo build --release
       fail_text: |
@@ -45,9 +45,9 @@ pre-push:
 
         Fix build errors before pushing.
 
-    # Run basic tests to ensure functionality (skip problematic remote tests)
+    # Run full test suite in release mode with parallel execution
     test:
-      run: cargo test --all-features --release -- --skip remote_operations_tests::test_hitch_remote_operations_with_no_push_flag
+      run: cargo test --all-features --release
       fail_text: |
         🚨 Tests failed!
 
