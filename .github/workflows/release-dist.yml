@@ -26,8 +26,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+      - name: Install zig and cargo-zigbuild
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zig
+          cargo install cargo-zigbuild
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
