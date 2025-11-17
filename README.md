@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="hitch.svg" alt="Hitch Logo" width="120" height="120">
+</p>
+
 # Hitch
 
 > Git branch management for environment-based deployments
