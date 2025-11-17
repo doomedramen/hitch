@@ -1,23 +1,24 @@
-# Rust release configuration (similar to goreleaser but for Rust)
-# This uses cargo-dist as the Rust equivalent of goreleaser
+# GoReleaser configuration for Rust projects
 
 project_name: hitch
-cargo_dist:
-  # The directory where the release artifacts are placed
-  dist_dir: target/dist
 
 builds:
-  - binary: hitch
-    main: ./src/main.rs
-    # Rust targets instead of goos/goarch
+  - builder: rust
+    binary: hitch
     targets:
       - x86_64-unknown-linux-gnu
       - x86_64-apple-darwin
       - aarch64-apple-darwin
+      - x86_64-pc-windows-gnu
+    flags:
+      - --release
 
 archive:
   format: tar.gz
-  name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+  name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  files:
+    - LICENSE*
+    - README*
 
 release:
   github:
@@ -29,9 +30,11 @@ release:
 # Homebrew configuration
 brews:
   - name: hitch
-    github:
+    repository:
       owner: doomedramen
       name: homebrew-hitch
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/doomedramen/hitch"
     description: "A CLI tool for managing environment-specific git branches and metadata"
     license: MIT
