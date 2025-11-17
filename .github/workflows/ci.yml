@@ -194,9 +194,9 @@ jobs:
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: target/pages/docs
+        publish_dir: target/pages
         publish_branch: gh-pages
-        destination_dir: docs
+        force_orphan: true
 
   # Temporarily disabled jobs due to resource constraints
   # benchmark:
