@@ -23,6 +23,12 @@ jobs:
         with:
           go-version: stable
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
