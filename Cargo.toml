@@ -52,3 +52,8 @@ parking_lot = "0.12"
 inherits = "release"
 lto = "thin"
 
+# cargo-dist configuration for Homebrew support
+[workspace.metadata.dist]
+installers = ["homebrew"]
+tap = "doomedramen/homebrew-hitch"
+
