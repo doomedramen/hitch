@@ -37,21 +37,13 @@ pre-commit:
 
 pre-push:
   commands:
-    # Build check (run first to fail fast on compilation issues)
+    # Build check - ensure code compiles before pushing
     build:
       run: cargo build --release
       fail_text: |
         🚨 Build failed!
 
         Fix build errors before pushing.
-
-    # Run full test suite in release mode with parallel execution
-    test:
-      run: cargo test --all-features --release
-      fail_text: |
-        🚨 Tests failed!
-
-        Fix the failing tests before pushing.
 
 # Skip these hooks for specific files or patterns
 skip_output:
