@@ -1,4 +1,5 @@
-# GoReleaser configuration for Rust projects
+# .goreleaser.yaml
+version: 2
 
 project_name: hitch
 
@@ -13,12 +14,12 @@ builds:
     flags:
       - --release
 
-archive:
-  format: tar.gz
-  name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  files:
-    - LICENSE*
-    - README*
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
 
 release:
   github:
