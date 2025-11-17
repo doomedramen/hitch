@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "hitch"
-version = "1.2.3"
+version = "1.2.4"
 edition = "2021"
 authors = ["Martin Page"]
 description = "A CLI tool for managing environment-specific git branches and metadata"
@@ -52,8 +52,4 @@ parking_lot = "0.12"
 inherits = "release"
 lto = "thin"
 
-# cargo-dist configuration for Homebrew support
-[workspace.metadata.dist]
-installers = ["homebrew"]
-tap = "doomedramen/homebrew-hitch"
 
