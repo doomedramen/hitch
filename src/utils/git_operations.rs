@@ -493,8 +493,11 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Check if a merge would result in conflicts
-    pub fn check_merge_conflicts(&self, source_branch: &str) -> Result<bool> {
+    /// Check if a merge would result in conflicts and return detailed conflict info
+    pub fn check_merge_conflicts_detailed(
+        &self,
+        source_branch: &str,
+    ) -> Result<(bool, Option<Vec<String>>)> {
         let output = self.run_git_command(&["merge", "--no-commit", "--no-ff", source_branch])?;
 
         if !output.status.success() {
@@ -512,16 +515,50 @@ impl GitOperations {
             // Check if it's unrelated histories error
             if stderr.contains("refusing to merge unrelated histories") {
                 // This is not a merge conflict, but a git history issue
-                return Ok(true); // We'll treat this as a conflict for now
+                return Ok((true, None)); // We'll treat this as a conflict for now
             }
 
             // If merge fails for other reasons, it's likely due to conflicts
-            return Ok(true);
+            // Try to get the list of conflicted files
+            let conflicted_files = self.get_conflicted_files().unwrap_or_default();
+            return Ok((true, Some(conflicted_files)));
         }
 
         // Abort the test merge
         let _ = self.run_git_command(&["merge", "--abort"]);
 
-        Ok(false)
+        Ok((false, None))
+    }
+
+    /// Get list of conflicted files in the current working directory
+    pub fn get_conflicted_files(&self) -> Result<Vec<String>> {
+        let output = self.run_git_command(&["diff", "--name-only", "--diff-filter=U"])?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let conflicted_files: Vec<String> = stdout
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| line.trim().to_string())
+                .collect();
+            Ok(conflicted_files)
+        } else {
+            // If git diff fails, return empty list
+            Ok(Vec::new())
+        }
+    }
+
+    /// Abort any ongoing merge operation and reset working directory to clean state
+    pub fn abort_merge_and_clean(&self) -> Result<()> {
+        // First try to abort any ongoing merge
+        let _ = self.run_git_command(&["merge", "--abort"]);
+
+        // Then reset any conflicted files to clean state
+        let _ = self.run_git_command(&["reset", "--hard"]);
+
+        // Clean up any untracked files
+        let _ = self.run_git_command(&["clean", "-fd"]);
+
+        Ok(())
     }
 }

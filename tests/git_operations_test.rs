@@ -311,9 +311,14 @@ fn test_git_operations_merge() -> Result<()> {
         // Verify merge
         assert!(fs::metadata(test_env.path().join("feature.txt")).is_ok());
 
-        // Test check_merge_conflicts
-        let has_conflicts = git_ops.check_merge_conflicts("feature")?;
+        // Test check_merge_conflicts_detailed
+        let (has_conflicts, conflicted_files) =
+            git_ops.check_merge_conflicts_detailed("feature")?;
         assert!(!has_conflicts, "Should have no conflicts");
+        assert!(
+            conflicted_files.is_none(),
+            "Should have no conflicted files"
+        );
 
         Ok(())
     })
@@ -355,8 +360,8 @@ fn test_git_operations_error_handling() -> Result<()> {
             "Should fail to squash merge non-existent branch"
         );
 
-        // Test check_merge_conflicts with non-existent branch
-        let result = git_ops.check_merge_conflicts("nonexistent");
+        // Test check_merge_conflicts_detailed with non-existent branch
+        let result = git_ops.check_merge_conflicts_detailed("nonexistent");
         assert!(
             result.is_err(),
             "Should fail to check conflicts for non-existent branch"
@@ -426,7 +431,8 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
         git_ops.checkout_branch("main")?;
 
         // Check for merge conflicts
-        let has_conflicts = git_ops.check_merge_conflicts("feature/login")?;
+        let (has_conflicts, conflicted_files) =
+            git_ops.check_merge_conflicts_detailed("feature/login")?;
 
         println!("Current branch: {}", git_ops.get_current_branch()?);
         println!(
@@ -434,6 +440,9 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
             git_ops.branch_exists("feature/login")?
         );
         println!("Merge conflicts detected: {}", has_conflicts);
+        if let Some(files) = conflicted_files {
+            println!("Conflicted files: {:?}", files);
+        }
 
         // This might detect conflicts if hitch init changed files
         println!("Files in main:");

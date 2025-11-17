@@ -444,6 +444,15 @@ pub fn rebuild_environment(
                 user_original_branch
             ));
 
+            // First, abort any ongoing merge and reset working directory to clean state
+            // This is necessary because checkout will fail if there are unresolved conflicts
+            if let Err(e) = context.git().abort_merge_and_clean() {
+                context.log_warning(&format!(
+                    "Failed to reset working directory before checkout: {}",
+                    e
+                ));
+            }
+
             // Handle detached HEAD case specially
             let checkout_result = if user_original_branch.starts_with("detached-HEAD-") {
                 // Extract commit hash from detached-HEAD-abcdef1 format
@@ -464,6 +473,16 @@ pub fn rebuild_environment(
         // Clean up temp branch if it exists
         if context.git().branch_exists(&temp_branch)? {
             context.log_info(&format!("Cleaning up failed temp branch '{}'", temp_branch));
+
+            // First, abort any ongoing merge and reset working directory to clean state
+            if let Err(e) = context.git().abort_merge_and_clean() {
+                context.log_warning(&format!(
+                    "Failed to reset working directory during cleanup: {}",
+                    e
+                ));
+            }
+
+            // Now try to delete the temp branch
             if let Err(e) = context.git().delete_branch(&temp_branch, true) {
                 context.log_warning(&format!(
                     "Failed to delete temp branch '{}': {}",
@@ -573,12 +592,35 @@ fn perform_squash_merges_for_rebuild(
         }
 
         // Check for merge conflicts before attempting squash merge
-        if context.git().check_merge_conflicts(branch)? {
-            return Err(anyhow::anyhow!(
-                "Merge conflict detected when merging branch '{}'. \
-                 Please resolve conflicts before rebuilding.",
-                branch
+        let (has_conflicts, conflicted_files) =
+            context.git().check_merge_conflicts_detailed(branch)?;
+        if has_conflicts {
+            let mut error_msg = format!("Merge conflict detected when merging branch '{}'", branch);
+
+            if let Some(files) = conflicted_files {
+                if !files.is_empty() {
+                    error_msg.push_str("\n\nConflicting files:");
+                    for file in files {
+                        error_msg.push_str(&format!("\n  • {}", file));
+                    }
+                } else {
+                    error_msg.push_str("\n\nUnable to determine specific conflicting files.");
+                }
+            }
+
+            error_msg.push_str("\n\nTo resolve this:");
+            error_msg.push_str(&format!(
+                "\n1. Check out '{}' branch: git checkout {}",
+                branch, branch
             ));
+            error_msg.push_str("\n2. Resolve conflicts manually");
+            error_msg.push_str("\n3. Commit the resolution");
+            error_msg.push_str(&format!(
+                "\n4. Try rebuilding again: hitch rebuild {} --force",
+                context.git().get_current_branch().unwrap_or_default()
+            ));
+
+            return Err(anyhow::anyhow!("{}", error_msg));
         }
 
         // Perform squash merge
