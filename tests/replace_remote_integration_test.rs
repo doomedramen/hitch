@@ -33,7 +33,7 @@ fn strip_ansi_codes(text: &str) -> String {
 
 #[cfg(test)]
 #[allow(dead_code)]
-mod replace_remote_tests {
+mod remote_replacement_tests {
     use super::*;
 
     /// Helper to run hitch command in test environment
@@ -111,9 +111,9 @@ mod replace_remote_tests {
         Ok(())
     }
 
-    /// Test basic --replace-remote functionality with rebuild command
+    /// Test basic remote replacement functionality with rebuild command
     #[test]
-    fn test_rebuild_with_replace_remote_success() -> Result<()> {
+    fn test_rebuild_with_remote_replacement_success() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -126,12 +126,8 @@ mod replace_remote_tests {
             create_branch(test_env, "feature1")?;
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
-            // Now rebuild with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Now rebuild and confirm "yes" (should always prompt)
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -145,9 +141,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test --replace-remote with "no" response (should skip remote replacement)
+    /// Test remote replacement with "no" response (should skip remote replacement)
     #[test]
-    fn test_rebuild_with_replace_remote_declined() -> Result<()> {
+    fn test_rebuild_with_remote_replacement_declined() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -160,12 +156,8 @@ mod replace_remote_tests {
             create_branch(test_env, "feature1")?;
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
-            // Rebuild with --replace-remote but answer "no"
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "n\n",
-            )?;
+            // Rebuild and answer "no" (should always prompt)
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "n\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -181,9 +173,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test promote command with --replace-remote flag
+    /// Test promote command with remote replacement
     #[test]
-    fn test_promote_with_replace_remote() -> Result<()> {
+    fn test_promote_with_remote_replacement() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -195,12 +187,9 @@ mod replace_remote_tests {
             create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
             create_branch(test_env, "feature1")?;
 
-            // Promote with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["promote", "feature1", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Promote and confirm "yes" (should always prompt)
+            let output =
+                run_hitch_command_with_input(test_env, &["promote", "feature1", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -213,9 +202,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test demote command with --replace-remote flag
+    /// Test demote command with remote replacement
     #[test]
-    fn test_demote_with_replace_remote() -> Result<()> {
+    fn test_demote_with_remote_replacement() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -228,12 +217,9 @@ mod replace_remote_tests {
             create_branch(test_env, "feature1")?;
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
-            // Now demote with --replace-remote and confirm "yes"
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["demote", "feature1", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Now demote and confirm "yes" (should always prompt)
+            let output =
+                run_hitch_command_with_input(test_env, &["demote", "feature1", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -246,9 +232,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test that --replace-remote respects --no-push flag
+    /// Test that remote replacement respects --no-push flag
     #[test]
-    fn test_replace_remote_with_no_push_flag() -> Result<()> {
+    fn test_remote_replacement_with_no_push_flag() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -261,11 +247,8 @@ mod replace_remote_tests {
             create_branch(test_env, "feature1")?;
             run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
 
-            // Rebuild with both --replace-remote and --no-push
-            let output = run_hitch_command(
-                test_env,
-                &["rebuild", "dev", "--replace-remote", "--no-push"],
-            )?;
+            // Rebuild with --no-push (should skip all remote operations)
+            let output = run_hitch_command(test_env, &["rebuild", "dev", "--no-push"])?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -282,9 +265,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test --replace-remote with empty environment
+    /// Test remote replacement with empty environment
     #[test]
-    fn test_replace_remote_empty_environment() -> Result<()> {
+    fn test_remote_replacement_empty_environment() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -292,12 +275,8 @@ mod replace_remote_tests {
             // Add dev environment but don't promote any branches
             run_hitch_command(test_env, &["add", "dev"])?;
 
-            // Rebuild with --replace-remote
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Rebuild and confirm "yes" (should always prompt)
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -311,9 +290,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test --replace-remote with multiple branches promoted
+    /// Test remote replacement with multiple branches promoted
     #[test]
-    fn test_replace_remote_multiple_branches() -> Result<()> {
+    fn test_remote_replacement_multiple_branches() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -331,12 +310,8 @@ mod replace_remote_tests {
             create_branch(test_env, "feature2")?;
             run_hitch_command(test_env, &["promote", "feature2", "dev"])?;
 
-            // Rebuild with --replace-remote
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Rebuild and confirm "yes" (should always prompt)
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -348,9 +323,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test --replace-remote with locked environment (should fail without --force)
+    /// Test remote replacement with locked environment (should fail without --force)
     #[test]
-    fn test_replace_remote_locked_environment() -> Result<()> {
+    fn test_remote_replacement_locked_environment() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -361,9 +336,9 @@ mod replace_remote_tests {
             // Lock the environment
             run_hitch_command(test_env, &["lock", "dev"])?;
 
-            // Try to rebuild with --replace-remote (should fail)
+            // Try to rebuild (should fail due to lock)
             let output = Command::new(test_env.hitch_binary())
-                .args(["rebuild", "dev", "--replace-remote"])
+                .args(["rebuild", "dev"])
                 .current_dir(test_env.path())
                 .output()?;
 
@@ -381,9 +356,9 @@ mod replace_remote_tests {
         })
     }
 
-    /// Test --replace-remote with locked environment using --force flag
+    /// Test remote replacement with locked environment using --force flag
     #[test]
-    fn test_replace_remote_locked_environment_with_force() -> Result<()> {
+    fn test_remote_replacement_locked_environment_with_force() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -399,12 +374,9 @@ mod replace_remote_tests {
             // Lock the environment
             run_hitch_command(test_env, &["lock", "dev"])?;
 
-            // Rebuild with both --replace-remote and --force
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote", "--force"],
-                "y\n",
-            )?;
+            // Rebuild with --force and confirm "yes" (should always prompt)
+            let output =
+                run_hitch_command_with_input(test_env, &["rebuild", "dev", "--force"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 

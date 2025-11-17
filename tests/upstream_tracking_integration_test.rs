@@ -110,7 +110,7 @@ mod upstream_tracking_tests {
                 "Dev branch should not have upstream tracking initially"
             );
 
-            // Now rebuild with --replace-remote to trigger force push with --set-upstream
+            // Now rebuild with to trigger force push with --set-upstream
             let _output = run_hitch_command_with_input(
                 test_env,
                 &["rebuild", "dev", "--replace-remote"],
@@ -135,7 +135,7 @@ mod upstream_tracking_tests {
 
     /// Test that promote with --replace-remote sets up upstream tracking
     #[test]
-    fn test_promote_replace_remote_sets_upstream_tracking() -> Result<()> {
+    fn test_promote_remote_replacement_sets_upstream_tracking() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -155,17 +155,14 @@ mod upstream_tracking_tests {
             run_git_command(test_env, &["add", "test.txt"])?;
             run_git_command(test_env, &["commit", "-m", "Add test file"])?;
 
-            // Promote with --replace-remote
-            let _output = run_hitch_command_with_input(
-                test_env,
-                &["promote", "feature1", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Promote
+            let _output =
+                run_hitch_command_with_input(test_env, &["promote", "feature1", "dev"], "y\n")?;
 
             // Verify that upstream tracking is set up for dev
             assert!(
                 has_upstream_tracking(test_env, "dev")?,
-                "Dev branch should have upstream tracking after promote with --replace-remote"
+                "Dev branch should have upstream tracking after promote"
             );
 
             Ok(())
@@ -174,7 +171,7 @@ mod upstream_tracking_tests {
 
     /// Test that demote with --replace-remote sets up upstream tracking
     #[test]
-    fn test_demote_replace_remote_sets_upstream_tracking() -> Result<()> {
+    fn test_demote_remote_replacement_sets_upstream_tracking() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -195,17 +192,14 @@ mod upstream_tracking_tests {
                 "Dev branch should have upstream tracking after initial promote"
             );
 
-            // Now demote with --replace-remote
-            let _output = run_hitch_command_with_input(
-                test_env,
-                &["demote", "feature1", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Now demote
+            let _output =
+                run_hitch_command_with_input(test_env, &["demote", "feature1", "dev"], "y\n")?;
 
             // Verify that upstream tracking is still set up after demote
             assert!(
                 has_upstream_tracking(test_env, "dev")?,
-                "Dev branch should still have upstream tracking after demote with --replace-remote"
+                "Dev branch should still have upstream tracking after demote"
             );
 
             Ok(())
@@ -214,7 +208,7 @@ mod upstream_tracking_tests {
 
     /// Test that upstream tracking is preserved when no remote replacement occurs
     #[test]
-    fn test_upstream_tracking_preservation_without_replace_remote() -> Result<()> {
+    fn test_upstream_tracking_preservation_without_remote_replacement() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
@@ -266,12 +260,8 @@ mod upstream_tracking_tests {
                 "Dev branch should not have upstream tracking before rebuild"
             );
 
-            // Rebuild with --replace-remote
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Rebuild
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             // The rebuild should succeed and set up upstream tracking
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -290,7 +280,7 @@ mod upstream_tracking_tests {
         })
     }
 
-    /// Test multiple environments with --replace-remote each get upstream tracking
+    /// Test multiple environments each get upstream tracking
     #[test]
     fn test_multiple_environments_upstream_tracking() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
@@ -316,18 +306,10 @@ mod upstream_tracking_tests {
                 "Prod should not have upstream tracking"
             );
 
-            // Rebuild each environment with --replace-remote
-            run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
-            run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "staging", "--replace-remote"],
-                "y\n",
-            )?;
-            run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "prod", "--replace-remote"],
-                "y\n",
-            )?;
+            // Rebuild each environment
+            run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
+            run_hitch_command_with_input(test_env, &["rebuild", "staging"], "y\n")?;
+            run_hitch_command_with_input(test_env, &["rebuild", "prod"], "y\n")?;
 
             // Verify all environments now have upstream tracking
             assert!(
@@ -357,8 +339,8 @@ mod upstream_tracking_tests {
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
-            // First rebuild with --replace-remote to set up tracking
-            run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            // First rebuild to set up tracking
+            run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             // Verify upstream tracking is set up
             assert!(
@@ -372,8 +354,8 @@ mod upstream_tracking_tests {
             run_git_command(test_env, &["add", "another-file.txt"])?;
             run_git_command(test_env, &["commit", "-m", "Add another file"])?;
 
-            // Second rebuild with --replace-remote
-            run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            // Second rebuild
+            run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             // Verify upstream tracking is still there
             assert!(
@@ -381,8 +363,8 @@ mod upstream_tracking_tests {
                 "Dev branch should still have upstream tracking after second rebuild"
             );
 
-            // Third rebuild with --replace-remote
-            run_hitch_command_with_input(test_env, &["rebuild", "dev", "--replace-remote"], "y\n")?;
+            // Third rebuild
+            run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             // Verify upstream tracking persists
             assert!(
@@ -444,12 +426,8 @@ mod upstream_tracking_tests {
                 &["remote", "set-url", "origin", "invalid-url-that-will-fail"],
             )?;
 
-            // Try to rebuild with --replace-remote (should fail gracefully)
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["rebuild", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Try to rebuild (should fail gracefully)
+            let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 

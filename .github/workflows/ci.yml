@@ -174,13 +174,19 @@ jobs:
     - name: Generate documentation
       run: cargo doc --no-deps --all-features --document-private-items
 
+    - name: Copy documentation to docs directory
+      run: |
+        mkdir -p target/docs
+        cp -r target/doc/hitch/* target/docs/
+
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: target/doc
+        publish_dir: target/docs
         publish_branch: gh-pages
+        destination_dir: docs
 
   # Temporarily disabled jobs due to resource constraints
   # benchmark:

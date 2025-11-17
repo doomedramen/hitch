@@ -312,11 +312,7 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
 /// - Step 4: Merge temp branch into real environment branch
 /// - Step 5: Update rebuiltAt timestamp (handled automatically on success)
 /// - Automatic rollback on any failure
-pub fn rebuild_environment(
-    context: &GlobalContext,
-    env_name: &str,
-    replace_remote: bool,
-) -> Result<()> {
+pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
         env_name
@@ -362,12 +358,8 @@ pub fn rebuild_environment(
             "Replacing '{}' branch with rebuilt content",
             env_name
         ));
-        let backup_branch = safe_replace_environment_branch_for_rebuild(
-            context,
-            env_name,
-            &temp_branch,
-            replace_remote,
-        )?;
+        let backup_branch =
+            safe_replace_environment_branch_for_rebuild(context, env_name, &temp_branch)?;
 
         // Update rebuiltAt timestamp on success
         update_rebuilt_timestamp_for_rebuild(context, env_name)?;
@@ -640,7 +632,6 @@ fn safe_replace_environment_branch_for_rebuild(
     context: &GlobalContext,
     env_name: &str,
     temp_branch: &str,
-    replace_remote: bool,
 ) -> Result<String> {
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let backup_branch = format!("hitch-backup-{}-{}", env_name, timestamp);
@@ -664,8 +655,8 @@ fn safe_replace_environment_branch_for_rebuild(
     ));
     context.git().create_branch_from(env_name, temp_branch)?;
 
-    // Step 4c: Handle remote branch replacement if requested
-    if replace_remote && context.should_push() {
+    // Step 4c: Handle remote branch replacement - always prompt when push is enabled
+    if context.should_push() {
         // Interactive confirmation for force push
         context.log_info(&format!(
             "This will replace the remote '{}' branch with the rebuilt version.",
@@ -712,15 +703,6 @@ fn safe_replace_environment_branch_for_rebuild(
                 env_name, env_name
             ));
         }
-    } else if !replace_remote && context.should_push() {
-        context.log_verbose(&format!(
-            "Skipping remote replacement for '{}' branch (use --replace-remote to enable)",
-            env_name
-        ));
-        context.log_info(&format!(
-            "The local '{}' branch has been rebuilt. To push manually, run: git push origin {} --force",
-            env_name, env_name
-        ));
     } else {
         context.log_verbose(&format!(
             "Skipping remote operations for '{}' branch due to --no-push flag",

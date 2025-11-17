@@ -12,10 +12,6 @@ pub struct RebuildCommand {
     /// Force rebuild even if environment is locked
     #[arg(long)]
     pub force: bool,
-
-    /// Replace the remote branch (force push) after rebuilding
-    #[arg(long)]
-    pub replace_remote: bool,
 }
 
 pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
@@ -33,11 +29,11 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
             "Force rebuilding locked environment '{}'...",
             args.env_name
         ));
-        crate::utils::prelude::rebuild_environment(context, &args.env_name, args.replace_remote)?;
+        crate::utils::prelude::rebuild_environment(context, &args.env_name)?;
     } else {
         // Normal mode: use automatic locking and unlocking
         with_locked_env(context, &args.env_name, || {
-            crate::utils::prelude::rebuild_environment(context, &args.env_name, args.replace_remote)
+            crate::utils::prelude::rebuild_environment(context, &args.env_name)
         })?;
     }
 

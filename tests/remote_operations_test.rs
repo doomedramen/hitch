@@ -648,12 +648,9 @@ mod remote_operations_tests {
 
             ensure_clean_working_tree(test_env)?;
 
-            // Promote with --replace-remote (which should use force push)
-            let output = run_hitch_command_with_input(
-                test_env,
-                &["promote", "feature", "dev", "--replace-remote"],
-                "y\n",
-            )?;
+            // Promote (which should always prompt for force push)
+            let output =
+                run_hitch_command_with_input(test_env, &["promote", "feature", "dev"], "y\n")?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);

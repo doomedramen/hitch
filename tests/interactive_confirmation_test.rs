@@ -149,10 +149,11 @@ mod interactive_confirmation_tests {
         Ok(())
     }
 
-    /// Test interactive confirmation with 'y' response for rebuild --replace-remote
+    /// Test interactive confirmation with 'y' response for rebuild
     #[test]
     #[ignore]
-    fn test_rebuild_replace_remote_confirm_yes() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_rebuild_remote_replacement_confirm_yes() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -202,10 +203,11 @@ mod interactive_confirmation_tests {
         })
     }
 
-    /// Test interactive confirmation with 'yes' response for promote --replace-remote
+    /// Test interactive confirmation with 'yes' response for promote
     #[test]
     #[ignore]
-    fn test_promote_replace_remote_confirm_yes_full() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_promote_remote_replacement_confirm_yes_full() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -244,10 +246,11 @@ mod interactive_confirmation_tests {
         })
     }
 
-    /// Test interactive confirmation with 'n' response for rebuild --replace-remote
+    /// Test interactive confirmation with 'n' response for rebuild
     #[test]
     #[ignore]
-    fn test_rebuild_replace_remote_decline_no() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_rebuild_remote_replacement_decline_no() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -298,10 +301,11 @@ mod interactive_confirmation_tests {
         })
     }
 
-    /// Test interactive confirmation with 'N' response for demote --replace-remote
+    /// Test interactive confirmation with 'N' response for demote
     #[test]
     #[ignore]
-    fn test_demote_replace_remote_decline_uppercase() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_demote_remote_replacement_decline_uppercase() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -344,7 +348,8 @@ mod interactive_confirmation_tests {
     /// Test interactive confirmation with empty input (should decline)
     #[test]
     #[ignore]
-    fn test_replace_remote_empty_input_declines() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_remote_replacement_empty_input_declines() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -397,7 +402,8 @@ mod interactive_confirmation_tests {
     /// Test interactive confirmation with invalid input (should decline)
     #[test]
     #[ignore]
-    fn test_replace_remote_invalid_input_declines() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_remote_replacement_invalid_input_declines() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;
@@ -450,7 +456,8 @@ mod interactive_confirmation_tests {
     /// Test interactive confirmation with case-insensitive 'Y' response
     #[test]
     #[ignore]
-    fn test_replace_remote_case_insensitive_yes() -> Result<()> {
+    #[allow(dead_code)]
+    fn test_remote_replacement_case_insensitive_yes() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Ensure working tree is clean and initialize Hitch
             ensure_clean_working_tree(test_env)?;

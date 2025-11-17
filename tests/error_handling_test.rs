@@ -520,8 +520,8 @@ mod error_handling_tests {
                 .current_dir(test_env.path())
                 .output()?;
 
-            // Try rebuild with --replace-remote - should fail gracefully
-            let output = run_hitch_command(test_env, &["rebuild", "dev", "--replace-remote"])?;
+            // Try rebuild - should fail gracefully
+            let output = run_hitch_command(test_env, &["rebuild", "dev"])?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
