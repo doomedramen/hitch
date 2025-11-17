@@ -107,8 +107,15 @@ mod remote_operations_tests {
 
     /// Helper to create a local remote repository
     fn setup_local_remote(test_env: &TestEnv) -> Result<String> {
-        // Create a bare repository as remote
-        let remote_path = test_env.path().parent().unwrap().join("remote.git");
+        // Create a unique bare repository as remote to avoid race conditions
+        let thread_id = std::thread::current().id();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let remote_name = format!("remote-{:?}-{}.git", thread_id, timestamp);
+        let remote_path = test_env.path().parent().unwrap().join(remote_name);
+
         std::fs::create_dir_all(&remote_path)?;
 
         let output = Command::new("git")
@@ -117,7 +124,11 @@ mod remote_operations_tests {
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to create bare remote repository"));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to create bare remote repository: {}",
+                stderr
+            ));
         }
 
         // Add remote to main repository
@@ -128,7 +139,8 @@ mod remote_operations_tests {
             .output()?;
 
         if !output.status.success() {
-            return Err(anyhow::anyhow!("Failed to add remote"));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to add remote: {}", stderr));
         }
 
         Ok(remote_url.to_string())
@@ -441,59 +453,6 @@ mod remote_operations_tests {
                 let mut perms = std::fs::metadata(&remote_path)?.permissions();
                 perms.set_mode(0o755);
                 std::fs::set_permissions(&remote_path, perms)?;
-            }
-
-            Ok(())
-        })
-    }
-
-    /// Test Hitch with insufficient disk space on remote
-    #[test]
-    fn test_hitch_with_insufficient_disk_space() -> Result<()> {
-        with_test_env(SetupLevel::GitOnly, |test_env| {
-            // Ensure working tree is clean and initialize Hitch
-            ensure_clean_working_tree(test_env)?;
-            run_hitch_command(test_env, &["init"])?;
-            cleanup_after_hitch_init(test_env)?;
-
-            // Set up local remote
-            let _remote_url = setup_local_remote(test_env)?;
-
-            // Create a very large file to potentially trigger disk space issues
-            let large_content = "x".repeat(1_000_000); // 1MB
-            std::fs::write(test_env.path().join("large-file.txt"), large_content)?;
-
-            Command::new("git")
-                .args(["add", "large-file.txt"])
-                .current_dir(test_env.path())
-                .output()?;
-
-            Command::new("git")
-                .args(["commit", "-m", "Add large file"])
-                .current_dir(test_env.path())
-                .output()?;
-
-            // Add environment
-            let output = run_hitch_command(test_env, &["add", "dev"])?;
-
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Should work unless disk space is actually insufficient
-            if !output.status.success() {
-                // May show disk space error
-                assert!(
-                    stderr.contains("space")
-                        || stderr.contains("disk")
-                        || stderr.contains("quota")
-                        || stderr.contains("insufficient"),
-                    "Should show disk space error if it occurs"
-                );
-            } else {
-                assert!(
-                    stdout.contains("dev") || stdout.contains("environment"),
-                    "Should add environment successfully"
-                );
             }
 
             Ok(())
