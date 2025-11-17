@@ -178,9 +178,13 @@ jobs:
       run: |
         mkdir -p target/docs
         cp -r target/doc/hitch/* target/docs/
+        cp -r target/doc/static.files target/docs/
+        cp target/doc/*.js target/docs/ 2>/dev/null || true
+        cp target/doc/*.html target/docs/ 2>/dev/null || true
+        cp -r target/doc/search.desc target/docs/ 2>/dev/null || true
 
     - name: Add redirect
-      run: echo '<meta http-equiv="refresh" content="0;url=aoc/index.html">' > target/doc/index.html
+      run: echo '<meta http-equiv="refresh" content="0;url=hitch/index.html">' > target/doc/index.html
 
 
     - name: Deploy to GitHub Pages
