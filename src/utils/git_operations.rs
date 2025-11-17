@@ -515,12 +515,18 @@ impl GitOperations {
             // Check if it's unrelated histories error
             if stderr.contains("refusing to merge unrelated histories") {
                 // This is not a merge conflict, but a git history issue
+                // Abort the merge attempt to clean up
+                let _ = self.run_git_command(&["merge", "--abort"]);
                 return Ok((true, None)); // We'll treat this as a conflict for now
             }
 
             // If merge fails for other reasons, it's likely due to conflicts
             // Try to get the list of conflicted files
             let conflicted_files = self.get_conflicted_files().unwrap_or_default();
+
+            // Abort the failed merge to clean up the working directory
+            let _ = self.run_git_command(&["merge", "--abort"]);
+
             return Ok((true, Some(conflicted_files)));
         }
 

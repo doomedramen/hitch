@@ -49,6 +49,7 @@ trait TestEnvExt {
     ) -> Result<()>;
     fn run_hitch_command(&self, args: &[&str]) -> Result<std::process::Output>;
     fn get_current_branch(&self) -> Result<String>;
+    fn has_temp_branches(&self) -> Result<bool>;
 }
 
 impl TestEnvExt for TestEnv {
@@ -135,6 +136,21 @@ impl TestEnvExt for TestEnv {
             self.path().to_str().unwrap(),
         )?;
         git_ops.get_current_branch()
+    }
+
+    fn has_temp_branches(&self) -> Result<bool> {
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
+        // Check for common temp branch patterns
+        let temp_patterns = ["hitch-tmp-main-", "hitch-tmp-dev-", "hitch-tmp-staging-"];
+        for pattern in &temp_patterns {
+            if git_ops.branch_exists_anywhere(pattern)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -589,6 +605,548 @@ fn test_rebuild_not_initialized() -> Result<()> {
             stderr.contains("Failed to read hitch.json")
                 || stderr.contains("Failed to access hitch metadata")
                 || stderr.contains("Failed to checkout branch")
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_simple_merge_conflict() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create a base file with content
+        let base_content = r#"# Configuration File
+version = "1.0"
+database_url = "localhost:5432"
+debug = false
+"#;
+        git_ops.write_file("config.yaml", base_content)?;
+        git_ops.add_and_commit(&["config.yaml"], "Add base configuration")?;
+
+        // Create first feature branch that modifies the file
+        git_ops.create_branch_from("feature/db-settings", "main")?;
+        let feature1_content = r#"# Configuration File
+version = "1.1"
+database_url = "prod-db.example.com:5432"
+debug = false
+max_connections = 100
+"#;
+        git_ops.write_file("config.yaml", feature1_content)?;
+        git_ops.add_and_commit(&["config.yaml"], "Update database settings")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create second feature branch that modifies the same file with conflicting changes
+        git_ops.create_branch_from("feature/local-settings", "main")?;
+        let feature2_content = r#"# Configuration File
+version = "2.0"
+database_url = "localhost:5432"
+debug = true
+cache_enabled = true
+"#;
+        git_ops.write_file("config.yaml", feature2_content)?;
+        git_ops.add_and_commit(&["config.yaml"], "Enable debug and cache")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has both conflicting branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &["feature/db-settings", "feature/local-settings"],
+            false,
+        )?;
+
+        // Run rebuild command - should fail due to merge conflicts
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        assert!(
+            !output.status.success(),
+            "rebuild should fail when merge conflicts are detected"
+        );
+
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Merge conflict detected"));
+        assert!(stderr.contains("config.yaml"));
+
+        // Verify helpful error message with resolution steps
+        assert!(stderr.contains("To resolve this:"));
+        assert!(stderr.contains("Check out"));
+        assert!(stderr.contains("Resolve conflicts manually"));
+        assert!(stderr.contains("Commit the resolution"));
+
+        // Verify cleanup: we should be back on the original branch after the conflict
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after conflict"
+        );
+
+        // Verify temp branch was cleaned up
+        assert!(
+            !test_env.has_temp_branches()?,
+            "Temp branches should be cleaned up after conflict"
+        );
+
+        // Verify working directory is clean after cleanup
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        assert!(
+            git_ops.is_working_directory_clean()?,
+            "Working directory should be clean after cleanup"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_multiple_file_conflicts() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create base files
+        git_ops.write_file("package.json", r#"{"name": "app", "version": "1.0.0"}"#)?;
+
+        // Create src directory and file
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file("src/main.js", "console.log('Hello World');\n")?;
+        git_ops.add_and_commit(&["package.json", "src/main.js"], "Add initial files")?;
+
+        // Create feature branch that modifies both files
+        git_ops.create_branch_from("feature/update-app", "main")?;
+        // Ensure src directory exists when we switch branches
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file(
+            "package.json",
+            r#"{"name": "app", "version": "2.0.0", "dependencies": {}}"#,
+        )?;
+        git_ops.write_file(
+            "src/main.js",
+            "console.log('Hello Updated World');\nconst utils = require('./utils');\n",
+        )?;
+        git_ops.add_and_commit(
+            &["package.json", "src/main.js"],
+            "Update app version and main file",
+        )?;
+        git_ops.checkout_branch("main")?;
+
+        // Create conflicting branch that modifies both files differently
+        git_ops.create_branch_from("feature/alternative-update", "main")?;
+        // Ensure src directory exists when we switch branches
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file(
+            "package.json",
+            r#"{"name": "my-app", "version": "1.1.0", "scripts": {}}"#,
+        )?;
+        git_ops.write_file(
+            "src/main.js",
+            "console.log('Hello Alternative World');\nconst config = require('./config');\n",
+        )?;
+        git_ops.add_and_commit(&["package.json", "src/main.js"], "Alternative updates")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has both conflicting branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &["feature/update-app", "feature/alternative-update"],
+            false,
+        )?;
+
+        // Run rebuild command - should fail due to merge conflicts
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        assert!(
+            !output.status.success(),
+            "rebuild should fail when multiple files have merge conflicts"
+        );
+
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Merge conflict detected"));
+        assert!(stderr.contains("package.json"));
+        assert!(stderr.contains("src/main.js"));
+
+        // Verify cleanup: we should be back on the original branch after the conflict
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after conflict"
+        );
+
+        // Verify temp branch was cleaned up
+        assert!(
+            !test_env.has_temp_branches()?,
+            "Temp branches should be cleaned up after conflict"
+        );
+
+        // Verify working directory is clean after cleanup
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        assert!(
+            git_ops.is_working_directory_clean()?,
+            "Working directory should be clean after cleanup"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_conflicting_binary_files() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create a base binary-like file (using different content to simulate binary)
+        let base_binary = "BINARY\x00\x01\x02\x03\x04\x05";
+        git_ops.write_file("app.bin", base_binary)?;
+        git_ops.add_and_commit(&["app.bin"], "Add base binary")?;
+
+        // Create feature branch with different binary content
+        git_ops.create_branch_from("feature/update-binary", "main")?;
+        let new_binary = "BINARY\x01\x02\x03\x04\x05\x06";
+        git_ops.write_file("app.bin", new_binary)?;
+        git_ops.add_and_commit(&["app.bin"], "Update binary content")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create conflicting branch with different binary content
+        git_ops.create_branch_from("feature/alternative-binary", "main")?;
+        let alt_binary = "BINARY\x02\x03\x04\x05\x06\x07";
+        git_ops.write_file("app.bin", alt_binary)?;
+        git_ops.add_and_commit(&["app.bin"], "Alternative binary content")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has both conflicting binary branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &["feature/update-binary", "feature/alternative-binary"],
+            false,
+        )?;
+
+        // Run rebuild command - should fail due to merge conflicts
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        assert!(
+            !output.status.success(),
+            "rebuild should fail when binary files have merge conflicts"
+        );
+
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Merge conflict detected"));
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_complex_conflict_scenario() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create base project structure
+        git_ops.write_file(
+            "Cargo.toml",
+            r#"[package]
+name = "test-app"
+version = "0.1.0"
+[dependencies]
+serde = "1.0"
+"#,
+        )?;
+
+        // Create src directory and file
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file("src/lib.rs", "pub fn hello() { println!(\"Hello\"); }\n")?;
+        git_ops.add_and_commit(&["Cargo.toml", "src/lib.rs"], "Initial project setup")?;
+
+        // Create first conflicting feature
+        git_ops.create_branch_from("feature/api-changes", "main")?;
+        // Ensure src directory exists when we switch branches
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file(
+            "Cargo.toml",
+            r#"[package]
+name = "test-app"
+version = "0.2.0"
+[dependencies]
+serde = "1.0"
+tokio = "1.0"
+"#,
+        )?;
+        git_ops.write_file(
+            "src/lib.rs",
+            "pub async fn hello() { println!(\"Hello Async\"); }\n",
+        )?;
+        git_ops.add_and_commit(&["Cargo.toml", "src/lib.rs"], "Add async support")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create second conflicting feature
+        git_ops.create_branch_from("feature/web-ui", "main")?;
+        // Ensure src directory exists when we switch branches
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file(
+            "Cargo.toml",
+            r#"[package]
+name = "test-app"
+version = "0.1.1"
+[dependencies]
+serde = "1.0"
+rocket = "0.5"
+"#,
+        )?;
+        git_ops.write_file(
+            "src/lib.rs",
+            "pub fn hello() { println!(\"Hello Web\"); }\npub mod routes;",
+        )?;
+        git_ops.add_and_commit(&["Cargo.toml", "src/lib.rs"], "Add web framework")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create third conflicting feature that builds on one of the conflicting ones
+        git_ops.create_branch_from("feature/api-changes", "main")?;
+        git_ops.create_branch_from("feature/api-enhancements", "feature/api-changes")?;
+        // Ensure src directory exists when we switch branches
+        std::fs::create_dir_all(test_env.path().join("src"))?;
+        git_ops.write_file(
+            "src/lib.rs",
+            "pub async fn hello() { println!(\"Hello Enhanced Async\"); }\npub mod api;",
+        )?;
+        git_ops.add_and_commit(&["src/lib.rs"], "Enhance API module")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has multiple conflicting branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &[
+                "feature/api-changes",
+                "feature/web-ui",
+                "feature/api-enhancements",
+            ],
+            false,
+        )?;
+
+        // Run rebuild command - should fail due to complex merge conflicts
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        assert!(
+            !output.status.success(),
+            "rebuild should fail in complex conflict scenarios"
+        );
+
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Merge conflict detected"));
+
+        // The error should mention which specific branch caused the conflict
+        // It could be any of the conflicting branches, so we check for any of them
+        assert!(
+            stderr.contains("feature/api-changes")
+                || stderr.contains("feature/web-ui")
+                || stderr.contains("feature/api-enhancements"),
+            "Error should mention which branch caused the conflict"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_no_conflict_after_resolution() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create base files
+        git_ops.write_file("config.txt", "version=1.0\ndebug=false\n")?;
+        git_ops.add_and_commit(&["config.txt"], "Add config")?;
+
+        // Create non-conflicting feature branch that adds a new file
+        git_ops.create_branch_from("feature/add-feature", "main")?;
+        git_ops.write_file("feature.txt", "feature enabled\n")?;
+        git_ops.add_and_commit(&["feature.txt"], "Add feature file")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create another non-conflicting feature branch that modifies a different file
+        git_ops.create_branch_from("feature/update-version", "main")?;
+        git_ops.write_file("config.txt", "version=1.1\ndebug=false\n")?;
+        git_ops.add_and_commit(&["config.txt"], "Update version")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has non-conflicting branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &["feature/add-feature", "feature/update-version"],
+            false,
+        )?;
+
+        // Run rebuild command - should succeed because there are no actual conflicts
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        if !output.status.success() {
+            let stdout = String::from_utf8(output.stdout.clone())?;
+            let stderr = String::from_utf8(output.stderr)?;
+            let full_output = format!("{}{}", stdout, stderr);
+            panic!(
+                "rebuild should succeed when branches don't actually conflict. Output: {}",
+                full_output
+            );
+        }
+
+        let stdout = String::from_utf8(output.stdout.clone())?;
+        let stderr = String::from_utf8(output.stderr)?;
+        let full_output = format!("{}{}", stdout, stderr);
+
+        assert!(full_output.contains("Environment 'dev' rebuilt successfully"));
+
+        // Verify dev branch exists and has combined content
+        git_ops.checkout_branch("dev")?;
+
+        // Check config.txt has the updated version
+        let config_content = std::fs::read_to_string(test_env.path().join("config.txt"))?;
+        assert!(config_content.contains("version=1.1"));
+        assert!(config_content.contains("debug=false"));
+
+        // Check feature.txt from the other branch exists
+        assert!(
+            test_env.path().join("feature.txt").exists(),
+            "dev branch should have feature.txt from feature/add-feature branch"
+        );
+
+        let feature_content = std::fs::read_to_string(test_env.path().join("feature.txt"))?;
+        assert!(feature_content.contains("feature enabled"));
+
+        Ok(())
+    })
+}
+
+#[test]
+fn test_rebuild_partial_conflict_with_multiple_branches() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create base files
+        git_ops.write_file("README.md", "# Project\nInitial description.\n")?;
+        git_ops.write_file("utils.js", "function helper() { return 'old'; }\n")?;
+        git_ops.add_and_commit(&["README.md", "utils.js"], "Add base files")?;
+
+        // Create non-conflicting feature branch (modifies README only)
+        git_ops.create_branch_from("feature/add-docs", "main")?;
+        git_ops.write_file(
+            "README.md",
+            "# Project\nInitial description.\n\n## Usage\nThis is how to use it.\n",
+        )?;
+        git_ops.add_and_commit(&["README.md"], "Add documentation")?;
+        git_ops.checkout_branch("main")?;
+
+        // Create conflicting feature branch (modifies both README and utils to create conflict with first branch)
+        git_ops.create_branch_from("feature/conflicting-utils", "main")?;
+        git_ops.write_file("README.md", "# Project\nUpdated description.\n")?; // This will conflict with feature/add-docs
+        git_ops.write_file(
+            "utils.js",
+            "function helper() { return 'new'; }\nfunction another() { return 'test'; }\n",
+        )?;
+        git_ops.add_and_commit(&["README.md", "utils.js"], "Update utils and README")?;
+        git_ops.checkout_branch("main")?;
+
+        // Initialize hitch with environment that has both non-conflicting and conflicting branches
+        test_env.create_hitch_config_with_environment(
+            "dev",
+            "main",
+            &["feature/add-docs", "feature/conflicting-utils"],
+            false,
+        )?;
+
+        // Run rebuild command - should fail because of the conflict in utils.js
+        let output = test_env.run_hitch_command(&["rebuild", "dev", "--verbose"])?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout.clone())?;
+            let stderr = String::from_utf8(output.stderr)?;
+            let full_output = format!("{}{}", stdout, stderr);
+            panic!("rebuild should fail when any branch has conflicts, even if others don't. Output: {}", full_output);
+        }
+
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("Merge conflict detected"));
+        // Should conflict on README.md since both branches modify it
+        assert!(stderr.contains("README.md"));
+
+        // Verify cleanup: we should be back on the original branch after the conflict
+        let current_branch = test_env.get_current_branch()?;
+        assert_eq!(
+            current_branch, "main",
+            "Should be back on main branch after conflict"
+        );
+
+        // Verify temp branch was cleaned up
+        assert!(
+            !test_env.has_temp_branches()?,
+            "Temp branches should be cleaned up after conflict"
+        );
+
+        // Verify working directory is clean after cleanup
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        assert!(
+            git_ops.is_working_directory_clean()?,
+            "Working directory should be clean after cleanup"
         );
 
         Ok(())

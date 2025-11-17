@@ -564,67 +564,78 @@ fn perform_squash_merges_for_rebuild(
     // Record original branch
     let original_branch = context.git().get_current_branch()?;
 
-    // Switch to temp branch
-    context.git().checkout_branch(temp_branch)?;
+    // Use a closure to ensure we always return to original branch
+    let result = (|| -> Result<()> {
+        // Switch to temp branch
+        context.git().checkout_branch(temp_branch)?;
 
-    // Clean working directory to avoid issues with untracked files
-    if !context.git().is_working_directory_clean()? {
-        context.log_verbose("Cleaning working directory before merge operations");
-        context
-            .git()
-            .clean_working_directory("Clean up before rebuild operations")?;
-    }
-
-    for branch in branches {
-        context.log_verbose(&format!("Processing branch '{}'", branch));
-
-        // Check if branch exists
-        if !context.git().branch_exists_anywhere(branch)? {
-            return Err(anyhow::anyhow!("Branch '{}' does not exist", branch));
+        // Clean working directory to avoid issues with untracked files
+        if !context.git().is_working_directory_clean()? {
+            context.log_verbose("Cleaning working directory before merge operations");
+            context
+                .git()
+                .clean_working_directory("Clean up before rebuild operations")?;
         }
 
-        // Check for merge conflicts before attempting squash merge
-        let (has_conflicts, conflicted_files) =
-            context.git().check_merge_conflicts_detailed(branch)?;
-        if has_conflicts {
-            let mut error_msg = format!("Merge conflict detected when merging branch '{}'", branch);
+        for branch in branches {
+            context.log_verbose(&format!("Processing branch '{}'", branch));
 
-            if let Some(files) = conflicted_files {
-                if !files.is_empty() {
-                    error_msg.push_str("\n\nConflicting files:");
-                    for file in files {
-                        error_msg.push_str(&format!("\n  • {}", file));
-                    }
-                } else {
-                    error_msg.push_str("\n\nUnable to determine specific conflicting files.");
-                }
+            // Check if branch exists
+            if !context.git().branch_exists_anywhere(branch)? {
+                return Err(anyhow::anyhow!("Branch '{}' does not exist", branch));
             }
 
-            error_msg.push_str("\n\nTo resolve this:");
-            error_msg.push_str(&format!(
-                "\n1. Check out '{}' branch: git checkout {}",
-                branch, branch
-            ));
-            error_msg.push_str("\n2. Resolve conflicts manually");
-            error_msg.push_str("\n3. Commit the resolution");
-            error_msg.push_str(&format!(
-                "\n4. Try rebuilding again: hitch rebuild {} --force",
-                context.git().get_current_branch().unwrap_or_default()
-            ));
+            // Check for merge conflicts before attempting squash merge
+            let (has_conflicts, conflicted_files) =
+                context.git().check_merge_conflicts_detailed(branch)?;
+            if has_conflicts {
+                let mut error_msg =
+                    format!("Merge conflict detected when merging branch '{}'", branch);
 
-            return Err(anyhow::anyhow!("{}", error_msg));
+                if let Some(files) = conflicted_files {
+                    if !files.is_empty() {
+                        error_msg.push_str("\n\nConflicting files:");
+                        for file in files {
+                            error_msg.push_str(&format!("\n  • {}", file));
+                        }
+                    } else {
+                        error_msg.push_str("\n\nUnable to determine specific conflicting files.");
+                    }
+                }
+
+                error_msg.push_str("\n\nTo resolve this:");
+                error_msg.push_str(&format!(
+                    "\n1. Check out '{}' branch: git checkout {}",
+                    branch, branch
+                ));
+                error_msg.push_str("\n2. Resolve conflicts manually");
+                error_msg.push_str("\n3. Commit the resolution");
+                error_msg.push_str(&format!(
+                    "\n4. Try rebuilding again: hitch rebuild {} --force",
+                    context.git().get_current_branch().unwrap_or_default()
+                ));
+
+                return Err(anyhow::anyhow!("{}", error_msg));
+            }
+
+            // Perform squash merge
+            let merge_message = format!("hitch: squash merge '{}' into environment", branch);
+            context.git().squash_merge(branch, &merge_message)?;
+            context.log_verbose(&format!("✓ Squash merged '{}' into temp branch", branch));
         }
 
-        // Perform squash merge
-        let merge_message = format!("hitch: squash merge '{}' into environment", branch);
-        context.git().squash_merge(branch, &merge_message)?;
-        context.log_verbose(&format!("✓ Squash merged '{}' into temp branch", branch));
+        Ok(())
+    })();
+
+    // Always try to return to original branch, even if an error occurred
+    if let Err(e) = context.git().checkout_branch(&original_branch) {
+        context.log_error(&format!(
+            "Failed to return to original branch '{}' after merge operations: {}",
+            original_branch, e
+        ));
     }
 
-    // Return to original branch
-    context.git().checkout_branch(&original_branch)?;
-
-    Ok(())
+    result
 }
 
 /// Safely replace environment branch with temp branch for rebuilding
