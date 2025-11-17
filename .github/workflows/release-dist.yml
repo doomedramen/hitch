@@ -1,4 +1,4 @@
-# GoReleaser release workflow
+# Rust release workflow for macOS builds and Homebrew
 name: Release
 
 on:
@@ -10,25 +10,83 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: macos-14
+            arch: arm64
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create archive
+        run: |
+          mkdir -p artifacts
+          cp target/${{ matrix.target }}/release/hitch artifacts/
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            tar -czf artifacts/hitch_${{ github.ref_name }}_darwin_arm64.tar.gz -C artifacts hitch
+          else
+            tar -czf artifacts/hitch_${{ github.ref_name }}_darwin_amd64.tar.gz -C artifacts hitch
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hitch-${{ matrix.arch }}
+          path: artifacts/
+
+  release:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          go-version: stable
+          pattern: hitch-*
+          merge-multiple: true
+          path: artifacts/
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew formula
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: hitch
+          homebrew-tap: doomedramen/homebrew-hitch
+          base-branch: main
+          download-url: "https://github.com/doomedramen/hitch/archive/refs/tags/${{ github.ref }}.tar.gz"
+          commit-message: |
+            {{formulaName}} {{version}}
+
+            Created by https://github.com/mislav/bump-homebrew-formula-action
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
