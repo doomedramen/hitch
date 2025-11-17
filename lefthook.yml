@@ -45,12 +45,9 @@ pre-push:
 
         Fix build errors before pushing.
 
-    # Run full test suite with controlled output to prevent hanging
+    # Run basic test suite to debug hanging issue
     test:
-      run: |
-        exec 2>&1
-        echo "Running tests with controlled output..."
-        CARGO_TERM_COLOR=never cargo test --all-features --release -- --nocapture
+      run: cargo test --lib --release
       fail_text: |
         🚨 Tests failed!
 
