@@ -35,6 +35,14 @@ pre-commit:
 
         Run 'cargo check' to update Cargo.lock.
 
+    # Auto-bump patch version if needed
+    version-bump:
+      run: cargo bump patch && git add Cargo.toml
+      fail_text: |
+        🚨 Version bump failed!
+
+        Manually check Cargo.toml for version issues.
+
 pre-push:
   commands:
     # Build check (run first to fail fast on compilation issues)
