@@ -114,11 +114,24 @@ where
     }
 
     // Read hitch.json using git show (no branch switching needed)
+    // Try remote first (for fresh clones), then fallback to local
     context.log_verbose("Reading hitch.json from hitch-metadata branch...");
-    let config_json = context
+    let config_json = match context
         .git()
-        .read_file_from_branch("hitch-metadata", "hitch.json")
-        .context("Failed to read hitch.json from hitch-metadata branch")?;
+        .read_file_from_branch("origin/hitch-metadata", "hitch.json")
+    {
+        Ok(content) => {
+            context.log_verbose("✓ Read from origin/hitch-metadata");
+            content
+        }
+        Err(_) => {
+            context
+                .log_verbose("origin/hitch-metadata not available, trying local hitch-metadata...");
+            context.git()
+                .read_file_from_branch("hitch-metadata", "hitch.json")
+                .context("Failed to read hitch.json from either origin/hitch-metadata or local hitch-metadata branch")?
+        }
+    };
 
     // Parse configuration
     let config: HitchConfig =
