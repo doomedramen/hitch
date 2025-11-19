@@ -558,6 +558,12 @@ fn create_temp_branch_for_rebuild(
         ));
     }
 
+    // Synchronize base branch - ensure it's available locally
+    context
+        .git()
+        .synchronize_branches(&[base_branch.to_string()])?;
+    context.log_verbose(&format!("✓ Synchronized base branch '{}'", base_branch));
+
     // Create temp branch from base branch
     context.git().create_branch_from(temp_branch, base_branch)?;
     context.log_verbose(&format!(
@@ -577,6 +583,11 @@ fn perform_squash_merges_for_rebuild(
     // Record original branch
     let original_branch = context.git().get_current_branch()?;
 
+    // Synchronize branches before starting merge operations
+    context.log_info("Synchronizing remote branches...");
+    context.git().synchronize_branches(branches)?;
+    context.log_info("✓ Branch synchronization complete");
+
     // Use a closure to ensure we always return to original branch
     let result = (|| -> Result<()> {
         // Switch to temp branch
@@ -593,9 +604,12 @@ fn perform_squash_merges_for_rebuild(
         for branch in branches {
             context.log_verbose(&format!("Processing branch '{}'", branch));
 
-            // Check if branch exists
-            if !context.git().branch_exists_anywhere(branch)? {
-                return Err(anyhow::anyhow!("Branch '{}' does not exist", branch));
+            // Check if branch exists (now guaranteed by synchronize_branches, but keep for safety)
+            if !context.git().branch_exists(branch)? {
+                return Err(anyhow::anyhow!(
+                    "Branch '{}' does not exist locally after synchronization",
+                    branch
+                ));
             }
 
             // Check for merge conflicts before attempting squash merge

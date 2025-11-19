@@ -455,3 +455,96 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
         Ok(())
     })
 }
+
+/// Test git operations branch synchronization functionality
+#[test]
+fn test_git_operations_branch_synchronization() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Return to main branch for this test since we're testing GitOperations, not hitch
+        git_ops.checkout_branch("main")?;
+
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+
+        // Create a couple of test branches
+        Command::new("git")
+            .args(["checkout", "-b", "feature1"])
+            .current_dir(test_env.path())
+            .output()?;
+        fs::write(test_env.path().join("feature1.txt"), "feature1 content")?;
+        Command::new("git")
+            .args(["add", "feature1.txt"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["commit", "-m", "Add feature1"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        Command::new("git")
+            .args(["checkout", "-b", "feature2"])
+            .current_dir(test_env.path())
+            .output()?;
+        fs::write(test_env.path().join("feature2.txt"), "feature2 content")?;
+        Command::new("git")
+            .args(["add", "feature2.txt"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["commit", "-m", "Add feature2"])
+            .current_dir(test_env.path())
+            .output()?;
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        // Test synchronize_branches with existing local branches
+        let branches = vec!["feature1".to_string(), "feature2".to_string()];
+        let result = git_ops.synchronize_branches(&branches);
+        assert!(
+            result.is_ok(),
+            "Synchronize branches should succeed with existing local branches"
+        );
+
+        // Test fetch_all_remotes (should succeed gracefully even with no remote)
+        let result = git_ops.fetch_all_remotes();
+        assert!(
+            result.is_ok(),
+            "Fetch all remotes should succeed gracefully"
+        );
+
+        // Test create_local_branch_from_remote with a branch that already exists locally
+        let result = git_ops.create_local_branch_from_remote("feature1");
+        assert!(
+            result.is_ok(),
+            "Should succeed when branch already exists locally"
+        );
+
+        // Test synchronize_branches with non-existent branch (should skip gracefully)
+        let branches = vec!["feature1".to_string(), "nonexistent".to_string()];
+        let result = git_ops.synchronize_branches(&branches);
+        assert!(
+            result.is_ok(),
+            "Synchronize branches should succeed even if some branches don't exist"
+        );
+
+        Ok(())
+    })
+}

@@ -567,4 +567,78 @@ impl GitOperations {
 
         Ok(())
     }
+
+    /// Fetch all remote branches from origin
+    pub fn fetch_all_remotes(&self) -> Result<()> {
+        let output = self.run_git_command(&["fetch", "--all"])?;
+
+        if !output.status.success() {
+            // Don't fail if fetch fails - user may not have a remote or network issues
+            // Similar to fetch_branch, continue gracefully
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Check for common "no remote" scenarios that should not fail the operation
+            if stderr.contains("does not appear to be a git repository")
+                || stderr.contains("could not read from remote repository")
+                || stderr.contains("couldn't find remote ref")
+                || stderr.contains("no such remote ref")
+                || stderr.contains("fatal: unable to access")
+                || stderr.contains("fatal: could not read")
+            {
+                // These are expected "no remote available" scenarios - continue gracefully
+                return Ok(());
+            }
+
+            // Other fetch errors might be network issues, but should still not block local operations
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    /// Create a local branch from a remote tracking branch
+    pub fn create_local_branch_from_remote(&self, branch: &str) -> Result<()> {
+        // Check if branch already exists locally
+        if self.branch_exists(branch)? {
+            return Ok(());
+        }
+
+        // Create local branch from remote tracking branch
+        let output =
+            self.run_git_command(&["checkout", "-b", branch, &format!("origin/{}", branch)])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create local branch '{}' from 'origin/{}': {}",
+                branch,
+                branch,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Synchronize branches: ensure all specified branches are available locally
+    /// This will fetch all remotes and create local branches from remote tracking branches as needed
+    pub fn synchronize_branches(&self, branches: &[String]) -> Result<()> {
+        // First, fetch all remote branches to get latest updates
+        self.fetch_all_remotes()?;
+
+        // Then, ensure each branch exists locally by creating from remote if needed
+        for branch in branches {
+            // Skip if branch already exists locally
+            if self.branch_exists(branch)? {
+                continue;
+            }
+
+            // Check if remote branch exists
+            if self.branch_exists_anywhere(branch)? {
+                // Create local branch from remote tracking branch
+                self.create_local_branch_from_remote(branch)?;
+            }
+        }
+
+        Ok(())
+    }
 }
