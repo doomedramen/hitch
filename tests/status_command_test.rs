@@ -533,3 +533,231 @@ fn test_status_environmental_sorting() -> Result<()> {
         Ok(())
     })
 }
+
+/// Test status command display of release information
+#[test]
+fn test_status_release_information_display() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create environment with release timestamp
+        let released_at = Utc::now();
+        let config = serde_json::json!({
+            "version": "1.0",
+            "environments": {
+                "qa": {
+                    "base": "main",
+                    "branches": ["feature/released"],
+                    "locked": false,
+                    "locked_by": null,
+                    "locked_at": null,
+                    "rebuilt_at": null,
+                    "released_at": released_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                }
+            }
+        });
+
+        std::fs::write(test_env.path().join("hitch.json"), config.to_string())?;
+
+        // Run status command
+        let output = test_env.hitch_command().args(["status"]).output()?;
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let cleaned = strip_ansi_codes(&stdout);
+
+        // Should contain release information section
+        assert!(cleaned.contains("Released:"));
+        assert!(
+            !cleaned.contains("Never"),
+            "Should not show 'Never' for released environment"
+        );
+
+        Ok(())
+    })
+}
+
+/// Test status command shows "Never" for never-released environments
+#[test]
+fn test_status_never_released_display() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create environment without release timestamp
+        let config = serde_json::json!({
+            "version": "1.0",
+            "environments": {
+                "dev": {
+                    "base": "main",
+                    "branches": ["feature/dev"],
+                    "locked": false,
+                    "locked_by": null,
+                    "locked_at": null,
+                    "rebuilt_at": null,
+                    "released_at": null
+                }
+            }
+        });
+
+        std::fs::write(test_env.path().join("hitch.json"), config.to_string())?;
+
+        // Run status command
+        let output = test_env.hitch_command().args(["status"]).output()?;
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let cleaned = strip_ansi_codes(&stdout);
+
+        // Should show "Never" for never-released environment
+        assert!(cleaned.contains("Released:"));
+        assert!(cleaned.contains("Never"));
+
+        Ok(())
+    })
+}
+
+/// Test status command cleanup detection functionality
+#[test]
+fn test_status_cleanup_detection() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create environment with release timestamp and promoted branches
+        let released_at = Utc::now();
+        let config = serde_json::json!({
+            "version": "1.0",
+            "environments": {
+                "qa": {
+                    "base": "main",
+                    "branches": ["feature/cleanup", "feature/another"],
+                    "locked": false,
+                    "locked_by": null,
+                    "locked_at": null,
+                    "rebuilt_at": null,
+                    "released_at": released_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                }
+            }
+        });
+
+        std::fs::write(test_env.path().join("hitch.json"), config.to_string())?;
+
+        // Create the feature branches that should show up in cleanup
+        git_ops.create_branch_from("feature/cleanup", "main")?;
+        git_ops.checkout_branch("feature/cleanup")?;
+        std::fs::write(test_env.path().join("cleanup.txt"), "cleanup content")?;
+        git_ops.run_git_command(&["add", "cleanup.txt"])?;
+        git_ops.commit("Add cleanup feature")?;
+        git_ops.checkout_branch("main")?;
+
+        git_ops.create_branch_from("feature/another", "main")?;
+        git_ops.checkout_branch("feature/another")?;
+        std::fs::write(test_env.path().join("another.txt"), "another feature")?;
+        git_ops.run_git_command(&["add", "another.txt"])?;
+        git_ops.commit("Add another feature")?;
+        git_ops.checkout_branch("main")?;
+
+        // Merge the feature branches into main to simulate they were released
+        git_ops.run_git_command(&["merge", "--no-ff", "feature/cleanup"])?;
+        git_ops.run_git_command(&["merge", "--no-ff", "feature/another"])?;
+
+        // Run status command
+        let output = test_env.hitch_command().args(["status"]).output()?;
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let cleaned = strip_ansi_codes(&stdout);
+
+        // Should contain cleanup recommendations
+        assert!(cleaned.contains("Cleanup recommended"));
+        assert!(cleaned.contains("feature/cleanup"));
+        assert!(cleaned.contains("feature/another"));
+        assert!(cleaned.contains("hitch demote feature/cleanup qa"));
+        assert!(cleaned.contains("hitch demote feature/another qa"));
+
+        Ok(())
+    })
+}
+
+/// Test status command doesn't show cleanup for unreleased environments
+#[test]
+fn test_status_no_cleanup_for_unreleased() -> Result<()> {
+    with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+        // Initialize hitch first
+        test_env.run_hitch_init()?;
+
+        // Clean up any changes from init
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            test_env.path().to_str().unwrap(),
+        )?;
+        if !git_ops.is_working_directory_clean()? {
+            git_ops.clean_working_directory("Clean up after hitch init")?;
+        }
+
+        // Create environment without release timestamp
+        let config = serde_json::json!({
+            "version": "1.0",
+            "environments": {
+                "dev": {
+                    "base": "main",
+                    "branches": ["feature/nodev"],
+                    "locked": false,
+                    "locked_by": null,
+                    "locked_at": null,
+                    "rebuilt_at": null,
+                    "released_at": null
+                }
+            }
+        });
+
+        std::fs::write(test_env.path().join("hitch.json"), config.to_string())?;
+
+        // Create a feature branch and merge it to main
+        git_ops.create_branch_from("feature/nodev", "main")?;
+        git_ops.checkout_branch("feature/nodev")?;
+        std::fs::write(test_env.path().join("nodev.txt"), "no cleanup needed")?;
+        git_ops.run_git_command(&["add", "nodev.txt"])?;
+        git_ops.commit("Add no cleanup feature")?;
+        git_ops.checkout_branch("main")?;
+        git_ops.run_git_command(&["merge", "--no-ff", "feature/nodev"])?;
+
+        // Run status command
+        let output = test_env.hitch_command().args(["status"]).output()?;
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let cleaned = strip_ansi_codes(&stdout);
+
+        // Should NOT contain cleanup recommendations for unreleased environment
+        assert!(!cleaned.contains("Cleanup recommended"));
+        assert!(!cleaned.contains("hitch demote feature/nodev dev"));
+
+        Ok(())
+    })
+}

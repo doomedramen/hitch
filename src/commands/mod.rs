@@ -7,6 +7,7 @@ pub mod init;
 pub mod lock;
 pub mod promote;
 pub mod rebuild;
+pub mod release;
 pub mod remove;
 pub mod status;
 pub mod unlock;

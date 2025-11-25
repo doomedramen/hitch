@@ -641,4 +641,61 @@ impl GitOperations {
 
         Ok(())
     }
+
+    /// Commit staged changes with a message
+    pub fn commit(&self, message: &str) -> Result<()> {
+        let output = self.run_git_command(&["commit", "--no-verify", "-m", message])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            // Check if it's just "nothing to commit" case
+            if stderr.contains("nothing to commit") || stdout.contains("nothing to commit") {
+                return Ok(());
+            }
+
+            return Err(anyhow::anyhow!(
+                "Failed to commit: {}\nstdout: {}\nstderr: {}",
+                message,
+                stdout,
+                stderr
+            ));
+        }
+        Ok(())
+    }
+
+    /// Create an annotated git tag
+    pub fn create_tag(&self, tag_name: &str, message: &str) -> Result<()> {
+        let output = self.run_git_command(&["tag", "-a", tag_name, "-m", message])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to create tag '{}': {}",
+                tag_name,
+                stderr
+            ));
+        }
+        Ok(())
+    }
+
+    /// Push a tag to remote
+    pub fn push_tag(&self, tag_name: &str) -> Result<()> {
+        let output = self.run_git_command(&["push", "origin", tag_name])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to push tag '{}': {}",
+                tag_name,
+                stderr
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check if a branch is merged into another branch
+    pub fn is_branch_merged_into(&self, source_branch: &str, target_branch: &str) -> Result<bool> {
+        let output =
+            self.run_git_command(&["merge-base", "--is-ancestor", source_branch, target_branch])?;
+        Ok(output.status.success())
+    }
 }

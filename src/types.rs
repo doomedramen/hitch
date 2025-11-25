@@ -21,6 +21,9 @@ pub struct Environment {
 
     /// Timestamp when environment was last rebuilt (null if never rebuilt)
     pub rebuilt_at: Option<DateTime<Utc>>,
+
+    /// Timestamp when environment was last released (null if never released)
+    pub released_at: Option<DateTime<Utc>>,
 }
 
 impl Environment {
@@ -32,6 +35,7 @@ impl Environment {
             locked_by: None,
             locked_at: None,
             rebuilt_at: None,
+            released_at: None,
         }
     }
 
@@ -53,6 +57,10 @@ impl Environment {
 
     pub fn update_rebuilt_timestamp(&mut self) {
         self.rebuilt_at = Some(Utc::now());
+    }
+
+    pub fn update_released_timestamp(&mut self) {
+        self.released_at = Some(Utc::now());
     }
 
     pub fn add_branch(&mut self, branch: String) {

@@ -248,6 +248,21 @@ fn display_environment_status(
     };
     println!("│  {}", rebuild_info);
 
+    // Release information with relative time
+    println!("├─ Released:");
+    let release_info = match env.released_at {
+        Some(timestamp) => {
+            let formatted = format_timestamp(Some(timestamp));
+            let relative = format_relative_time(timestamp);
+            format!("• {} ({})", formatted.bright_white(), relative.dimmed())
+        }
+        None => "• Never".bright_yellow().to_string(),
+    };
+    println!("│  {}", release_info);
+
+    // Check for branches that need cleanup after release
+    check_and_display_cleanup_needs(context, env_name, env)?;
+
     // Status section with enhanced details
     println!("└─ Status:");
     let rebuild_status = determine_rebuild_status(context, env)?;
@@ -373,4 +388,58 @@ fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     }
 
     "Just now".to_string()
+}
+
+/// Check and display cleanup needs for promoted branches that have been released
+fn check_and_display_cleanup_needs(
+    context: &GlobalContext,
+    env_name: &str,
+    env: &Environment,
+) -> Result<()> {
+    let mut cleanup_needed = Vec::new();
+
+    // Only check if environment has been released and has promoted branches
+    if env.released_at.is_some() && !env.branches.is_empty() {
+        // Check if the base branch exists for comparison
+        if context.git().branch_exists_anywhere(&env.base)? {
+            for branch in &env.branches {
+                // Check if the branch's commits exist in the base branch (indicating it was released)
+                if context.git().is_branch_merged_into(branch, &env.base)? {
+                    cleanup_needed.push(branch.clone());
+                }
+            }
+        }
+    }
+
+    if !cleanup_needed.is_empty() {
+        println!(
+            "│  {} {}",
+            "⚠️".bright_yellow(),
+            "Cleanup recommended:".bright_yellow()
+        );
+        println!(
+            "│    {} {} {} {}",
+            "The following promoted branches exist in".bright_white(),
+            env.base.bright_blue(),
+            "and should be demoted:".bright_white(),
+            cleanup_needed.join(", ").bright_cyan()
+        );
+
+        // Build demote commands for user convenience
+        let demote_commands: Vec<String> = cleanup_needed
+            .iter()
+            .map(|b| format!("hitch demote {} {}", b, env_name))
+            .collect();
+
+        if demote_commands.len() == 1 {
+            println!("│    {}", format!("Run: {}", demote_commands[0]).dimmed());
+        } else {
+            println!("│    {}", "Run:".dimmed());
+            for cmd in demote_commands {
+                println!("│      {}", cmd.dimmed());
+            }
+        }
+    }
+
+    Ok(())
 }

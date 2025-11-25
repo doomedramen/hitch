@@ -41,6 +41,8 @@ enum Commands {
     Demote(commands::demote::DemoteCommand),
     /// Rebuild environment by merging promoted branches
     Rebuild(commands::rebuild::RebuildCommand),
+    /// Release environment branches to target branch
+    Release(commands::release::ReleaseCommand),
     /// Show status of environments and promoted branches
     Status(commands::status::StatusCommand),
     /// Lock environment to prevent deployments
@@ -68,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Promote(args) => commands::promote::run(args, &context).map_err(|e| e.into()),
         Commands::Demote(args) => commands::demote::run(args, &context).map_err(|e| e.into()),
         Commands::Rebuild(args) => commands::rebuild::run(args, &context).map_err(|e| e.into()),
+        Commands::Release(args) => commands::release::run(args, &context).map_err(|e| e.into()),
         Commands::Status(args) => commands::status::run(args, &context).map_err(|e| e.into()),
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),

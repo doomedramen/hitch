@@ -619,4 +619,219 @@ mod cli_workflow_tests {
             Ok(())
         })
     }
+
+    /// Complete release workflow test: promote -> rebuild -> release -> status -> demote
+    #[test]
+    fn test_complete_release_workflow() -> Result<()> {
+        with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Initialize hitch
+            run_hitch_command(test_env, &["init"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Add environments
+            run_hitch_command(test_env, &["add", "dev"])?; // defaults to main
+            run_hitch_command(test_env, &["add", "qa"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Create feature branches with content
+            run_git_command(test_env, &["checkout", "-b", "feature/auth"])?;
+            create_test_file(test_env, "auth.js", "// Authentication feature")?;
+            run_git_command(test_env, &["add", "auth.js"])?;
+            run_git_command(test_env, &["commit", "-m", "Add authentication feature"])?;
+
+            run_git_command(test_env, &["checkout", "-b", "feature/ui"])?;
+            create_test_file(test_env, "ui.css", "body { color: blue; }")?;
+            run_git_command(test_env, &["add", "ui.css"])?;
+            run_git_command(test_env, &["commit", "-m", "Add UI improvements"])?;
+
+            // Return to main
+            run_git_command(test_env, &["checkout", "main"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 1: Promote features to dev environment
+            run_hitch_command(test_env, &["promote", "feature/auth", "dev"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            run_hitch_command(test_env, &["promote", "feature/ui", "dev"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 2: Rebuild dev environment
+            run_hitch_command(test_env, &["rebuild", "dev"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 3: Promote from dev to qa
+            run_hitch_command(test_env, &["promote", "dev", "qa"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 4: Rebuild qa environment
+            run_hitch_command(test_env, &["rebuild", "qa"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 5: Release qa environment to main
+            run_hitch_command(test_env, &["release", "qa"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 6: Verify release artifacts
+            // Check that release tag was created
+            let tag_output = run_git_command(test_env, &["tag", "-l", "release-qa-main"])?;
+            assert!(tag_output.status.success());
+            let tag_list = String::from_utf8_lossy(&tag_output.stdout);
+            assert!(tag_list.contains("release-qa-main"));
+
+            // Check that release commit exists
+            let log_output =
+                run_git_command(test_env, &["log", "--oneline", "--grep=hitch.*release"])?;
+            assert!(log_output.status.success());
+            let log = String::from_utf8_lossy(&log_output.stdout);
+            assert!(log.contains("release environment 'qa' to 'main'"));
+
+            // Step 7: Check status shows cleanup recommendations
+            let status_output = run_hitch_command(test_env, &["status"])?;
+            assert!(status_output.status.success());
+            let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+            assert!(status_stdout.contains("Cleanup recommended"));
+            assert!(status_stdout.contains("dev"));
+
+            // Step 8: Demote to clean up
+            run_hitch_command(test_env, &["demote", "dev", "qa"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Step 9: Verify cleanup worked
+            let final_status_output = run_hitch_command(test_env, &["status"])?;
+            assert!(final_status_output.status.success());
+            let final_status_stdout = String::from_utf8_lossy(&final_status_output.stdout);
+            assert!(!final_status_stdout.contains("Cleanup recommended"));
+
+            Ok(())
+        })
+    }
+
+    /// Release workflow with target branch override
+    #[test]
+    fn test_release_workflow_target_override() -> Result<()> {
+        with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Initialize hitch
+            run_hitch_command(test_env, &["init"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Add environment
+            run_hitch_command(test_env, &["add", "staging"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Create a stable branch to release to
+            run_git_command(test_env, &["checkout", "-b", "stable"])?;
+            create_test_file(test_env, "stable.txt", "Stable branch content")?;
+            run_git_command(test_env, &["add", "stable.txt"])?;
+            run_git_command(test_env, &["commit", "-m", "Initialize stable branch"])?;
+            run_git_command(test_env, &["checkout", "main"])?;
+
+            // Create feature branch
+            run_git_command(test_env, &["checkout", "-b", "feature/stable-release"])?;
+            create_test_file(test_env, "feature.js", "// Feature for stable release")?;
+            run_git_command(test_env, &["add", "feature.js"])?;
+            run_git_command(
+                test_env,
+                &["commit", "-m", "Add feature for stable release"],
+            )?;
+            run_git_command(test_env, &["checkout", "main"])?;
+
+            // Promote to staging
+            run_hitch_command(test_env, &["promote", "feature/stable-release", "staging"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Rebuild staging
+            run_hitch_command(test_env, &["rebuild", "staging"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Release to stable branch (override default main)
+            run_hitch_command(test_env, &["release", "staging", "stable"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Verify release went to stable branch
+            let tag_output = run_git_command(test_env, &["tag", "-l", "release-staging-stable"])?;
+            assert!(tag_output.status.success());
+            let tag_list = String::from_utf8_lossy(&tag_output.stdout);
+            assert!(tag_list.contains("release-staging-stable"));
+
+            // Check that release commit exists on stable branch
+            run_git_command(test_env, &["checkout", "stable"])?;
+            let log_output =
+                run_git_command(test_env, &["log", "--oneline", "--grep=hitch.*release"])?;
+            assert!(log_output.status.success());
+            let log = String::from_utf8_lossy(&log_output.stdout);
+            assert!(log.contains("release environment 'staging' to 'stable'"));
+
+            Ok(())
+        })
+    }
+
+    /// Release workflow with locked environment and force flag
+    #[test]
+    fn test_release_workflow_locked_force() -> Result<()> {
+        with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Initialize hitch
+            run_hitch_command(test_env, &["init"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Add environment
+            run_hitch_command(test_env, &["add", "prod"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Create feature branch
+            run_git_command(test_env, &["checkout", "-b", "feature/prod"])?;
+            create_test_file(test_env, "prod.js", "// Production feature")?;
+            run_git_command(test_env, &["add", "prod.js"])?;
+            run_git_command(test_env, &["commit", "-m", "Add production feature"])?;
+            run_git_command(test_env, &["checkout", "main"])?;
+
+            // Promote to prod
+            run_hitch_command(test_env, &["promote", "feature/prod", "prod"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Lock prod environment
+            run_hitch_command(test_env, &["lock", "prod"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Try to release without force (should fail)
+            let release_output = run_hitch_command(test_env, &["release", "prod"])?;
+            assert!(!release_output.status.success());
+            let stderr = String::from_utf8_lossy(&release_output.stderr);
+            assert!(stderr.contains("locked") || stderr.contains("locked"));
+
+            // Force release locked environment
+            run_hitch_command(test_env, &["release", "prod", "--force"])?;
+            ensure_clean_working_tree(test_env)?;
+
+            // Verify release succeeded despite lock
+            let tag_output = run_git_command(test_env, &["tag", "-l", "release-prod-main"])?;
+            assert!(tag_output.status.success());
+            let tag_list = String::from_utf8_lossy(&tag_output.stdout);
+            assert!(tag_list.contains("release-prod-main"));
+
+            // Environment should still be locked
+            let status_output = run_hitch_command(test_env, &["status"])?;
+            assert!(status_output.status.success());
+            let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+            assert!(status_stdout.contains("🔒") || status_stdout.contains("locked"));
+
+            Ok(())
+        })
+    }
+
+    /// Helper function to run git commands consistently in tests
+    fn run_git_command(test_env: &TestEnv, args: &[&str]) -> Result<std::process::Output> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(test_env.path())
+            .output()?;
+        Ok(output)
+    }
+
+    /// Helper function to create test files consistently
+    fn create_test_file(test_env: &TestEnv, filename: &str, content: &str) -> Result<()> {
+        use std::fs;
+        let file_path = test_env.path().join(filename);
+        fs::write(file_path, content)?;
+        Ok(())
+    }
 }
