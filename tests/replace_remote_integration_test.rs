@@ -5,6 +5,32 @@ use std::process::Command;
 mod common;
 use common::{with_test_env, SetupLevel, TestEnv};
 
+/// Helper to clean up after hitch init (it leaves the working tree dirty)
+fn cleanup_after_hitch_init(test_env: &TestEnv) -> Result<()> {
+    // Check git status after hitch init
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(test_env.path())
+        .output()?;
+
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+
+    if !status_str.trim().is_empty() {
+        // Hitch init leaves changes (hitch.json), commit them
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        Command::new("git")
+            .args(["commit", "-m", "Add hitch configuration"])
+            .current_dir(test_env.path())
+            .output()?;
+    }
+
+    Ok(())
+}
+
 /// Simple ANSI code stripper for test assertions
 #[allow(dead_code)]
 fn strip_ansi_codes(text: &str) -> String {
@@ -73,20 +99,69 @@ mod remote_replacement_tests {
         Ok(output)
     }
 
-    /// Helper to create and commit a file
-    fn create_and_commit_file(test_env: &TestEnv, filename: &str, content: &str) -> Result<()> {
+    /// Helper function to create test files consistently
+    fn create_test_file(test_env: &TestEnv, filename: &str, content: &str) -> Result<()> {
+        use std::fs;
         let file_path = test_env.path().join(filename);
-        std::fs::write(file_path, content)?;
+        fs::write(file_path, content)?;
+        Ok(())
+    }
 
-        Command::new("git")
-            .args(["add", filename])
+    /// Helper function to create and commit a feature branch following the working pattern
+    fn create_feature_branch(
+        test_env: &TestEnv,
+        branch_name: &str,
+        filename: &str,
+        content: &str,
+    ) -> Result<()> {
+        // Create and checkout feature branch FIRST, then create files ON the branch
+        let checkout_output = Command::new("git")
+            .args(["checkout", "-b", branch_name])
             .current_dir(test_env.path())
             .output()?;
+        if !checkout_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create branch '{}': {}",
+                branch_name,
+                String::from_utf8_lossy(&checkout_output.stderr)
+            ));
+        }
 
-        Command::new("git")
+        create_test_file(test_env, filename, content)?;
+
+        let add_output = Command::new("git")
+            .args(["add", "-f", filename])
+            .current_dir(test_env.path())
+            .output()?;
+        if !add_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to add file '{}': {}",
+                filename,
+                String::from_utf8_lossy(&add_output.stderr)
+            ));
+        }
+
+        let commit_output = Command::new("git")
             .args(["commit", "-m", &format!("Add {}", filename)])
             .current_dir(test_env.path())
             .output()?;
+        if !commit_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to commit: {}",
+                String::from_utf8_lossy(&commit_output.stderr)
+            ));
+        }
+
+        let main_checkout_output = Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+        if !main_checkout_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to checkout main: {}",
+                String::from_utf8_lossy(&main_checkout_output.stderr)
+            ));
+        }
 
         Ok(())
     }
@@ -117,14 +192,37 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
-            // Promote a branch to dev
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            // Use the exact working pattern from cli_workflows_test.rs
+            create_test_file(
+                test_env,
+                "rebuild-success-feature.txt",
+                "Rebuild success feature",
+            )?;
+            Command::new("git")
+                .args(["add", "-f", "rebuild-success-feature.txt"])
+                .current_dir(test_env.path())
+                .output()?;
+            Command::new("git")
+                .args(["commit", "-m", "Add rebuild-success-feature.txt"])
+                .current_dir(test_env.path())
+                .output()?;
+            Command::new("git")
+                .args(["checkout", "-b", "rebuild-success-remote-replacement-test"])
+                .current_dir(test_env.path())
+                .output()?;
+            Command::new("git")
+                .args(["checkout", "main"])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &["promote", "rebuild-success-remote-replacement-test", "dev"],
+            )?;
 
             // Now rebuild and confirm "yes" (should always prompt)
             let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
@@ -147,14 +245,25 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
-            // Create a feature branch and promote it
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            // Create a commit on main, then create and checkout feature branch
+            create_test_file(
+                test_env,
+                "remote-replacement-declined-feature.txt",
+                "Feature for declined test",
+            )?;
+            Command::new("git")
+                .args(["checkout", "-b", "remote-replacement-declined-test"])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &["promote", "remote-replacement-declined-test", "dev"],
+            )?;
 
             // Rebuild and answer "no" (should always prompt)
             let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "n\n")?;
@@ -179,17 +288,28 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
-            // Create a feature branch
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
+            // Create a commit on main, then create and checkout feature branch
+            create_test_file(
+                test_env,
+                "promote-remote-replacement-feature.txt",
+                "Feature for promote test",
+            )?;
+            Command::new("git")
+                .args(["checkout", "-b", "promote-remote-replacement-test"])
+                .current_dir(test_env.path())
+                .output()?;
 
             // Promote and confirm "yes" (should always prompt)
-            let output =
-                run_hitch_command_with_input(test_env, &["promote", "feature1", "dev"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["promote", "promote-remote-replacement-test", "dev"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -208,18 +328,32 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
             // Create and promote a feature branch first
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            create_test_file(
+                test_env,
+                "demote-remote-replacement-feature.txt",
+                "Feature for demote test",
+            )?;
+            Command::new("git")
+                .args(["checkout", "-b", "demote-remote-replacement-test"])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &["promote", "demote-remote-replacement-test", "dev"],
+            )?;
 
             // Now demote and confirm "yes" (should always prompt)
-            let output =
-                run_hitch_command_with_input(test_env, &["demote", "feature1", "dev"], "y\n")?;
+            let output = run_hitch_command_with_input(
+                test_env,
+                &["demote", "demote-remote-replacement-test", "dev"],
+                "y\n",
+            )?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -238,14 +372,25 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
             // Create and promote a feature branch
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            create_test_file(
+                test_env,
+                "no-push-remote-replacement-feature.txt",
+                "Feature for no-push test",
+            )?;
+            Command::new("git")
+                .args(["checkout", "-b", "no-push-remote-replacement-test"])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &["promote", "no-push-remote-replacement-test", "dev"],
+            )?;
 
             // Rebuild with --no-push (should skip all remote operations)
             let output = run_hitch_command(test_env, &["rebuild", "dev", "--no-push"])?;
@@ -271,6 +416,7 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment but don't promote any branches
             run_hitch_command(test_env, &["add", "dev"])?;
@@ -296,19 +442,56 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
             // Create and promote multiple feature branches
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            create_test_file(
+                test_env,
+                "multiple-branches-remote-replacement-feature1.txt",
+                "Feature 1 for multiple branches test",
+            )?;
+            Command::new("git")
+                .args([
+                    "checkout",
+                    "-b",
+                    "multiple-branches-remote-replacement-test1",
+                ])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &[
+                    "promote",
+                    "multiple-branches-remote-replacement-test1",
+                    "dev",
+                ],
+            )?;
 
             checkout_branch(test_env, "main")?;
-            create_and_commit_file(test_env, "feature2.txt", "Feature 2 content")?;
-            create_branch(test_env, "feature2")?;
-            run_hitch_command(test_env, &["promote", "feature2", "dev"])?;
+            create_test_file(
+                test_env,
+                "multiple-branches-remote-replacement-feature2.txt",
+                "Feature 2 for multiple branches test",
+            )?;
+            Command::new("git")
+                .args([
+                    "checkout",
+                    "-b",
+                    "multiple-branches-remote-replacement-test2",
+                ])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &[
+                    "promote",
+                    "multiple-branches-remote-replacement-test2",
+                    "dev",
+                ],
+            )?;
 
             // Rebuild and confirm "yes" (should always prompt)
             let output = run_hitch_command_with_input(test_env, &["rebuild", "dev"], "y\n")?;
@@ -329,6 +512,7 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
@@ -362,14 +546,25 @@ mod remote_replacement_tests {
         with_test_env(SetupLevel::GitOnly, |test_env| {
             // Initialize Hitch
             run_hitch_command(test_env, &["init"])?;
+            cleanup_after_hitch_init(test_env)?;
 
             // Add dev environment
             run_hitch_command(test_env, &["add", "dev"])?;
 
             // Create and promote a feature branch
-            create_and_commit_file(test_env, "feature1.txt", "Feature 1 content")?;
-            create_branch(test_env, "feature1")?;
-            run_hitch_command(test_env, &["promote", "feature1", "dev"])?;
+            create_test_file(
+                test_env,
+                "force-remote-replacement-feature.txt",
+                "Feature for force test",
+            )?;
+            Command::new("git")
+                .args(["checkout", "-b", "force-remote-replacement-test"])
+                .current_dir(test_env.path())
+                .output()?;
+            run_hitch_command(
+                test_env,
+                &["promote", "force-remote-replacement-test", "dev"],
+            )?;
 
             // Lock the environment
             run_hitch_command(test_env, &["lock", "dev"])?;

@@ -430,8 +430,8 @@ mod remote_operations_tests {
                 .output()?;
 
             if output.status.success() {
-                // Try to add environment
-                let hitch_output = run_hitch_command(test_env, &["add", "dev"])?;
+                // Try to add environment with unique name to avoid concurrent test conflicts
+                let hitch_output = run_hitch_command(test_env, &["add", "permission-test-env"])?;
 
                 let stderr = String::from_utf8_lossy(&hitch_output.stderr);
 
