@@ -442,7 +442,8 @@ mod remote_operations_tests {
                             || stderr.contains("denied")
                             || stderr.contains("access")
                             || stderr.contains("write"),
-                        "Should show permission denied error"
+                        "Should show permission denied error. Actual error: {}",
+                        stderr
                     );
                 }
             }
