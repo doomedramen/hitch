@@ -80,6 +80,9 @@ impl TestEnv {
             // Create initial commit on main branch
             let _initial_commit =
                 repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+
+            // Clear the index to ensure clean working tree
+            index.clear()?;
         } // tree is dropped here, releasing the borrow on repo
 
         Ok(repo)
@@ -422,65 +425,26 @@ where
         SetupLevel::GitOnly => {
             // Basic git setup is already done in TestEnv::new()
             // Just need to ensure git config is set for hitch operations
-            Command::new("git")
+            let config_result = Command::new("git")
                 .args(["config", "user.name", "Test User"])
                 .current_dir(test_env.path())
                 .output()?;
-            Command::new("git")
+            if !config_result.status.success() {
+                return Err(anyhow::anyhow!("Failed to set git user name"));
+            }
+
+            let email_result = Command::new("git")
                 .args(["config", "user.email", "test@example.com"])
                 .current_dir(test_env.path())
                 .output()?;
-            Command::new("git")
-                .args(["config", "core.autocrlf", "false"])
-                .current_dir(test_env.path())
-                .output()?;
-            Command::new("git")
-                .args(["config", "core.filemode", "false"])
-                .current_dir(test_env.path())
-                .output()?;
-
-            // Ensure working tree is clean (git2 setup might leave uncommitted changes)
-            let output = Command::new("git")
-                .args(["status", "--porcelain"])
-                .current_dir(test_env.path())
-                .output()?;
-            let status_output = String::from_utf8_lossy(&output.stdout);
-            if !status_output.trim().is_empty() {
-                // Add all changes including deleted files
-                let add_output = Command::new("git")
-                    .args(["add", "-A"])
-                    .current_dir(test_env.path())
-                    .output()?;
-                if !add_output.status.success() {
-                    return Err(anyhow::anyhow!(
-                        "Failed to add files: {}",
-                        String::from_utf8_lossy(&add_output.stderr)
-                    ));
-                }
-                let commit_output = Command::new("git")
-                    .args(["commit", "-m", "Clean up initial setup"])
-                    .current_dir(test_env.path())
-                    .output()?;
-                if !commit_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&commit_output.stderr);
-                    let stdout = String::from_utf8_lossy(&commit_output.stdout);
-                    // Don't treat "nothing to commit" as an error
-                    if !(stderr.contains("nothing to commit")
-                        || stdout.contains("nothing to commit"))
-                    {
-                        return Err(anyhow::anyhow!(
-                            "Failed to commit: stderr={}, stdout={}",
-                            stderr,
-                            stdout
-                        ));
-                    }
-                }
+            if !email_result.status.success() {
+                return Err(anyhow::anyhow!("Failed to set git user email"));
             }
+
             Ok(())
         }
     };
 
-    // If setup failed, return error
     setup_result?;
 
     // Run the test function

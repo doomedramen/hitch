@@ -3,12 +3,41 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel};
+use common::{with_test_env, SetupLevel, TestEnv};
+
+/// Helper function to ensure clean working tree before hitch init
+fn ensure_clean_working_tree(test_env: &TestEnv) -> Result<()> {
+    // Clean up any existing changes first
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(test_env.path())
+        .output()?;
+
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+
+    if !status_str.trim().is_empty() {
+        // There are uncommitted changes, add and commit them
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        let _commit_output = Command::new("git")
+            .args(["commit", "-m", "Clean up test environment"])
+            .current_dir(test_env.path())
+            .output()?;
+    }
+
+    Ok(())
+}
 
 /// Test CLI argument parsing and basic functionality
 #[test]
 fn test_cli_basic_functionality() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -40,6 +69,9 @@ fn test_cli_basic_functionality() -> Result<()> {
 #[test]
 fn test_cli_version() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -66,6 +98,9 @@ fn test_cli_version() -> Result<()> {
 #[test]
 fn test_cli_invalid_command() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -96,6 +131,9 @@ fn test_cli_invalid_command() -> Result<()> {
 #[test]
 fn test_cli_missing_arguments() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -129,6 +167,9 @@ fn test_cli_missing_arguments() -> Result<()> {
 #[test]
 fn test_cli_global_flags() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -195,6 +236,9 @@ fn test_cli_no_git_repository() -> Result<()> {
 #[test]
 fn test_cli_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -230,6 +274,12 @@ fn test_cli_error_handling() -> Result<()> {
 fn test_cli_complete_workflow() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
+
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(_test_env)?;
+
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(_test_env)?;
 
         // Initialize hitch first
         let output = Command::new(&binary_path)
@@ -326,6 +376,9 @@ fn test_cli_error_validation() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
 
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(_test_env)?;
+
         // Initialize hitch first
         let output = Command::new(&binary_path)
             .args(["init"])
@@ -411,6 +464,9 @@ fn test_cli_guard_functionality() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
 
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(_test_env)?;
+
         // Initialize hitch first
         let output = Command::new(&binary_path)
             .args(["init"])
@@ -462,6 +518,9 @@ fn test_cli_promote_workflow() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |_test_env| {
         let binary_path = _test_env.hitch_binary();
         println!("Hitch binary path: {:?}", binary_path);
+
+        // Ensure working tree is clean before initializing hitch
+        ensure_clean_working_tree(_test_env)?;
 
         // Initialize hitch first
         let output = Command::new(&binary_path)
