@@ -235,7 +235,7 @@ fn display_environment_status(
                         };
 
                     if is_in_source {
-                        "⚠️ ".bright_yellow().to_string()
+                        "⚠️  ".bright_yellow().to_string()
                     } else {
                         "✅ ".bright_green().to_string()
                     }
@@ -486,7 +486,7 @@ fn check_and_display_cleanup_needs(
     if !branches_in_source.is_empty() {
         println!(
             "│  {} {}",
-            "⚠️ ".bright_yellow(),
+            "⚠️  ".bright_yellow(),
             "Branches already in source:".bright_yellow()
         );
 
