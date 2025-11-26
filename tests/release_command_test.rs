@@ -48,7 +48,9 @@ trait TestEnvExt {
         filename: &str,
         content: &str,
     ) -> Result<()>;
+    #[allow(dead_code)]
     fn tag_exists(&self, tag_name: &str) -> Result<bool>;
+    fn list_tags(&self) -> Result<Vec<String>>;
     fn get_tag_message(&self, tag_name: &str) -> Result<String>;
     fn get_environment_config(&self, env_name: &str) -> Result<serde_json::Value>;
     fn commit_file_and_return(&self, filename: &str, content: &str, message: &str) -> Result<()>;
@@ -135,6 +137,26 @@ impl TestEnvExt for TestEnv {
 
         let tags = String::from_utf8_lossy(&output.stdout);
         Ok(tags.trim().contains(tag_name))
+    }
+
+    fn list_tags(&self) -> Result<Vec<String>> {
+        let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
+            self.path().to_str().unwrap(),
+        )?;
+
+        let output = git_ops.run_git_command(&["tag", "-l"])?;
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let tags_str = String::from_utf8_lossy(&output.stdout);
+        let tags: Vec<String> = tags_str
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect();
+
+        Ok(tags)
     }
 
     fn get_tag_message(&self, tag_name: &str) -> Result<String> {
@@ -265,17 +287,32 @@ fn verify_release_artifacts(
     test_env: &TestEnv,
     env_name: &str,
     target_branch: &str,
-    expected_tag: &str,
+    _tag_pattern: &str,
 ) -> Result<()> {
-    // Verify tag was created
+    // Verify tag was created with the new format pattern
+    let tag_pattern = format!(
+        "hitch-release-{}-to-{}",
+        env_name,
+        target_branch.replace('/', "-")
+    );
+    let tags = test_env.list_tags()?;
+
+    let matching_tags: Vec<_> = tags
+        .iter()
+        .filter(|tag| tag.starts_with(&tag_pattern))
+        .collect();
+
     assert!(
-        test_env.tag_exists(expected_tag)?,
-        "Release tag '{}' should exist",
-        expected_tag
+        !matching_tags.is_empty(),
+        "No release tags found matching pattern '{}'. Available tags: {:?}",
+        tag_pattern,
+        tags
     );
 
+    let created_tag = &matching_tags[0];
+
     // Verify tag message contains release information
-    let tag_message = test_env.get_tag_message(expected_tag)?;
+    let tag_message = test_env.get_tag_message(created_tag)?;
     assert!(
         tag_message.contains(env_name) && tag_message.contains(target_branch),
         "Tag message should contain release information. Got: {}",
