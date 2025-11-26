@@ -319,14 +319,14 @@ fn display_environment_status(
             println!("   {}", "✅ Up to date".bright_green());
         }
         RebuildStatus::NeedsRebuild(reason) => {
-            println!("   {} {}", "⚠️".bright_yellow(), reason.bright_yellow());
+            println!("   {} {}", "⚠️ ".bright_yellow(), reason.bright_yellow());
             println!(
                 "   {}",
                 format!("💡 Run 'hitch rebuild {}' to update", env_name).dimmed()
             );
         }
         RebuildStatus::NeverRebuilt => {
-            println!("   {} {}", "⚠️".bright_red(), "Never rebuilt".bright_red());
+            println!("   {} {}", "⚠️ ".bright_red(), "Never rebuilt".bright_red());
             println!(
                 "   {}",
                 format!("💡 Run 'hitch rebuild {}' to initialize", env_name).dimmed()
