@@ -9,6 +9,9 @@ use common::{ensure_git_environment_ready, with_test_env, SetupLevel};
 #[test]
 fn test_init_already_initialized_error() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before manually creating hitch-metadata branch
+        ensure_git_environment_ready(test_env)?;
+
         // Manually create hitch-metadata branch to simulate already initialized state
         Command::new("git")
             .args(["checkout", "--orphan", "hitch-metadata"])
@@ -31,9 +34,6 @@ fn test_init_already_initialized_error() -> Result<()> {
             .args(["checkout", "main"])
             .current_dir(test_env.path())
             .output()?;
-
-        // Ensure clean working tree before hitch init
-        ensure_git_environment_ready(test_env)?;
 
         // Now init should fail because hitch-metadata branch already exists (this is the first init attempt)
         let output = Command::new(test_env.hitch_binary())
