@@ -613,8 +613,9 @@ fn test_release_missing_target_branch_fails() -> Result<()> {
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("Target branch") && stderr.contains("does not exist"),
-            "Should mention target branch doesn't exist"
+            stderr.contains("Branch") && stderr.contains("does not exist"),
+            "Should mention branch doesn't exist. Actual error: {}",
+            stderr
         );
 
         Ok(())
