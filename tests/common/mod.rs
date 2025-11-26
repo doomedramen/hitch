@@ -403,6 +403,48 @@ pub enum SetupLevel {
     GitOnly,
 }
 
+/// Ensure clean working tree and switch to main branch (for GitOnly setup)
+/// This is useful for tests that need to run hitch init commands
+#[allow(dead_code)]
+pub fn ensure_git_environment_ready(test_env: &TestEnv) -> Result<()> {
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(test_env.path())
+        .output()?;
+
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+
+    if !status_str.trim().is_empty() {
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(test_env.path())
+            .output()?;
+
+        let _commit_output = Command::new("git")
+            .args(["commit", "-m", "Clean up test environment"])
+            .current_dir(test_env.path())
+            .output()?;
+    }
+
+    // Ensure we're on main branch
+    let current_branch_output = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(test_env.path())
+        .output()?;
+
+    let current_branch = String::from_utf8_lossy(&current_branch_output.stdout)
+        .trim()
+        .to_string();
+    if current_branch == "hitch-metadata" {
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(test_env.path())
+            .output()?;
+    }
+
+    Ok(())
+}
+
 /// Run a test with a managed test environment
 /// This function handles the creation and cleanup of the test environment
 /// and ensures proper setup based on the specified level

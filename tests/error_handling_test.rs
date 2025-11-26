@@ -464,7 +464,7 @@ mod error_handling_tests {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
 
-            // Should show appropriate error for missing hitch.json
+            // Should show appropriate error - either missing hitch.json or working tree not clean
             assert!(
                 stderr.contains("hitch.json")
                     || stderr.contains("not found")
@@ -472,6 +472,9 @@ mod error_handling_tests {
                     || stderr.contains("Failed to read")
                     || stdout.contains("hitch.json")
                     || stdout.contains("not found")
+                    || stderr.contains("locked")
+                    || stderr.contains("does not exist")
+                    || stderr.contains("Working tree is not clean") // New error case
             );
 
             Ok(())

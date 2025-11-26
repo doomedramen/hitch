@@ -4,7 +4,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel, TestEnv};
+use common::{ensure_git_environment_ready, with_test_env, SetupLevel, TestEnv};
 
 /// Helper extension trait for TestEnv to provide custom methods needed by these tests
 trait TestEnvExt {
@@ -131,10 +131,11 @@ impl TestEnvExt for TestEnv {
 #[test]
 fn test_rebuild_with_actual_git_hooks() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -218,10 +219,11 @@ fn test_rebuild_with_actual_git_hooks() -> Result<()> {
 #[test]
 fn test_rebuild_nothing_to_commit() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;
@@ -279,10 +281,11 @@ fn test_rebuild_nothing_to_commit() -> Result<()> {
 #[test]
 fn test_rebuild_cleanup_verification() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
-
-        // Clean up any changes from init
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;

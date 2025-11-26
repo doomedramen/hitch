@@ -3,7 +3,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel, TestEnv};
+use common::{ensure_git_environment_ready, with_test_env, SetupLevel, TestEnv};
 
 #[cfg(test)]
 #[allow(unused_variables)]
@@ -624,9 +624,11 @@ mod cli_workflow_tests {
     #[test]
     fn test_complete_release_workflow() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Ensure clean working tree before init
+            ensure_git_environment_ready(test_env)?;
+
             // Initialize hitch
             run_hitch_command(test_env, &["init"])?;
-            ensure_clean_working_tree(test_env)?;
 
             // Add environments
             run_hitch_command(test_env, &["add", "dev"])?; // defaults to main
@@ -712,6 +714,9 @@ mod cli_workflow_tests {
     #[test]
     fn test_release_workflow_target_override() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Ensure clean working tree before init
+            ensure_git_environment_ready(test_env)?;
+
             // Initialize hitch
             run_hitch_command(test_env, &["init"])?;
             ensure_clean_working_tree(test_env)?;
@@ -780,13 +785,17 @@ mod cli_workflow_tests {
     #[test]
     fn test_release_workflow_locked_force() -> Result<()> {
         with_test_env(SetupLevel::GitOnly, |test_env| -> Result<()> {
+            // Ensure clean working tree before init
+            ensure_git_environment_ready(test_env)?;
+
             // Initialize hitch
             run_hitch_command(test_env, &["init"])?;
+
+            // Clean up any changes left by hitch init
             ensure_clean_working_tree(test_env)?;
 
             // Add environment
             run_hitch_command(test_env, &["add", "prod"])?;
-            ensure_clean_working_tree(test_env)?;
 
             // Create feature branch
             run_git_command(test_env, &["checkout", "-b", "feature/prod"])?;
@@ -807,7 +816,7 @@ mod cli_workflow_tests {
             let release_output = run_hitch_command(test_env, &["release", "prod"])?;
             assert!(!release_output.status.success());
             let stderr = String::from_utf8_lossy(&release_output.stderr);
-            assert!(stderr.contains("locked") || stderr.contains("locked"));
+            assert!(stderr.contains("locked"));
 
             // Force release locked environment
             run_hitch_command(test_env, &["release", "prod", "--force"])?;
