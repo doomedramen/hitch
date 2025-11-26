@@ -8,7 +8,7 @@ mod tests {
     fn test_hitch_init_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(|env| {
             // Test hitch init (git is already initialized by framework)
             let result = env.hitch.run().args(&["init"]).execute()?;
             result
@@ -33,7 +33,7 @@ mod tests {
     fn test_hitch_init_with_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(|env| {
             // Test hitch init with environments
             let result = env
                 .hitch
@@ -60,7 +60,7 @@ mod tests {
     fn test_hitch_init_already_initialized() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(|env| {
             // Initialize hitch first
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
