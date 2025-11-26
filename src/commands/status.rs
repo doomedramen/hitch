@@ -213,7 +213,7 @@ fn display_environment_status(
             // Check if branch exists locally or remotely and if it's already in source
             let branch_status = if let Ok(exists) = context.git().branch_exists_anywhere(branch) {
                 if !exists {
-                    "❌".bright_red().to_string()
+                    "❌ ".bright_red().to_string()
                 } else {
                     // Use the same heuristic as cleanup detection to handle squash merges
                     let is_in_source =
@@ -235,13 +235,13 @@ fn display_environment_status(
                         };
 
                     if is_in_source {
-                        "⚠️".bright_yellow().to_string()
+                        "⚠️ ".bright_yellow().to_string()
                     } else {
-                        "✅".bright_green().to_string()
+                        "✅ ".bright_green().to_string()
                     }
                 }
             } else {
-                "❓".bright_yellow().to_string()
+                "❓ ".bright_yellow().to_string()
             };
 
             let extra_info = if branch.contains(env_name) {
@@ -486,7 +486,7 @@ fn check_and_display_cleanup_needs(
     if !branches_in_source.is_empty() {
         println!(
             "│  {} {}",
-            "⚠️".bright_yellow(),
+            "⚠️ ".bright_yellow(),
             "Branches already in source:".bright_yellow()
         );
 
