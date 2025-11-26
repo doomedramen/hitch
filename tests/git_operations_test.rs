@@ -3,12 +3,15 @@ use std::fs;
 use std::process::Command;
 
 mod common;
-use common::{with_test_env, SetupLevel};
+use common::{ensure_git_environment_ready, with_test_env, SetupLevel};
 
 /// Test git operations functionality
 #[test]
 fn test_git_operations_basic_functionality() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -74,6 +77,9 @@ fn test_git_operations_basic_functionality() -> Result<()> {
 #[test]
 fn test_git_operations_dirty_working_directory() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -121,6 +127,9 @@ fn test_git_operations_dirty_working_directory() -> Result<()> {
 #[test]
 fn test_git_operations_detached_head() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -165,6 +174,9 @@ fn test_git_operations_detached_head() -> Result<()> {
 #[test]
 fn test_git_operations_file_operations() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -234,6 +246,9 @@ fn test_git_operations_invalid_repository() -> Result<()> {
 #[test]
 fn test_git_operations_push() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -267,6 +282,9 @@ fn test_git_operations_push() -> Result<()> {
 #[test]
 fn test_git_operations_merge() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -328,6 +346,9 @@ fn test_git_operations_merge() -> Result<()> {
 #[test]
 fn test_git_operations_error_handling() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -374,6 +395,9 @@ fn test_git_operations_error_handling() -> Result<()> {
 #[test]
 fn test_debug_merge_conflicts_scenario() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -460,6 +484,9 @@ fn test_debug_merge_conflicts_scenario() -> Result<()> {
 #[test]
 fn test_git_operations_branch_synchronization() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Initialize hitch first
         test_env.run_hitch_init()?;
 
@@ -627,6 +654,9 @@ fn test_new_git_operations_create_and_push_tag() -> Result<()> {
 #[test]
 fn test_new_git_operations_is_branch_merged_into() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before git operations
+        ensure_git_environment_ready(test_env)?;
+
         let git_ops = hitch::utils::git_operations::GitOperations::new_at_path(
             test_env.path().to_str().unwrap(),
         )?;

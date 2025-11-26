@@ -3,7 +3,7 @@ use std::process::Command;
 
 // Import the proper test framework
 mod common;
-use common::{with_test_env, SetupLevel};
+use common::{ensure_git_environment_ready, with_test_env, SetupLevel};
 
 #[test]
 fn test_init_with_environments() -> Result<()> {
@@ -11,14 +11,17 @@ fn test_init_with_environments() -> Result<()> {
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Run hitch init with environments (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--environments", "dev,qa,staging"])
             .current_dir(test_env.path())
             .output()?;
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let full_output = format!("{}{}", stdout, stderr);
 
         // Check that init succeeded
@@ -76,14 +79,17 @@ fn test_init_with_verbose_flag() -> Result<()> {
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Run hitch init with verbose flag (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let full_output = format!("{}{}", stdout, stderr);
 
         // Check that init succeeded
@@ -115,14 +121,17 @@ fn test_init_with_no_push_flag() -> Result<()> {
         // Get the path to our hitch binary
         let hitch_path = test_env.hitch_binary();
 
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Run hitch init with no-push flag (this is the first init)
         let output = Command::new(&hitch_path)
             .args(["init", "--no-push", "--verbose"])
             .current_dir(test_env.path())
             .output()?;
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let full_output = format!("{}{}", stdout, stderr);
 
         // Check that init succeeded
@@ -169,8 +178,8 @@ fn test_init_error_non_git_repo() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let full_output = format!("{}{}", stdout, stderr);
 
         // Check that init failed
@@ -205,8 +214,8 @@ fn test_init_error_dirty_working_directory() -> Result<()> {
             .current_dir(test_env.path())
             .output()?;
 
-        let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let full_output = format!("{}{}", stdout, stderr);
 
         // Check that init failed
