@@ -941,8 +941,7 @@ rocket = "0.5"
         git_ops.checkout_branch("main")?;
 
         // Create third conflicting feature that builds on one of the conflicting ones
-        git_ops.create_branch_from("feature/api-changes", "main")?;
-        git_ops.create_branch_from("feature/api-enhancements", "feature/api-changes")?;
+        git_ops.create_branch_from("feature/api-enhancements", "main")?;
         // Ensure src directory exists when we switch branches
         std::fs::create_dir_all(test_env.path().join("src"))?;
         git_ops.write_file(
