@@ -2,11 +2,14 @@ use anyhow::Result;
 use std::process::Command;
 
 mod common;
-use common::{with_test_env, SetupLevel};
+use common::{ensure_git_environment_ready, with_test_env, SetupLevel};
 
 #[test]
 fn test_init_smoke_test() -> Result<()> {
     with_test_env(SetupLevel::GitOnly, |test_env| {
+        // Ensure clean working tree before hitch init
+        ensure_git_environment_ready(test_env)?;
+
         // Run hitch init - this is the smoke test (first init)
         let binary_path = test_env.hitch_binary();
         let output = Command::new(&binary_path)

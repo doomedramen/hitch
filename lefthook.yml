@@ -45,9 +45,9 @@ pre-push:
 
         Fix build errors before pushing.
 
-    # Run core functionality tests (selected integration tests)
+    # Run ALL tests to ensure nothing is broken
     test:
-      run: cargo test --release --test cli_main_test --test types_test
+      run: cargo test --all-targets --all-features --release
       fail_text: |
         🚨 Tests failed!
 

@@ -483,6 +483,8 @@ where
                 return Err(anyhow::anyhow!("Failed to set git user email"));
             }
 
+            // Ensure clean working tree for all git environments
+            ensure_git_environment_ready(&test_env)?;
             Ok(())
         }
     };
