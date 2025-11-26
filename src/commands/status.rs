@@ -209,29 +209,38 @@ fn display_environment_status(
             .dimmed()
         );
     } else {
+        // Pre-compute environment release status for performance
+        let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+        let mut released_envs = std::collections::HashSet::new();
+
+        for (env_name, env) in &config.environments {
+            if env.released_at.is_some() {
+                released_envs.insert((env_name.clone(), env.base.clone()));
+            }
+        }
+
         for (i, branch) in env.branches.iter().enumerate() {
-            // Check if branch exists locally or remotely and if it's already in source
+            // Check if branch exists locally or remotely
             let branch_status = if let Ok(exists) = context.git().branch_exists_anywhere(branch) {
                 if !exists {
                     "❌ ".bright_red().to_string()
                 } else {
-                    // Use the same heuristic as cleanup detection to handle squash merges
+                    // Optimized check: use pre-computed release status
                     let is_in_source =
-                        if let Ok(branch_sha) = context.git().get_branch_commit_sha(branch) {
-                            if let Ok(target_sha) = context.git().get_branch_commit_sha(&env.base) {
-                                is_branch_content_in_target(
-                                    context,
-                                    branch,
-                                    &env.base,
-                                    &branch_sha,
-                                    &target_sha,
-                                )
-                                .unwrap_or(false)
-                            } else {
-                                false
-                            }
+                        if released_envs.contains(&(env_name.to_string(), env.base.clone())) {
+                            // Environment was released, assume branches were incorporated
+                            true
                         } else {
-                            false
+                            // Fall back to git merge check for unreleased environments
+                            let is_merged = context
+                                .git()
+                                .is_branch_merged_into(branch, &env.base)
+                                .unwrap_or(false);
+                            // If this branch is actually merged, also add it to a tracking list for cleanup
+                            if is_merged {
+                                // We could track this for cleanup display if needed
+                            }
+                            is_merged
                         };
 
                     if is_in_source {
@@ -250,29 +259,22 @@ fn display_environment_status(
                 "".to_string().normal()
             };
 
-            // Add warning for branches already in source (using same heuristic as status)
-            let source_warning = if let Ok(branch_sha) = context.git().get_branch_commit_sha(branch)
-            {
-                if let Ok(target_sha) = context.git().get_branch_commit_sha(&env.base) {
-                    if is_branch_content_in_target(
-                        context,
-                        branch,
-                        &env.base,
-                        &branch_sha,
-                        &target_sha,
-                    )
-                    .unwrap_or(false)
+            // Use same optimized logic for warning text
+            let source_warning =
+                if released_envs.contains(&(env_name.to_string(), env.base.clone())) {
+                    format!(" (already in {})", env.base.bright_blue())
+                } else {
+                    // For unreleased environments, check git merge status
+                    if context
+                        .git()
+                        .is_branch_merged_into(branch, &env.base)
+                        .unwrap_or(false)
                     {
                         format!(" (already in {})", env.base.bright_blue())
                     } else {
                         "".to_string()
                     }
-                } else {
-                    "".to_string()
-                }
-            } else {
-                "".to_string()
-            };
+                };
 
             println!(
                 "│  {} {} {}{}",
@@ -446,37 +448,18 @@ fn check_and_display_cleanup_needs(
 ) -> Result<()> {
     let mut branches_in_source = Vec::new();
 
-    // Always check if environment has promoted branches (regardless of release status)
-    if !env.branches.is_empty() {
-        // Check if the base branch exists for comparison
+    // Check released environments first (fast path)
+    if env.released_at.is_some() && !env.branches.is_empty() {
+        // Environment was released, assume all promoted branches were incorporated
+        branches_in_source.extend(env.branches.clone());
+    } else if !env.branches.is_empty() {
+        // For unreleased environments, check git merge status (slower but accurate)
         if context.git().branch_exists_anywhere(&env.base)? {
             for branch in &env.branches {
-                // Check if the branch's commits exist in the base branch (indicating it was released)
-                // Use a different approach that works with squash merges
-                if context.git().branch_exists_anywhere(branch)? {
-                    // Get the list of commits that exist in both branches
-                    match context.git().get_branch_commit_sha(branch) {
-                        Ok(branch_sha) => {
-                            // Check if this specific commit or equivalent changes exist in target
-                            // For squash merges, we need to check if the branch changes are in the target
-                            if let Ok(target_sha) = context.git().get_branch_commit_sha(&env.base) {
-                                // Check if the diff between the branch and its merge base is empty in target
-                                // This indicates the branch changes were incorporated (even via squash)
-                                if is_branch_content_in_target(
-                                    context,
-                                    branch,
-                                    &env.base,
-                                    &branch_sha,
-                                    &target_sha,
-                                )? {
-                                    branches_in_source.push(branch.clone());
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // Branch doesn't exist, skip it
-                        }
-                    }
+                if context.git().branch_exists_anywhere(branch)?
+                    && context.git().is_branch_merged_into(branch, &env.base)?
+                {
+                    branches_in_source.push(branch.clone());
                 }
             }
         }
@@ -524,36 +507,4 @@ fn check_and_display_cleanup_needs(
     }
 
     Ok(())
-}
-
-/// Check if the content of a branch has been incorporated into target branch (handles squash merges)
-fn is_branch_content_in_target(
-    context: &GlobalContext,
-    source_branch: &str,
-    target_branch: &str,
-    _source_sha: &str,
-    _target_sha: &str,
-) -> Result<bool> {
-    // For environments that have been released, check if the branch content is in target
-    // This is a heuristic that works for squash merges
-
-    // Get the config to check release timestamps
-    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
-
-    // Find the environment that contains this branch
-    for env in config.environments.values() {
-        if env.base == target_branch && env.branches.contains(&source_branch.to_string()) {
-            // Check if this environment has been released
-            if let Some(_released_at) = env.released_at {
-                // If the environment was released, assume the content was incorporated
-                // This is a reasonable heuristic for our use case
-                return Ok(true);
-            }
-        }
-    }
-
-    // Fallback to the original check for regular merges
-    context
-        .git()
-        .is_branch_merged_into(source_branch, target_branch)
 }

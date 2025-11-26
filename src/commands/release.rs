@@ -203,11 +203,19 @@ fn perform_release_core(
     context.git().commit(&commit_message)?;
     context.log_info(&format!("✓ Committed release to '{}'", target_branch));
 
-    // Create auto-tag for release tracking
-    let tag_name = format!("release-{}-{}", env_name, target_branch.replace('/', "-"));
+    // Create auto-tag for release tracking with descriptive name and ISO 8601 timestamp
+    let now = chrono::Utc::now();
+    let datetime_str = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let target_branch_clean = target_branch.replace('/', "-");
+    let tag_name = format!(
+        "hitch-release-{}-to-{}-{}",
+        env_name, target_branch_clean, datetime_str
+    );
     let tag_message = format!(
-        "Release of environment '{}' to '{}'",
-        env_name, target_branch
+        "Hitch release of environment '{}' to '{}' at {}",
+        env_name,
+        target_branch,
+        now.format("%Y-%m-%d %H:%M:%S UTC")
     );
 
     context.git().create_tag(&tag_name, &tag_message)?;
