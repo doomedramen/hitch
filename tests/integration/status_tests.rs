@@ -63,11 +63,11 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Hitch Environment Status")
-                .assert_stdout_contains("Environments: 1")
+                .assert_stdout_contains("1 environments")
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("Base: main")
-                .assert_stdout_contains("Branches: 0")
-                .assert_stdout_contains("Unlocked");
+                .assert_stdout_contains("base:")
+                .assert_stdout_contains("Branches (0 promoted)")
+                .assert_stdout_contains("Environment is unlocked");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -111,9 +111,9 @@ mod tests {
             let result = env.hitch.run().args(&["status"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environments: 1")
+                .assert_stdout_contains("1 environments")
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("Branches: 3")
+                .assert_stdout_contains("Branches (3 promoted)")
                 .assert_stdout_contains("feature-1")
                 .assert_stdout_contains("feature-2")
                 .assert_stdout_contains("feature-3");
@@ -239,13 +239,13 @@ mod tests {
             let result = env.hitch.run().args(&["status"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environments: 3")
+                .assert_stdout_contains("3 environments")
                 .assert_stdout_contains("dev")
                 .assert_stdout_contains("qa")
                 .assert_stdout_contains("staging")
-                .assert_stdout_contains("Branches: 1") // dev has 1 branch
-                .assert_stdout_contains("Branches: 0") // qa has 0 branches
-                .assert_stdout_contains("Branches: 0"); // staging has 0 branches
+                .assert_stdout_contains("Branches (1 promoted)") // dev has 1 branch
+                .assert_stdout_contains("Branches (0 promoted)") // qa has 0 branches
+                .assert_stdout_contains("Branches (0 promoted)"); // staging has 0 branches
 
             Ok::<(), anyhow::Error>(())
         });
@@ -353,16 +353,16 @@ mod tests {
             let result = env.hitch.run().args(&["status"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environments: 3")
+                .assert_stdout_contains("3 environments")
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("Base: main")
-                .assert_stdout_contains("Branches: 2")
+                .assert_stdout_contains("base: main")
+                .assert_stdout_contains("Branches (2 promoted)")
                 .assert_stdout_contains("qa")
-                .assert_stdout_contains("Base: main")
-                .assert_stdout_contains("Branches: 1")
+                .assert_stdout_contains("base: main")
+                .assert_stdout_contains("Branches (1 promoted)")
                 .assert_stdout_contains("staging")
-                .assert_stdout_contains("Base: qa")
-                .assert_stdout_contains("Branches: 0")
+                .assert_stdout_contains("base: qa")
+                .assert_stdout_contains("Branches (0 promoted)")
                 .assert_stdout_contains("Last rebuilt:");
 
             Ok::<(), anyhow::Error>(())

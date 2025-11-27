@@ -184,7 +184,11 @@ mod tests {
             result.assert_success();
 
             // Release without specifying target branch (should use environment's base branch)
-            let result = env.hitch.run().args(&["release", "dev", "--force"]).execute()?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "--force"])
+                .execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
@@ -394,7 +398,11 @@ mod tests {
             result.assert_success();
 
             // Release staging to develop (its base branch)
-            let result = env.hitch.run().args(&["release", "staging", "--force"]).execute()?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["release", "staging", "--force"])
+                .execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("Environment 'staging' released successfully to 'develop'");

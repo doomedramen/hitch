@@ -317,8 +317,14 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
         .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
 
     context.log_info("🚨 DANGEROUS OPERATION DETECTED!");
-    context.log_info(&format!("About to release environment '{}' to '{}'", env_name, target_branch));
-    context.log_info(&format!("  • {} promoted branches will be merged", environment.branches.len()));
+    context.log_info(&format!(
+        "About to release environment '{}' to '{}'",
+        env_name, target_branch
+    ));
+    context.log_info(&format!(
+        "  • {} promoted branches will be merged",
+        environment.branches.len()
+    ));
 
     if environment.branches.is_empty() {
         context.log_info("  • No branches currently promoted (empty release)");
