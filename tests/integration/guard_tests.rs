@@ -11,7 +11,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Create a feature branch (not an environment branch)
             env.git.run(&["checkout", "-b", "feature-1"])?;
@@ -55,7 +55,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -80,7 +80,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environments
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -113,7 +113,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Create a commit and checkout detached HEAD
             env.fs.write_file("test.txt", "test content")?;
@@ -142,7 +142,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add multiple environments
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             for env_name in ["dev", "qa", "staging"] {
                 env.hitch
@@ -183,7 +183,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -221,7 +221,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Test with various branch naming patterns
             let branch_names = [
@@ -261,7 +261,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment with custom base
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "production"])
@@ -305,7 +305,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch on empty repository
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Run guard on main branch (should pass)
             let result = env.hitch.run().args(&["guard"]).execute()?;

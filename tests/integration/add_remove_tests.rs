@@ -202,7 +202,7 @@ mod tests {
                 .assert_stdout_contains("Successfully removed environment 'dev'");
 
             // Verify environment was removed
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             assert!(!config.environments.contains_key("dev"));
 
             Ok::<(), anyhow::Error>(())
@@ -217,7 +217,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -248,7 +248,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -271,7 +271,7 @@ mod tests {
                 .assert_stdout_contains("Successfully removed environment 'dev'");
 
             // Verify environment was removed
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             assert!(!config.environments.contains_key("dev"));
 
             Ok::<(), anyhow::Error>(())
@@ -286,7 +286,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch first
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Try to remove nonexistent environment
             let result = env.hitch.run().args(&["remove", "nonexistent"]).execute()?;
@@ -332,7 +332,7 @@ mod tests {
             result.assert_success();
 
             // Verify remaining environments exist
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             assert!(config.environments.contains_key("dev"));
             assert!(!config.environments.contains_key("qa"));
             assert!(config.environments.contains_key("staging"));

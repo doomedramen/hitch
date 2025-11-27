@@ -37,7 +37,7 @@ mod tests {
                 .assert_stdout_contains("Successfully promoted 'feature-1' to environment 'dev'");
 
             // Verify branch was promoted in environment configuration
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.branches.contains(&"feature-1".to_string()));
 
@@ -84,7 +84,7 @@ mod tests {
                 .assert_stdout_contains("Successfully demoted 'feature-1' from environment 'dev'");
 
             // Verify branch was demoted from environment configuration
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(!dev_env.branches.contains(&"feature-1".to_string()));
 
@@ -220,7 +220,7 @@ mod tests {
             }
 
             // Verify all branches are promoted
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert_eq!(dev_env.branches.len(), 3);
 
@@ -233,7 +233,7 @@ mod tests {
             result.assert_success();
 
             // Verify only one branch was demoted
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert_eq!(dev_env.branches.len(), 2);
             assert!(dev_env.branches.contains(&"feature-1".to_string()));

@@ -45,7 +45,7 @@ mod tests {
                 .assert_stdout_contains("Environment 'dev' rebuilt successfully");
 
             // Verify rebuild timestamp is updated
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.rebuilt_at.is_some());
 
@@ -116,7 +116,7 @@ mod tests {
                 .assert_stdout_contains("Environment 'dev' rebuilt successfully");
 
             // Verify rebuild timestamp is updated
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.rebuilt_at.is_some());
 
@@ -216,7 +216,7 @@ mod tests {
                 .assert_stdout_contains("Environment 'dev' rebuilt successfully");
 
             // Verify rebuild timestamp is updated
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.rebuilt_at.is_some());
 
@@ -275,7 +275,7 @@ mod tests {
             }
 
             // Verify all environments have rebuild timestamps
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             for env_name in ["dev", "qa", "staging"] {
                 let env = config.environments.get(env_name).unwrap();
                 assert!(env.rebuilt_at.is_some());
@@ -330,7 +330,7 @@ mod tests {
                 .assert_stdout_contains("Environment 'dev' rebuilt successfully");
 
             // Verify rebuild timestamp is updated
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.rebuilt_at.is_some());
 
@@ -372,7 +372,7 @@ mod tests {
             result.assert_success();
 
             // Get first rebuild timestamp
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let first_timestamp = config.environments.get("dev").unwrap().rebuilt_at;
 
             // Wait a moment to ensure different timestamp
@@ -385,7 +385,7 @@ mod tests {
                 .assert_stdout_contains("Environment 'dev' rebuilt successfully");
 
             // Verify timestamp was updated
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let second_timestamp = config.environments.get("dev").unwrap().rebuilt_at;
             assert!(second_timestamp > first_timestamp);
 
