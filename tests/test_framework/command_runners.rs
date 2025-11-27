@@ -53,7 +53,7 @@ impl<'a> HitchCommandBuilder<'a> {
             binary_path,
             args: Vec::new(),
             verbose: false,
-            no_push: false,
+            no_push: true, // Always use --no-push in tests to avoid remote pushes
             current_dir: None,
             env: Vec::new(),
         }
@@ -105,6 +105,11 @@ impl<'a> HitchCommandBuilder<'a> {
     pub fn execute(self) -> Result<HitchCommandResult> {
         let mut cmd = Command::new(self.binary_path);
         cmd.args(&self.args);
+
+        // Add --no-push flag if enabled (default for tests to avoid remote pushes)
+        if self.no_push {
+            cmd.arg("--no-push");
+        }
 
         if let Some(dir) = &self.current_dir {
             cmd.current_dir(dir);

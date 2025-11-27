@@ -32,7 +32,12 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
     // Step 2: Resolve target branch
     let target_branch = resolve_target_branch(context, &args.env_name, args.target_branch)?;
 
-    // Step 3-6: Execute release with automatic locking and unlocking
+    // Step 3: User confirmation (skip with --force)
+    if !args.force {
+        confirm_release(context, &args.env_name, &target_branch)?;
+    }
+
+    // Step 4-7: Execute release with automatic locking and unlocking
     if args.force {
         context.log_info(&format!(
             "Force releasing locked environment '{}' to '{}'...",
@@ -297,5 +302,53 @@ fn update_release_timestamp(context: &GlobalContext, env_name: &str) -> Result<(
         Ok(())
     })?;
 
+    Ok(())
+}
+
+/// Confirm release operation with user
+fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str) -> Result<()> {
+    use std::io::{self, Write};
+
+    // Get environment details to show user what will be released
+    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
+    let environment = config
+        .environments
+        .get(env_name)
+        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
+
+    context.log_info("🚨 DANGEROUS OPERATION DETECTED!");
+    context.log_info(&format!("About to release environment '{}' to '{}'", env_name, target_branch));
+    context.log_info(&format!("  • {} promoted branches will be merged", environment.branches.len()));
+
+    if environment.branches.is_empty() {
+        context.log_info("  • No branches currently promoted (empty release)");
+    } else {
+        context.log_info("  • Branches to be merged:");
+        for branch in &environment.branches {
+            context.log_info(&format!("    - {}", branch));
+        }
+    }
+
+    context.log_info(&format!("  • Target branch: {}", target_branch));
+    context.log_info("  • This will merge changes permanently");
+
+    if environment.is_locked() {
+        context.log_warning("  • Environment is currently locked");
+    }
+
+    // Prompt for confirmation
+    print!("\nDo you want to continue? [y/N] ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    let input = input.trim().to_lowercase();
+    if input != "y" && input != "yes" {
+        context.log_info("Release cancelled by user.");
+        std::process::exit(0);
+    }
+
+    context.log_info("User confirmed release - proceeding...");
     Ok(())
 }
