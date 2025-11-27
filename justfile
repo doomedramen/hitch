@@ -143,32 +143,34 @@ docs-serve: docs
 
 # Create a new release (bump version, test, build, and push tag)
 release: format lint test
-    @echo "🚀 Creating new release with automatic version bump..."
+    #!/usr/bin/env bash
+    set -e
+    echo "🚀 Creating new release with automatic version bump..."
     # Get current version from Cargo.toml
-    @current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
-    @echo "Current version: v${current_version}"
+    current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
+    echo "Current version: v${current_version}"
     # Extract version components
-    @major=$(echo ${current_version} | cut -d. -f1)
-    @minor=$(echo ${current_version} | cut -d. -f2)
-    @patch=$(echo ${current_version} | cut -d. -f3)
+    major=$(echo ${current_version} | cut -d. -f1)
+    minor=$(echo ${current_version} | cut -d. -f2)
+    patch=$(echo ${current_version} | cut -d. -f3)
     # Increment patch version
-    @new_patch=$((patch + 1))
-    @new_version="${major}.${minor}.${new_patch}"
-    @echo "New version: v${new_version}"
+    new_patch=$((patch + 1))
+    new_version="${major}.${minor}.${new_patch}"
+    echo "New version: v${new_version}"
     # Update version in Cargo.toml
-    @sed -i '' 's/^version = "${current_version}"/version = "${new_version}"/' Cargo.toml
+    sed -i '' "s/^version = \"${current_version}\"/version = \"${new_version}\"/" Cargo.toml
     # Build release
-    @echo "🔨 Building release v${new_version}..."
+    echo "🔨 Building release v${new_version}..."
     cargo build --release
     # Commit the version bump
-    @git add Cargo.toml
-    @git commit -m "chore: bump version to v${new_version}"
+    git add Cargo.toml
+    git commit -m "chore: bump version to v${new_version}"
     # Create and push the tag to trigger release workflow
-    @git tag "v${new_version}"
-    @echo "🚀 Pushing tag to trigger release workflow..."
-    @git push origin "v${new_version}"
-    @echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
-    @echo "📦 Binary available at: ./target/release/hitch"
+    git tag "v${new_version}"
+    echo "🚀 Pushing tag to trigger release workflow..."
+    git push origin "v${new_version}"
+    echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
+    echo "📦 Binary available at: ./target/release/hitch"
 
 # Create and push a new release tag (for current version without bumping)
 release-tag:
