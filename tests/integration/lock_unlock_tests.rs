@@ -4,7 +4,6 @@
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
-    use hitch::types::HitchConfig;
 
     #[test]
     fn test_hitch_lock_basic() -> anyhow::Result<()> {
@@ -26,7 +25,7 @@ mod tests {
                 .assert_stdout_contains("Successfully locked 'dev'!");
 
             // Verify environment is locked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.is_locked());
             assert!(dev_env.locked_by.is_some());
@@ -57,7 +56,7 @@ mod tests {
                 .assert_success();
 
             // Verify it's locked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.is_locked());
 
@@ -68,7 +67,7 @@ mod tests {
                 .assert_stdout_contains("Successfully unlocked environment 'dev'");
 
             // Verify environment is unlocked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(!dev_env.is_locked());
             assert!(dev_env.locked_by.is_none());
@@ -233,7 +232,7 @@ mod tests {
             }
 
             // Verify all environments are locked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             for env_name in ["dev", "qa", "staging"] {
                 let env = config.environments.get(env_name).unwrap();
                 assert!(env.is_locked());
@@ -267,7 +266,7 @@ mod tests {
             }
 
             // Verify all are locked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             for env_name in ["dev", "qa", "staging"] {
                 let env = config.environments.get(env_name).unwrap();
                 assert!(env.is_locked());
@@ -283,7 +282,7 @@ mod tests {
             }
 
             // Verify all environments are unlocked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             for env_name in ["dev", "qa", "staging"] {
                 let env = config.environments.get(env_name).unwrap();
                 assert!(!env.is_locked());
@@ -334,7 +333,7 @@ mod tests {
                 .assert_stdout_contains("Successfully locked 'dev'!");
 
             // Verify environment is locked and branches are preserved
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.is_locked());
             assert_eq!(dev_env.branches.len(), 2);
@@ -359,7 +358,7 @@ mod tests {
                 .assert_success();
 
             // Initial state: unlocked
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(!dev_env.is_locked());
 
@@ -368,7 +367,7 @@ mod tests {
             result.assert_success();
 
             // Verify locked state
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.is_locked());
             let lock_time = dev_env.locked_at.unwrap();
@@ -381,7 +380,7 @@ mod tests {
             result.assert_success();
 
             // Verify unlocked state
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(!dev_env.is_locked());
             assert!(dev_env.locked_by.is_none());
@@ -392,7 +391,7 @@ mod tests {
             result.assert_success();
 
             // Verify new lock time
-            let config: HitchConfig = env.fs.read_json("hitch.json")?;
+            let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.is_locked());
             let new_lock_time = dev_env.locked_at.unwrap();
