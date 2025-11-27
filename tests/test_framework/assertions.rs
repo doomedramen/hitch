@@ -445,15 +445,19 @@ mod tests {
         git.init()?;
         git.config_user("Test User", "test@example.com")?;
 
-        // Test git assertions
+        // Test git assertions (repo exists but no commits/branch yet)
         assert.git_repo_exists(&git)?;
-        assert.git_branch_exists(&git, "main")?;
-        assert.git_current_branch(&git, "main")?;
         assert.git_working_dir_clean(&git)?;
 
-        // Create some changes
+        // Create some changes to establish a branch
         git.create_file_and_commit("test.txt", "test content", "Initial commit")?;
         assert.git_working_dir_clean(&git)?;
+
+        // Now check the branch (it exists after first commit)
+        let branch_output = git.run(&["branch", "--show-current"])?;
+        let current_branch = branch_output.stdout().trim().to_string();
+        assert.git_branch_exists(&git, &current_branch)?;
+        assert.git_current_branch(&git, &current_branch)?;
 
         Ok(())
     }
