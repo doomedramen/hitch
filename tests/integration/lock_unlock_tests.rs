@@ -23,7 +23,7 @@ mod tests {
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully locked environment 'dev'");
+                .assert_stdout_contains("Successfully locked 'dev'!");
 
             // Verify environment is locked
             let config: HitchConfig = env.fs.read_json("hitch.json")?;
@@ -331,7 +331,7 @@ mod tests {
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully locked environment 'dev'");
+                .assert_stdout_contains("Successfully locked 'dev'!");
 
             // Verify environment is locked and branches are preserved
             let config: HitchConfig = env.fs.read_json("hitch.json")?;
