@@ -370,18 +370,19 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment with custom base
             // Hitch is already initialized by framework
-            env.hitch
-                .run()
-                .args(&["add", "staging", "--source", "develop"])
-                .execute()?
-                .assert_success();
 
-            // Create develop branch
+            // Create develop branch first
             env.git.run(&["checkout", "-b", "develop"])?;
             env.fs.write_file("develop.txt", "develop content")?;
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "Create develop branch"])?;
             env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["add", "staging", "--source", "develop"])
+                .execute()?
+                .assert_success();
 
             // Add and promote feature to staging
             env.git.run(&["checkout", "-b", "feature-staging"])?;

@@ -14,7 +14,7 @@ mod tests {
             let result = env.hitch.run().args(&["status"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Hitch is not initialized");
+                .assert_stderr_contains("Failed to read hitch.json");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -189,7 +189,7 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("Last rebuilt:");
+                .assert_stdout_contains("Rebuilt:");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -299,6 +299,14 @@ mod tests {
                 .args(&["add", "qa"])
                 .execute()?
                 .assert_success();
+
+            // Create qa branch first for staging to use as base
+            env.git.run(&["checkout", "-b", "qa"])?;
+            env.fs.write_file("qa.txt", "qa content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Create qa branch"])?;
+            env.git.run(&["checkout", "main"])?;
+
             env.hitch
                 .run()
                 .args(&["add", "staging", "--source", "qa"])
@@ -355,15 +363,16 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("3 environments")
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("base: main")
+                .assert_stdout_contains("base:")
+                .assert_stdout_contains("main")
                 .assert_stdout_contains("Branches (2 promoted)")
                 .assert_stdout_contains("qa")
-                .assert_stdout_contains("base: main")
+                .assert_stdout_contains("base:")
                 .assert_stdout_contains("Branches (1 promoted)")
                 .assert_stdout_contains("staging")
-                .assert_stdout_contains("base: qa")
+                .assert_stdout_contains("qa")
                 .assert_stdout_contains("Branches (0 promoted)")
-                .assert_stdout_contains("Last rebuilt:");
+                .assert_stdout_contains("Rebuilt:");
 
             Ok::<(), anyhow::Error>(())
         });

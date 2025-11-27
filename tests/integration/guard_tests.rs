@@ -34,7 +34,7 @@ mod tests {
     fn test_hitch_guard_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
             // Try to run guard without initializing hitch
             env.git.run(&["checkout", "-b", "feature-1"])?;
 

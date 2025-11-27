@@ -130,11 +130,14 @@ impl HitchTestFramework {
     where
         F: FnOnce(&TestEnvironment) -> R,
     {
+        // Store temp dir path to prevent early cleanup
+        let temp_dir_path = self.temp_dir.path().to_path_buf();
+
         // Change to temporary directory
-        env::set_current_dir(self.temp_dir.path()).expect("Failed to change to temp directory");
+        env::set_current_dir(&temp_dir_path).expect("Failed to change to temp directory");
 
         // Initialize git repository in temp directory
-        let git = GitCommandRunner::new(self.temp_dir.path())
+        let git = GitCommandRunner::new(&temp_dir_path)
             .expect("Failed to initialize git in test environment");
 
         // Initialize git repository first
@@ -146,10 +149,10 @@ impl HitchTestFramework {
 
         // Create test environment with all helpers
         let test_env = TestEnvironment {
-            temp_dir: self.temp_dir.path().to_path_buf(),
-            hitch: HitchCommandRunner::new(&self.hitch_binary, self.temp_dir.path()),
+            temp_dir: temp_dir_path.clone(),
+            hitch: HitchCommandRunner::new(&self.hitch_binary, &temp_dir_path),
             git,
-            fs: FileSystemHelpers::new(self.temp_dir.path()),
+            fs: FileSystemHelpers::new(&temp_dir_path),
             assert: AssertionHelpers::new(),
             mock: MockCapabilities::new(),
         };
@@ -183,13 +186,19 @@ impl HitchTestFramework {
             }
         }
 
-        // Execute test closure
-        let result = test_fn(&test_env);
+        // Execute test closure and catch panics to ensure directory restoration
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            test_fn(&test_env)
+        }));
 
-        // Restore original working directory
+        // Restore original working directory before temp dir cleanup
         env::set_current_dir(&self.original_cwd).expect("Failed to restore original directory");
 
-        result
+        // Return the result or re-panic if the test panicked
+        match result {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Find the hitch binary for testing
