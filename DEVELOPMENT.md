@@ -189,11 +189,59 @@ just test-coverage-detailed
 
 ### Test Coverage
 
-The project includes comprehensive testing:
+The project includes comprehensive testing with local-first coverage checking:
 
 - **Unit tests**: Core functionality and utilities
 - **Integration tests**: CLI commands and workflows
 - **Scenario tests**: Edge cases and error handling
+
+### Coverage Commands
+
+```bash
+# Current coverage percentage (quick check)
+just test-coverage-check
+
+# Full coverage report with file breakdown
+just test-coverage
+
+# Quick coverage summary (last 5 lines)
+just test-coverage-summary
+
+# Full coverage analysis (detailed text report)
+just test-coverage-full
+
+# Detailed coverage for tooling (JSON/XML exports)
+just test-coverage-detailed
+```
+
+### Current Coverage Status
+
+**Overall Coverage: 73.42% (1,210/1,648 lines covered)**
+
+🟢 **Excellent coverage on core functionality:**
+- `add.rs`, `lock.rs`, `rebuild.rs`: 100% coverage
+- `types.rs`, `main.rs`: 100% coverage
+- Most command files: 80-90% coverage
+
+🟡 **Areas for improvement:**
+- `release.rs`: 61.6% (newer command, needs more test scenarios)
+- `prelude.rs`: 59.0% (utility functions, some edge cases untested)
+
+### Single-Threaded Execution
+
+All coverage commands run with `--test-threads=1` to ensure:
+- Consistent test execution order
+- Avoid race conditions in Git operations
+- Reliable coverage results
+- Deterministic behavior across environments
+
+### Coverage Configuration
+
+Coverage settings are configured in `coverage.toml`:
+- Minimum threshold: 80%
+- Critical files: Higher coverage requirements
+- Local-first approach: No external services required
+- Manual execution: Use `just test-coverage-quick` when needed
 
 ## 🔍 Code Quality
 
@@ -223,15 +271,20 @@ cargo audit --fix          # Auto-fix where possible
 ### Just Commands
 
 ```bash
-just          # Show available commands
-just build    # Build in release mode
-just dev      # Build in debug mode
-just run -- [args]  # Run binary with args
-just test     # Run tests
-just lint     # Run linters
-just format   # Format code
-just release  # Create new release
-just setup    # Setup development environment
+just                    # Show available commands
+just build              # Build in release mode
+just dev                # Build in debug mode
+just run -- [args]      # Run binary with args
+just test               # Run tests (single-threaded)
+just test-coverage      # Generate coverage reports (tarpaulin)
+just test-coverage-check # Current coverage percentage
+just test-coverage-full # Full coverage analysis (llvm-cov)
+just test-coverage-summary # Quick coverage overview
+just test-coverage-detailed # Coverage reports for tooling
+just lint               # Run linters
+just format             # Format code
+just release            # Create new release
+just setup              # Setup development environment
 ```
 
 ## 🏗️ Project Structure
@@ -247,6 +300,7 @@ hitch/
 ├── .github/workflows/   # CI/CD configurations
 ├── lefthook.yml        # Git hooks configuration
 ├── justfile            # Development commands
+├── coverage.toml       # Coverage configuration
 ├── dist-workspace.toml # Distribution config
 └── Cargo.toml          # Project configuration
 ```
@@ -305,3 +359,5 @@ Download from [GitHub Releases](https://github.com/doomedramen/hitch/releases)
 - Check GitHub Issues
 - Run `just info` for system information
 - Run `just setup` to verify environment
+- For coverage issues, check `coverage.toml` configuration
+- Coverage reports generated in `coverage/` directory

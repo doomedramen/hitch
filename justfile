@@ -74,18 +74,43 @@ test-coverage:
     @echo "🧪 Running tests with coverage..."
     @command -v cargo-tarpaulin >/dev/null 2>&1 || \
         (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
-    cargo tarpaulin --out Stdout
+    cargo tarpaulin --out Stdout -- --test-threads=1
     @echo ""
     @echo "✅ Coverage report completed"
+
+# Generate coverage report for analysis (using llvm-cov)
+test-coverage-full:
+    @echo "🧪 Running full coverage analysis..."
+    @command -v cargo-llvm-cov >/dev/null 2>&1 || \
+        (echo "❌ cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov" && exit 1)
+    @cargo llvm-cov --workspace --text -- --test-threads=1 2>&1 | tee coverage-report.txt
+    @echo "📋 Coverage report saved: coverage-report.txt"
+    @echo "💡 Check coverage-report.txt for detailed coverage analysis"
 
 # Generate detailed coverage report in text files
 test-coverage-detailed:
     @echo "🧪 Running tests with detailed coverage..."
     @command -v cargo-tarpaulin >/dev/null 2>&1 || \
         (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
-    cargo tarpaulin --out Json --output-dir coverage/
-    cargo tarpaulin --out Xml --output-dir coverage/
+    cargo tarpaulin --out Json --output-dir coverage/ -- --test-threads=1
+    cargo tarpaulin --out Xml --output-dir coverage/ -- --test-threads=1
     @echo "✅ Detailed coverage reports generated in coverage/ directory"
+
+# Show just the coverage summary without checking thresholds
+test-coverage-summary:
+    @echo "📊 Coverage Summary:"
+    @command -v cargo-tarpaulin >/dev/null 2>&1 || \
+        (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
+    @echo ""
+    @cargo tarpaulin --workspace --out Stdout -- --test-threads=1 2>/dev/null | tail -5
+
+# Generate coverage check (shows current coverage percentage)
+test-coverage-check:
+    @echo "🧪 Current Coverage Analysis..."
+    @command -v cargo-tarpaulin >/dev/null 2>&1 || \
+        (echo "❌ cargo-tarpaulin not found. Install with: cargo install cargo-tarpaulin" && exit 1)
+    @echo ""
+    @cargo tarpaulin --workspace --out Stdout -- --test-threads=1 | tail -2
 
 # Clean build artifacts
 clean:

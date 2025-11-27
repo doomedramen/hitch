@@ -6,3 +6,4 @@ lcov.info
 /coverage/
 /htmlcov/
 .DS_Store
+coverage-report.txt
