@@ -2,13 +2,13 @@
 
 Hitch is a CLI tool that brings environment branch management to Git. It helps teams organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation.
 
-This document covers the development workflow, CI/CD setup, and release process for the Hitch CLI tool.
+This document covers the development workflow and release process for the Hitch CLI tool.
 
 ## 🛠️ Development Environment Setup
 
 ### Prerequisites
 
-- Rust 1.70.0 or later
+- Rust 1.83.0 or later
 - Git
 - Just command runner
 
@@ -74,21 +74,19 @@ just dev
 just run -- --help
 ```
 
-### Pre-commit Checks
+### Pre-commit & Pre-push Checks
 
-The project uses Lefthook for pre-commit hooks:
+The project uses Lefthook for Git hooks:
 
-- **Code formatting** with `rustfmt`
-- **Linting** with `clippy`
+**Pre-commit:**
+- **Code formatting** with `rustfmt --check`
+- **Linting** with `clippy` (strict warnings)
 - **Security audit** with `cargo audit`
-- **Lock file consistency** check
+- **Lock file consistency** with `cargo check --locked`
 
-### Pre-push Checks
-
-Before pushing changes, the following checks run:
-
-- **Full test suite** execution
+**Pre-push:**
 - **Release build** verification
+- **Test suite** execution with `cargo test --release`
 
 ## 🚀 Release Process
 
@@ -135,8 +133,8 @@ git push origin v1.0.1
 When a version tag is pushed, the CI/CD pipeline:
 
 1. **Builds binaries** for multiple platforms:
-   - Linux (x86_64)
-   - macOS (x86_64, ARM64)
+   - Linux (x86_64, ARM64)
+   - macOS (x86_64 Intel, ARM64 Apple Silicon)
 
 2. **Creates GitHub Release** with:
    - Compiled binaries
@@ -145,28 +143,28 @@ When a version tag is pushed, the CI/CD pipeline:
 
 3. **Updates Homebrew formula** in `doomedramen/homebrew-hitch`
 
-4. **Publishes to Cargo crates.io** (if configured)
-
 ## 📋 CI/CD Pipeline
+
+The Hitch project uses a streamlined CI/CD pipeline with two main workflows:
 
 ### Continuous Integration (CI)
 
 Every push and pull request triggers:
 
-- **Code formatting** checks
-- **Clippy linting**
-- **Security audit**
+- **Multi-version Rust testing** (stable, beta, 1.83.0)
+- **Code formatting** checks with `rustfmt`
+- **Clippy linting** with strict warnings
 - **Test suite** execution
-- **Build verification** on multiple platforms
+- **Cross-platform build** verification on Linux and macOS
+- **Documentation** generation and deployment
 
 ### Continuous Deployment (CD)
 
 Release tags trigger:
 
-- **Cross-platform builds**
-- **GitHub release creation**
-- **Homebrew formula update**
-- **Binary distribution**
+- **Cross-platform binary builds** using cargo-dist
+- **GitHub release** creation with artifacts
+- **Homebrew formula** automatic updates
 
 ## 📊 Testing
 
@@ -191,50 +189,33 @@ just test-coverage-detailed
 
 ### Test Coverage
 
-The project aims for high test coverage. Current status:
+The project includes comprehensive testing:
 
-- **Unit tests**: Core functionality
-- **Integration tests**: CLI commands
-- **Edge case tests**: Error handling
-
-### Coverage Reports
-
-Coverage reports are generated in the `coverage/` directory:
-
-- **HTML report**: Open `coverage/tarpaulin-report.html`
-- **JSON report**: For CI integration
-- **XML report**: For tooling integration
+- **Unit tests**: Core functionality and utilities
+- **Integration tests**: CLI commands and workflows
+- **Scenario tests**: Edge cases and error handling
 
 ## 🔍 Code Quality
 
 ### Linting
 
 ```bash
-# Run clippy with strict rules
-just lint
-
-# Run clippy with auto-fix
-cargo clippy --fix --allow-dirty --allow-staged
+just lint                  # Run clippy with strict rules
+cargo clippy --fix         # Auto-fix issues
 ```
 
 ### Formatting
 
 ```bash
-# Format all code
-just format
-
-# Check formatting without modifying files
-cargo fmt --all -- --check
+just format                # Format all code
+cargo fmt --all -- --check # Check formatting
 ```
 
 ### Security
 
 ```bash
-# Run security audit
-cargo audit
-
-# Fix security issues automatically
-cargo audit --fix
+cargo audit                # Security audit
+cargo audit --fix          # Auto-fix where possible
 ```
 
 ## 📝 Development Commands
@@ -242,40 +223,15 @@ cargo audit --fix
 ### Just Commands
 
 ```bash
-just                    # Show available commands
-just build             # Build in release mode
-just dev               # Build in debug mode
-just run               # Run the binary
-just test              # Run tests
-just lint              # Run linters
-just format            # Format code
-just clean             # Clean artifacts
-just release           # Create new release (bump version, build, tag)
-just release-tag       # Create and push release tag for current version
-just setup             # Setup development environment
-just info              # Show project information
-```
-
-### Cargo Commands
-
-```bash
-# Build
-cargo build              # Debug build
-cargo build --release    # Release build
-
-# Test
-cargo test               # Run tests
-cargo test --release     # Run tests on release build
-
-# Check
-cargo check              # Quick compile check
-cargo clippy             # Run linter
-cargo fmt                # Format code
-
-# Other
-cargo clean              # Clean artifacts
-cargo update             # Update dependencies
-cargo audit              # Security audit
+just          # Show available commands
+just build    # Build in release mode
+just dev      # Build in debug mode
+just run -- [args]  # Run binary with args
+just test     # Run tests
+just lint     # Run linters
+just format   # Format code
+just release  # Create new release
+just setup    # Setup development environment
 ```
 
 ## 🏗️ Project Structure
@@ -287,98 +243,65 @@ hitch/
 │   ├── commands/        # CLI command implementations
 │   ├── utils/           # Utility modules
 │   └── types.rs         # Type definitions
-├── tests/               # Integration tests
+├── tests/               # Integration and unit tests
 ├── .github/workflows/   # CI/CD configurations
-├── lefthook.yml        # Pre-commit hook configuration
-├── justfile            # Just commands
-├── Cargo.toml          # Project configuration
-└── README.md           # Project documentation
+├── lefthook.yml        # Git hooks configuration
+├── justfile            # Development commands
+├── dist-workspace.toml # Distribution config
+└── Cargo.toml          # Project configuration
 ```
 
 ## 🤝 Contributing
 
-1. **Fork** the repository
-2. **Create** a feature branch
-3. **Make** your changes
-4. **Run** tests and checks
-5. **Commit** your changes
-6. **Push** to your fork
-7. **Create** a pull request
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests and checks
+5. Commit your changes
+6. Push to your fork
+7. Create a pull request
 
 ### Commit Messages
 
-Use conventional commit messages:
-
-- `feat:` for new features
-- `fix:` for bug fixes
-- `docs:` for documentation
-- `style:` for formatting
-- `refactor:` for refactoring
-- `test:` for test changes
-- `chore:` for maintenance
+Use conventional commit messages (`feat:`, `fix:`, `docs:`, etc.)
 
 ## 📦 Distribution
 
-### Binary Downloads
+### Supported Platforms
 
-Binaries are available for:
-
-- **Linux**: x86_64
-- **macOS**: x86_64, ARM64
+- **Linux**: x86_64, ARM64
+- **macOS**: x86_64 (Intel), ARM64 (Apple Silicon)
 
 ### Package Managers
 
-#### Homebrew
-
 ```bash
+# Homebrew
 brew install doomedramen/homebrew-hitch/hitch
-```
 
-#### Cargo
-
-```bash
+# Cargo
 cargo install hitch
 ```
 
-#### Manual Download
+### Manual Download
 
-Download from [GitHub Releases](https://github.com/doomedramen/hitch/releases).
+Download from [GitHub Releases](https://github.com/doomedramen/hitch/releases)
 
 ## 🔧 Configuration
 
-### GitHub Actions
-
-- **CI**: `.github/workflows/ci.yml`
-- **Release**: `.github/workflows/release-dist.yml`
-- **Setup**: `.github/workflows/setup.yml`
-
-### Lefthook
-
-Configuration in `lefthook.yml`:
-
-- **Pre-commit**: Format, lint, audit
-- **Pre-push**: Test, build
-
-### Cargo-dist
-
-Configuration in `Cargo.toml` and `dist-workspace.toml`:
-
-- **Target platforms**
-- **Archive formats**
-- **Homebrew integration**
+- **CI/CD**: `.github/workflows/`
+- **Git Hooks**: `lefthook.yml`
+- **Distribution**: `dist-workspace.toml`
 
 ## 🚨 Troubleshooting
 
 ### Common Issues
 
-1. **Lefthook not found**: Install lefthook following the setup instructions
-2. **Tests fail with git errors**: Make sure git is initialized in test directories
-3. **Build fails**: Check Rust version and run `cargo update`
-4. **Release fails**: Verify tag format (vX.Y.Z) and GitHub permissions
+1. **Build fails**: Check Rust version (requires 1.83.0+)
+2. **Tests fail**: Ensure Git is properly initialized
+3. **Release fails**: Verify tag format and GitHub permissions
 
 ### Getting Help
 
 - Check GitHub Issues
-- Review CI/CD logs
 - Run `just info` for system information
 - Run `just setup` to verify environment

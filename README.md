@@ -101,6 +101,17 @@ hitch rebuild production
 # containing all changes from promoted branches
 ```
 
+### Environment Releasing
+```bash
+# Release all promoted branches from an environment to a target branch
+hitch release production main
+
+# Force release even if environment is locked
+hitch release staging main --force
+
+# This creates a permanent release with auto-tags
+```
+
 ## 📊 Status Output
 
 Hitch provides a comprehensive overview of your environments:
@@ -180,16 +191,16 @@ brew install doomedramen/homebrew-hitch/hitch
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for development setup and guidelines.
 
+## 🔗 Links
+
+- [Development Guide](DEVELOPMENT.md)
+- [CI/CD Pipeline](CI_CD.md)
+- [Technical Specification](SPEC.md)
+
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read [DEVELOPMENT.md](DEVELOPMENT.md) for details on our code of conduct and the process for submitting pull requests.
-
-## 🔗 Links
-
-- [Documentation](DEVELOPMENT.md)
-- [CI/CD Pipeline](CI_CD.md)
-- [Specification](SPEC.md)
+Contributions are welcome! Please read [DEVELOPMENT.md](DEVELOPMENT.md) for the process for submitting pull requests.

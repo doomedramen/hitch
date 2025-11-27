@@ -156,6 +156,40 @@ modify_metadata(&context, |config: &mut HitchConfig| {
 
 ---
 
+### release <env_name> <target_branch> [--force]
+
+- Example: `hitch release production main`
+- Example: `hitch release staging develop --force`
+
+**Purpose**: Permanently merge all promoted branches from an environment to a target branch. This is a one-way operation that creates a release.
+
+- `pre-check()`
+- Validate environment exists and is ready for release
+- Resolve target branch (use override or environment base)
+- User confirmation (skip with `--force`)
+- **Lock the environment** (unless using `--force` on already locked environment)
+- Record original branch for return after operation
+- Synchronize all branches (promoted branches + target branch)
+- Switch to target branch
+- For each promoted branch in the environment:
+  - Check for merge conflicts
+  - If conflicts found: abort release, unlock environment, return to original branch
+  - Perform squash merge with release-specific commit message
+- Commit the merged changes with release message
+- Create auto-tag for release tracking (format: `hitch-release-{env}-to-{target}-{timestamp}`)
+- Push changes and tag if enabled
+- Return to original branch
+- Update release timestamp in environment metadata
+- **Unlock the environment**
+
+**Key Differences from rebuild**:
+- `rebuild`: Creates/maintains environment branch for ongoing deployments
+- `release`: One-way merge to target branch, creates release tags
+- `rebuild`: Merges to environment's base branch
+- `release`: Merges to specified target branch (can be any branch)
+
+---
+
 ### add <env_name> [--base <branch>]
 
 - Example: `hitch add staging --base main`
