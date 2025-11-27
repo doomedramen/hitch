@@ -56,15 +56,19 @@ mod tests {
 
     #[test]
     fn test_git_operations_new_outside_repo_fails() -> Result<()> {
-        let framework = HitchTestFramework::new()?;
+        // Create a temp directory that is NOT a git repo
+        let temp_dir = tempfile::tempdir()?;
+        let original_dir = std::env::current_dir()?;
 
-        let _ = framework.with_test_environment(TestSetup::None, |_env| {
-            // Don't initialize git repo - should fail
-            let result = GitOperations::new();
-            assert!(result.is_err());
+        // Change to temp directory (not a git repo)
+        std::env::set_current_dir(temp_dir.path())?;
 
-            Ok::<(), anyhow::Error>(())
-        });
+        // GitOperations::new() should fail outside a git repo
+        let result = GitOperations::new();
+        assert!(result.is_err());
+
+        // Restore original directory
+        std::env::set_current_dir(&original_dir)?;
 
         Ok(())
     }
@@ -934,7 +938,9 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::None, |env| {
             env.git.init()?;
-            // Don't configure user
+            // Explicitly unset git user config to test the error case
+            let _ = env.git.run(&["config", "--unset", "user.email"]);
+            let _ = env.git.run(&["config", "--unset", "user.name"]);
 
             let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
