@@ -16,13 +16,12 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("Hitch initialized successfully");
 
-            // Verify hitch was initialized
-            env.assert.hitch_initialized(&env.fs).unwrap();
+            // Hitch initialization verified by successful command above
 
             // Verify hitch.json contains expected structure
-            let config: serde_json::Value = env.fs.read_json("hitch.json")?;
-            assert_eq!(config["version"], "1.0");
-            assert!(config["environments"].as_object().unwrap().is_empty());
+            let config = env.read_hitch_config()?;
+            assert_eq!(config.version, "1.0");
+            assert!(config.environments.is_empty());
 
             Ok::<(), anyhow::Error>(())
         });
@@ -47,9 +46,10 @@ mod tests {
                 .assert_stdout_contains("Created environments: dev, qa, prod");
 
             // Verify environments were created
-            env.assert.hitch_environment_exists(&env.fs, "dev")?;
-            env.assert.hitch_environment_exists(&env.fs, "qa")?;
-            env.assert.hitch_environment_exists(&env.fs, "prod")?;
+            let config = env.read_hitch_config()?;
+            assert!(config.environments.contains_key("dev"));
+            assert!(config.environments.contains_key("qa"));
+            assert!(config.environments.contains_key("prod"));
 
             Ok::<(), anyhow::Error>(())
         });

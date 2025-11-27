@@ -323,7 +323,9 @@ mod tests {
             for env_name in ["dev", "qa", "staging"] {
                 let result = env.hitch.run().args(&["add", env_name]).execute()?;
                 result.assert_success();
-                env.assert.hitch_environment_exists(&env.fs, env_name)?;
+                // Verify environment was created
+                let config = env.read_hitch_config()?;
+                assert!(config.environments.contains_key(env_name));
             }
 
             // Remove one environment
