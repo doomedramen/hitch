@@ -142,13 +142,36 @@ docs-serve: docs
         (echo "❌ python3 not found for serving docs" && exit 1)
 
 # Create a new release (bump version, test, build, and push tag)
-release: format lint test
+release:
     #!/usr/bin/env bash
     set -e
+
+    # Function to cleanup on failure
+    cleanup() {
+        if [ $? -ne 0 ]; then
+            echo "❌ Release failed, cleaning up..."
+            # Restore original version if it was changed
+            if [ -n "${current_version}" ] && [ -n "${new_version}" ]; then
+                echo "🔄 Restoring version from v${new_version} to v${current_version}"
+                sed -i '' "s/^version = \"${new_version}\"/version = \"${current_version}\"/" Cargo.toml
+
+                # Discard any Cargo.lock changes
+                git restore Cargo.lock 2>/dev/null || true
+
+                echo "✅ Cleanup completed"
+            fi
+        fi
+    }
+
+    # Set trap for cleanup on error
+    trap cleanup ERR
+
     echo "🚀 Creating new release with automatic version bump..."
+
     # Get current version from Cargo.toml
     current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
     echo "Current version: v${current_version}"
+
     # Extract version components
     major=$(echo ${current_version} | cut -d. -f1)
     minor=$(echo ${current_version} | cut -d. -f2)
@@ -157,21 +180,43 @@ release: format lint test
     new_patch=$((patch + 1))
     new_version="${major}.${minor}.${new_patch}"
     echo "New version: v${new_version}"
-    # Update version in Cargo.toml
+
+    # Pre-flight checks first (before modifying anything)
+    echo "🔍 Running pre-flight checks..."
+    cargo fmt --all -- --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    cargo test --all-targets --all-features --release
+
+    # Now that everything passes, update version
+    echo "📝 Updating version..."
     sed -i '' "s/^version = \"${current_version}\"/version = \"${new_version}\"/" Cargo.toml
-    # Build release
+
+    # Build release with new version
     echo "🔨 Building release v${new_version}..."
     cargo build --release
-    # Commit the version bump
+
+    # Check if any files were modified during build (like Cargo.lock)
+    if [ -n "$(git status --porcelain Cargo.lock)" ]; then
+        echo "📦 Cargo.lock was updated during build, including in commit..."
+        git add Cargo.lock
+    fi
+
+    # Commit the version bump (and any Cargo.lock changes)
     git add Cargo.toml
     git commit -m "chore: bump version to v${new_version}"
+
     # Create the tag
     git tag "v${new_version}"
+
     echo "🚀 Pushing commit and tag to trigger release workflow..."
     # Push both the commit and the tag
     current_branch=$(git branch --show-current)
     git push origin "${current_branch}"
     git push origin "v${new_version}"
+
+    # Clear the trap since we succeeded
+    trap - ERR
+
     echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
     echo "📦 Binary available at: ./target/release/hitch"
 
