@@ -131,7 +131,12 @@ impl HitchTestFramework {
         F: FnOnce(&TestEnvironment) -> R,
     {
         // Create a new temp dir for this specific test to control cleanup timing
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+        // Use random prefix for better isolation in multi-threaded execution
+        let temp_dir = tempfile::Builder::new()
+            .prefix("hitch-test")
+            .suffix(&format!("{}", std::process::id()))
+            .tempdir()
+            .expect("Failed to create temp directory");
         let temp_dir_path = temp_dir.path().to_path_buf();
 
         // Change to temporary directory
@@ -191,7 +196,18 @@ impl HitchTestFramework {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test_fn(&test_env)));
 
         // Restore original working directory BEFORE temp_dir goes out of scope and gets cleaned up
-        env::set_current_dir(&self.original_cwd).expect("Failed to restore original directory");
+        // Handle the case where the original directory may have been deleted by concurrent test cleanup
+        if let Err(_e) = env::set_current_dir(&self.original_cwd) {
+            // Try to restore to the project root using environment variable or fallback
+            if let Ok(project_root) = env::var("CARGO_MANIFEST_DIR") {
+                if env::set_current_dir(&project_root).is_ok() {
+                    // Successfully restored to project root
+                } else if let Ok(home_dir) = env::var("HOME") {
+                    let _ = env::set_current_dir(home_dir);
+                }
+            }
+            // Don't panic - the temp directory cleanup will handle the rest
+        }
 
         // temp_dir gets cleaned up here, after we've restored the working directory
 

@@ -198,7 +198,9 @@ mod tests {
 
             // Try to unlock already unlocked environment
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
-            result.assert_failure().assert_stderr_contains("not currently locked");
+            result
+                .assert_failure()
+                .assert_stderr_contains("not currently locked");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -225,10 +227,9 @@ mod tests {
             // Lock all environments
             for env_name in ["dev", "qa", "staging"] {
                 let result = env.hitch.run().args(&["lock", env_name]).execute()?;
-                result.assert_success().assert_stdout_contains(&format!(
-                    "Successfully locked '{}'",
-                    env_name
-                ));
+                result
+                    .assert_success()
+                    .assert_stdout_contains(&format!("Successfully locked '{}'", env_name));
             }
 
             // Verify all environments are locked
