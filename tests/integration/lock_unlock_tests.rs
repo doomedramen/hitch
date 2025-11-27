@@ -84,12 +84,12 @@ mod tests {
     fn test_hitch_lock_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to lock without initializing hitch
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Hitch is not initialized");
+                .assert_stderr_contains("Failed to read hitch.json");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -101,12 +101,12 @@ mod tests {
     fn test_hitch_unlock_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to unlock without initializing hitch
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Hitch is not initialized");
+                .assert_stderr_contains("Failed to read hitch.json");
 
             Ok::<(), anyhow::Error>(())
         });

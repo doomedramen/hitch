@@ -98,7 +98,7 @@ mod tests {
     fn test_hitch_promote_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to promote without initializing hitch
             let result = env
                 .hitch
@@ -119,7 +119,7 @@ mod tests {
     fn test_hitch_demote_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to demote without initializing hitch
             let result = env
                 .hitch

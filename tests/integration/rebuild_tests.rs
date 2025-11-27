@@ -59,7 +59,7 @@ mod tests {
     fn test_hitch_rebuild_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to rebuild without initializing hitch
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result

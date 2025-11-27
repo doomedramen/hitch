@@ -9,7 +9,7 @@ mod tests {
     fn test_hitch_status_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to get status without initializing hitch
             let result = env.hitch.run().args(&["status"]).execute()?;
             result
