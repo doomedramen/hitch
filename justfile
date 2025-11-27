@@ -65,9 +65,9 @@ test-verbose:
 
 # Run specific test file
 test-file file:
-    @echo "🧪 Running tests in {{file}}..."
-    cargo test --test {{file}}
-    @echo "✅ Tests in {{file}} passed"
+    @echo "🧪 Running tests in {{ file }}..."
+    cargo test --test {{ file }}
+    @echo "✅ Tests in {{ file }} passed"
 
 # Run tests with coverage (requires cargo-tarpaulin)
 test-coverage:
@@ -106,8 +106,8 @@ run: dev
 
 # Run the hitch binary with arguments
 run-with args: dev
-    @echo "🚀 Running Hitch with args: {{args}}"
-    ./target/debug/hitch {{args}}
+    @echo "🚀 Running Hitch with args: {{ args }}"
+    ./target/debug/hitch {{ args }}
 
 # Check if the code compiles without building (faster than build)
 check:
@@ -165,9 +165,12 @@ release: format lint test
     # Commit the version bump
     git add Cargo.toml
     git commit -m "chore: bump version to v${new_version}"
-    # Create and push the tag to trigger release workflow
+    # Create the tag
     git tag "v${new_version}"
-    echo "🚀 Pushing tag to trigger release workflow..."
+    echo "🚀 Pushing commit and tag to trigger release workflow..."
+    # Push both the commit and the tag
+    current_branch=$(git branch --show-current)
+    git push origin "${current_branch}"
     git push origin "v${new_version}"
     echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
     echo "📦 Binary available at: ./target/release/hitch"
@@ -189,6 +192,9 @@ release-tag:
         echo "📝 Committing changes..."; \
         git add .; \
         git commit -m "chore: prepare for v${current_version} release"; \
+        echo "🚀 Pushing changes before tag..."; \
+        current_branch=$(git branch --show-current); \
+        git push origin "${current_branch}"; \
     fi
     # Create and push the tag
     @git tag "v${current_version}"
