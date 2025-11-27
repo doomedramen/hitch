@@ -3,10 +3,24 @@
 //! Provides the main HitchTestFramework and TestEnvironment structures with
 //! closure-based testing API and complete Git isolation.
 
+use anyhow::Result;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
+
+/// Test setup options for different test scenarios
+#[derive(Debug, Clone, PartialEq)]
+pub enum TestSetup {
+    /// No additional setup - just git repository with user config
+    None,
+    /// Initialize git repository with user config and basic structure
+    GitOnly,
+    /// Initialize hitch with proper git setup (most common)
+    HitchInit,
+    /// Initialize hitch and create a basic 'dev' environment
+    HitchWithEnv,
+}
 
 use crate::test_framework::assertions::AssertionHelpers;
 use crate::test_framework::command_runners::{GitCommandRunner, HitchCommandRunner};
@@ -17,6 +31,72 @@ use crate::test_framework::mocking::MockCapabilities;
 ///
 /// Provides complete Git isolation and closure-based test API as requested.
 /// Each test runs in its own temporary directory with automatic cleanup.
+///
+/// # Usage Examples
+///
+/// ## Basic Test with Hitch Initialized
+/// ```rust
+/// let framework = HitchTestFramework::new()?;
+/// let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+///     // Hitch is initialized and ready to use
+///     let result = env.hitch.run().args(&["add", "dev"]).execute()?;
+///     result.assert_success();
+///     Ok(())
+/// });
+/// ```
+///
+/// ## Test with Pre-created Environment
+/// ```rust
+/// let framework = HitchTestFramework::new()?;
+/// let _ = framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+///     // Hitch is initialized and a "dev" environment already exists
+///     let result = env.hitch.run().args(&["remove", "dev"]).execute()?;
+///     result.assert_success();
+///     Ok(())
+/// });
+/// ```
+///
+/// ## Test for Hitch-not-initialized Scenarios
+/// ```rust
+/// let framework = HitchTestFramework::new()?;
+/// let _ = framework.with_test_environment(TestSetup::None, |env| {
+///     // Hitch is NOT initialized - tests error handling
+///     let result = env.hitch.run().args(&["add", "dev"]).execute()?;
+///     result.assert_failure().assert_stderr_contains("hitch.json");
+///     Ok(())
+/// });
+/// ```
+///
+/// ## Test with Custom Git Setup
+/// ```rust
+/// let framework = HitchTestFramework::new()?;
+/// let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+///     // Git repository is set up with basic structure, but hitch is not initialized
+///     env.fs.write_file("README.md", "# My Project")?;
+///     env.git.run(&["add", "."])?;
+///     env.git.run(&["commit", "-m", "Initial commit"])?;
+///
+///     // Now initialize hitch and test
+///     env.hitch.run().args(&["init"]).execute()?.assert_success();
+///     Ok(())
+/// });
+/// ```
+///
+/// # Features
+///
+/// - **Complete Git Isolation**: Each test runs in its own temporary directory
+/// - **Process Isolation**: No shared state between tests
+/// - **Automatic Cleanup**: Temporary directories and resources are cleaned up automatically
+/// - **Flexible Setup**: Different levels of test environment setup via TestSetup enum
+/// - **Clean API**: Closure-based API makes tests readable and maintainable
+/// - **Helper Methods**: Convenient methods for common operations like reading hitch config
+///
+/// # TestSetup Options
+///
+/// - `TestSetup::None`: No additional setup (just git repo with user config)
+/// - `TestSetup::GitOnly`: Git repository with basic structure
+/// - `TestSetup::HitchInit`: Hitch initialized with proper git setup (most common)
+/// - `TestSetup::HitchWithEnv`: Hitch initialized + a basic "dev" environment created
 pub struct HitchTestFramework {
     temp_dir: TempDir,
     original_cwd: PathBuf,
@@ -39,14 +119,14 @@ impl HitchTestFramework {
         })
     }
 
-    /// Execute a test closure with an isolated test environment
+    /// Execute a test closure with specific setup requirements
     ///
-    /// This is the core closure-based API as requested:
-    /// - Creates temp directory
-    /// - Changes directory to temp location
-    /// - Provides hitch and git command access
-    /// - Automatic cleanup via Drop implementation
-    pub fn with_test_environment<F, R>(&self, test_fn: F) -> R
+    /// Provides flexible setup options for different test scenarios:
+    /// - None: No additional setup (just git repo with user config)
+    /// - GitOnly: Initialize git repository with basic structure
+    /// - HitchInit: Initialize hitch with proper git setup (most common)
+    /// - HitchWithEnv: Initialize hitch and create a basic 'dev' environment
+    pub fn with_test_environment<F, R>(&self, setup: TestSetup, test_fn: F) -> R
     where
         F: FnOnce(&TestEnvironment) -> R,
     {
@@ -67,12 +147,41 @@ impl HitchTestFramework {
         // Create test environment with all helpers
         let test_env = TestEnvironment {
             temp_dir: self.temp_dir.path().to_path_buf(),
-            hitch: HitchCommandRunner::new(&self.hitch_binary),
+            hitch: HitchCommandRunner::new(&self.hitch_binary, self.temp_dir.path()),
             git,
             fs: FileSystemHelpers::new(self.temp_dir.path()),
             assert: AssertionHelpers::new(),
             mock: MockCapabilities::new(),
         };
+
+        // Apply setup requirements
+        match setup {
+            TestSetup::None => {
+                // No additional setup needed
+            }
+            TestSetup::GitOnly => {
+                // Git is already initialized, but create basic structure
+                test_env
+                    .fs
+                    .write_file("README.md", "# Test Repository")
+                    .ok();
+                test_env.git.run(&["add", "."]).ok();
+                test_env.git.run(&["commit", "-m", "Initial commit"]).ok();
+            }
+            TestSetup::HitchInit => {
+                test_env.init_hitch().expect("Failed to initialize hitch");
+            }
+            TestSetup::HitchWithEnv => {
+                test_env.init_hitch().expect("Failed to initialize hitch");
+                test_env
+                    .hitch
+                    .run()
+                    .args(&["add", "dev"])
+                    .execute()
+                    .expect("Failed to create test environment")
+                    .assert_success();
+            }
+        }
 
         // Execute test closure
         let result = test_fn(&test_env);
@@ -161,6 +270,55 @@ pub struct TestEnvironment {
     pub mock: MockCapabilities,
 }
 
+impl TestEnvironment {
+    /// Initialize hitch and setup git repository properly for testing
+    /// This combines hitch init with the required git setup
+    pub fn init_hitch(&self) -> Result<()> {
+        // Initialize hitch
+        self.hitch.run().args(&["init"]).execute()?.assert_success();
+
+        // Setup git repository properly after hitch init
+        self.setup_git_for_hitch()
+    }
+
+    /// Setup a proper Git repository for hitch testing
+    /// This handles the complex setup required after hitch init
+    pub fn setup_git_for_hitch(&self) -> Result<()> {
+        // Create main branch since hitch init leaves us on hitch-metadata branch
+        self.git.run(&["checkout", "-b", "main"])?;
+
+        // Add and commit the .gitignore file that was created by hitch init (force add since it's ignored)
+        self.git.run(&["add", "-f", ".gitignore"])?;
+        self.git.run(&["commit", "-m", "Add .gitignore"])?;
+
+        // Create initial commit on main branch to establish it as the base branch
+        self.fs.write_file("README.md", "# Test Repository")?;
+        self.git.run(&["add", "README.md"])?;
+        self.git.run(&["commit", "-m", "Initial commit"])?;
+
+        Ok(())
+    }
+
+    /// Read hitch configuration from the hitch-metadata branch
+    pub fn read_hitch_config(&self) -> Result<hitch::types::HitchConfig> {
+        // Switch to hitch-metadata branch to read config
+        let current_branch = self.git.run(&["branch", "--show-current"])?;
+        self.git.run(&["checkout", "hitch-metadata"])?;
+
+        let config = self.fs.read_json("hitch.json")?;
+
+        // Switch back to original branch
+        if current_branch.success() {
+            let branch_name = current_branch.stdout().trim().to_string();
+            if !branch_name.is_empty() {
+                self.git.run(&["checkout", &branch_name])?;
+            }
+        }
+
+        Ok(config)
+    }
+}
+
 impl std::fmt::Debug for TestEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TestEnvironment")
@@ -189,7 +347,7 @@ mod tests {
     fn test_test_environment_closure() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Test that we're in a different directory
             assert!(env.temp_dir.exists());
 

@@ -2,13 +2,14 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::framework::TestSetup;
     use crate::test_framework::*;
 
     #[test]
     fn test_hitch_guard_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -33,7 +34,7 @@ mod tests {
     fn test_hitch_guard_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to run guard without initializing hitch
             env.git.run(&["checkout", "-b", "feature-1"])?;
 
@@ -52,7 +53,7 @@ mod tests {
     fn test_hitch_guard_with_environment_branch() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -77,7 +78,7 @@ mod tests {
     fn test_hitch_guard_specific_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environments
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -110,7 +111,7 @@ mod tests {
     fn test_hitch_guard_detached_head() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -139,7 +140,7 @@ mod tests {
     fn test_hitch_guard_multiple_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add multiple environments
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -180,7 +181,7 @@ mod tests {
     fn test_hitch_guard_workflow_prevention() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -218,7 +219,7 @@ mod tests {
     fn test_hitch_guard_with_complex_branch_names() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -258,7 +259,7 @@ mod tests {
     fn test_hitch_guard_environment_edge_cases() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment with custom base
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -302,7 +303,7 @@ mod tests {
     fn test_hitch_guard_empty_repository() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch on empty repository
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 

@@ -7,6 +7,7 @@ use anyhow::Result;
 use chrono::Utc;
 use serde_json;
 
+use crate::framework::TestSetup;
 use crate::test_framework::*;
 use hitch::types::{Environment, HitchConfig};
 
@@ -423,7 +424,7 @@ mod tests {
     fn test_environment_serialization_roundtrip() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             let mut original_env = Environment::new("main".to_string());
             original_env.add_branch("feature-1".to_string());
             original_env.lock("user@example.com".to_string());
@@ -453,7 +454,7 @@ mod tests {
     fn test_hitch_config_serialization_roundtrip() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             let mut original_config = HitchConfig::new();
             original_config
                 .add_environment("dev".to_string(), Environment::new("develop".to_string()));
@@ -485,7 +486,7 @@ mod tests {
     fn test_environment_json_import_export() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Create a JSON fixture
             let json_fixture = serde_json::json!({
                 "base": "main",

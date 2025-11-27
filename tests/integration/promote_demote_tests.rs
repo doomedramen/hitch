@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::types::HitchConfig;
 
@@ -9,7 +10,7 @@ mod tests {
     fn test_hitch_promote_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -50,7 +51,7 @@ mod tests {
     fn test_hitch_demote_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote a branch
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -97,7 +98,7 @@ mod tests {
     fn test_hitch_promote_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to promote without initializing hitch
             let result = env
                 .hitch
@@ -118,7 +119,7 @@ mod tests {
     fn test_hitch_demote_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to demote without initializing hitch
             let result = env
                 .hitch
@@ -139,7 +140,7 @@ mod tests {
     fn test_hitch_promote_nonexistent_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -163,7 +164,7 @@ mod tests {
     fn test_hitch_demote_nonexistent_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -187,7 +188,7 @@ mod tests {
     fn test_hitch_promote_demote_workflow() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch

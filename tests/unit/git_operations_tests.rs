@@ -6,6 +6,7 @@
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::framework::TestSetup;
 use crate::test_framework::*;
 use hitch::utils::git_operations::GitOperations;
 
@@ -19,7 +20,7 @@ mod tests {
     fn test_git_operations_new_in_repo() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize git repo first
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
@@ -38,7 +39,7 @@ mod tests {
     fn test_git_operations_new_at_path() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize git repo first
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
@@ -57,7 +58,7 @@ mod tests {
     fn test_git_operations_new_outside_repo_fails() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|_env| {
+        let _ = framework.with_test_environment(TestSetup::None, |_env| {
             // Don't initialize git repo - should fail
             let result = GitOperations::new();
             assert!(result.is_err());
@@ -74,7 +75,7 @@ mod tests {
     fn test_run_git_command_success() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -94,7 +95,7 @@ mod tests {
     fn test_run_git_command_failure() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -117,7 +118,7 @@ mod tests {
     fn test_get_current_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -137,7 +138,7 @@ mod tests {
     fn test_checkout_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -160,7 +161,7 @@ mod tests {
     fn test_checkout_nonexistent_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -180,7 +181,7 @@ mod tests {
     fn test_create_orphan_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -205,7 +206,7 @@ mod tests {
     fn test_create_branch_from() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -230,7 +231,7 @@ mod tests {
     fn test_rename_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -256,7 +257,7 @@ mod tests {
     fn test_delete_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -281,7 +282,7 @@ mod tests {
     fn test_delete_current_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -308,7 +309,7 @@ mod tests {
     fn test_force_delete_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -339,7 +340,7 @@ mod tests {
     fn test_branch_exists() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -365,7 +366,7 @@ mod tests {
     fn test_branch_exists_anywhere() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -389,7 +390,7 @@ mod tests {
     fn test_add_and_commit() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -413,7 +414,7 @@ mod tests {
     fn test_add_and_commit_empty_files() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -433,7 +434,7 @@ mod tests {
     fn test_read_file_from_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -457,7 +458,7 @@ mod tests {
     fn test_read_nonexistent_file_from_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -477,7 +478,7 @@ mod tests {
     fn test_write_file() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -500,7 +501,7 @@ mod tests {
     fn test_commit() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -523,7 +524,7 @@ mod tests {
     fn test_commit_nothing_to_commit() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -545,7 +546,7 @@ mod tests {
     fn test_is_working_directory_clean() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -572,7 +573,7 @@ mod tests {
     fn test_clean_working_directory() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -598,7 +599,7 @@ mod tests {
     fn test_fetch_branch_no_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -618,7 +619,7 @@ mod tests {
     fn test_fetch_all_remotes_no_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -638,7 +639,7 @@ mod tests {
     fn test_push_branch_no_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -658,7 +659,7 @@ mod tests {
     fn test_force_push_branch_no_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -680,7 +681,7 @@ mod tests {
     fn test_squash_merge() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -714,7 +715,7 @@ mod tests {
     fn test_squash_merge_no_changes() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -741,7 +742,7 @@ mod tests {
     fn test_check_merge_conflicts_no_conflicts() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -772,7 +773,7 @@ mod tests {
     fn test_check_merge_conflicts_with_conflicts() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -812,7 +813,7 @@ mod tests {
     fn test_get_conflicted_files() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -832,7 +833,7 @@ mod tests {
     fn test_abort_merge_and_clean() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -857,7 +858,7 @@ mod tests {
     fn test_create_local_branch_from_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -879,7 +880,7 @@ mod tests {
     fn test_synchronize_branches() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -907,7 +908,7 @@ mod tests {
     fn test_create_tag() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -935,7 +936,7 @@ mod tests {
     fn test_push_tag_no_remote() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -961,7 +962,7 @@ mod tests {
     fn test_is_branch_merged_into() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -988,7 +989,7 @@ mod tests {
     fn test_get_user_email() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1007,7 +1008,7 @@ mod tests {
     fn test_get_user_email_not_configured() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             // Don't configure user
 
@@ -1026,7 +1027,7 @@ mod tests {
     fn test_get_branch_commit_sha() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1050,7 +1051,7 @@ mod tests {
     fn test_get_commit_timestamp() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1078,7 +1079,7 @@ mod tests {
     fn test_get_commit_timestamp_invalid_sha() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1100,7 +1101,7 @@ mod tests {
     fn test_complete_feature_branch_workflow() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1154,7 +1155,7 @@ mod tests {
     fn test_branch_management_edge_cases() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
@@ -1192,7 +1193,7 @@ mod tests {
     fn test_error_handling_and_recovery() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 

@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::types::HitchConfig;
 
@@ -9,7 +10,7 @@ mod tests {
     fn test_hitch_rebuild_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -58,7 +59,7 @@ mod tests {
     fn test_hitch_rebuild_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to rebuild without initializing hitch
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
@@ -75,7 +76,7 @@ mod tests {
     fn test_hitch_rebuild_nonexistent_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -99,7 +100,7 @@ mod tests {
     fn test_hitch_rebuild_empty_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -129,7 +130,7 @@ mod tests {
     fn test_hitch_rebuild_locked_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote branches
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -175,7 +176,7 @@ mod tests {
     fn test_hitch_rebuild_locked_environment_force() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote branches
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -229,7 +230,7 @@ mod tests {
     fn test_hitch_rebuild_multiple_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add multiple environments
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -290,7 +291,7 @@ mod tests {
     fn test_hitch_rebuild_with_conflicts() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -343,7 +344,7 @@ mod tests {
     fn test_hitch_rebuild_multiple_times() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch

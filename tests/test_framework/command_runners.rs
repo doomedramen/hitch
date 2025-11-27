@@ -14,19 +14,21 @@ use std::process::{Command, Output};
 #[derive(Debug, Clone)]
 pub struct HitchCommandRunner {
     binary_path: std::path::PathBuf,
+    current_dir: std::path::PathBuf,
 }
 
 impl HitchCommandRunner {
     /// Create a new Hitch command runner
-    pub fn new(binary_path: &std::path::Path) -> Self {
+    pub fn new(binary_path: &std::path::Path, current_dir: &std::path::Path) -> Self {
         HitchCommandRunner {
             binary_path: binary_path.to_path_buf(),
+            current_dir: current_dir.to_path_buf(),
         }
     }
 
     /// Start building a hitch command
     pub fn run(&self) -> HitchCommandBuilder<'_> {
-        HitchCommandBuilder::new(&self.binary_path)
+        HitchCommandBuilder::new(&self.binary_path).current_dir(&self.current_dir)
     }
 
     /// Run hitch command with arguments directly (simpler API)
@@ -108,7 +110,7 @@ impl<'a> HitchCommandBuilder<'a> {
             cmd.current_dir(dir);
         }
 
-        for (key, value) in self.env {
+        for (key, value) in &self.env {
             cmd.env(key, value);
         }
 

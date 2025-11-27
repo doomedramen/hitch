@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::types::HitchConfig;
 
@@ -9,7 +10,7 @@ mod tests {
     fn test_hitch_lock_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -41,7 +42,7 @@ mod tests {
     fn test_hitch_unlock_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -83,7 +84,7 @@ mod tests {
     fn test_hitch_lock_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to lock without initializing hitch
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
             result
@@ -100,7 +101,7 @@ mod tests {
     fn test_hitch_unlock_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Try to unlock without initializing hitch
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
             result
@@ -117,7 +118,7 @@ mod tests {
     fn test_hitch_lock_nonexistent_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -137,7 +138,7 @@ mod tests {
     fn test_hitch_unlock_nonexistent_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -157,7 +158,7 @@ mod tests {
     fn test_hitch_lock_already_locked() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -187,7 +188,7 @@ mod tests {
     fn test_hitch_unlock_already_unlocked() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment (but don't lock it)
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -210,7 +211,7 @@ mod tests {
     fn test_hitch_lock_multiple_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add multiple environments
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -248,7 +249,7 @@ mod tests {
     fn test_hitch_unlock_multiple_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environments, and lock them
             env.hitch.run().args(&["init"]).execute()?.assert_success();
 
@@ -298,7 +299,7 @@ mod tests {
     fn test_hitch_lock_with_promoted_branches() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote branches
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -348,7 +349,7 @@ mod tests {
     fn test_hitch_lock_workflow() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -407,7 +408,7 @@ mod tests {
     fn test_hitch_lock_prevents_operations() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
@@ -459,7 +460,7 @@ mod tests {
     fn test_hitch_unlock_allows_operations() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
-        let _ = framework.with_test_environment(|env| {
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and lock it
             env.hitch.run().args(&["init"]).execute()?.assert_success();
             env.hitch
