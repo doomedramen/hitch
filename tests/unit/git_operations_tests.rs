@@ -26,7 +26,7 @@ mod tests {
             env.git.config_user("Test User", "test@example.com")?;
 
             // Test GitOperations initialization
-            let _git_ops = GitOperations::new()?;
+            let _git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
             // If we got here, initialization succeeded
 
             Ok::<(), anyhow::Error>(())
@@ -79,7 +79,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Test a simple git command
             let output = git_ops.run_git_command(&["status"])?;
@@ -99,7 +99,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Test an invalid git command
             let output = git_ops.run_git_command(&["invalid-command"])?;
@@ -122,7 +122,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Test getting current branch (should be main by default)
             let current_branch = git_ops.get_current_branch()?;
@@ -142,7 +142,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and checkout a new branch
             git_ops.create_branch_from("feature", "main")?;
@@ -165,7 +165,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to checkout non-existent branch
             let result = git_ops.checkout_branch("nonexistent");
@@ -185,7 +185,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create orphan branch
             git_ops.create_orphan_branch("orphan")?;
@@ -210,7 +210,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create a file on main branch
             git_ops.write_file("test.txt", "content")?;
@@ -235,7 +235,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create initial branch
             git_ops.create_branch_from("old-name", "main")?;
@@ -261,7 +261,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create branch
             git_ops.create_branch_from("to-delete", "main")?;
@@ -286,7 +286,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and checkout branch
             git_ops.create_branch_from("current", "main")?;
@@ -313,7 +313,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create branch with commits
             git_ops.create_branch_from("feature", "main")?;
@@ -344,7 +344,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Check main branch exists
             assert!(git_ops.branch_exists("main")?);
@@ -370,7 +370,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Test local branch
             assert!(git_ops.branch_exists_anywhere("main")?);
@@ -394,7 +394,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and commit files
             git_ops.write_file("test1.txt", "content1")?;
@@ -418,7 +418,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to add non-existent files
             let result = git_ops.add_and_commit(&["nonexistent.txt"], "Test commit");
@@ -438,7 +438,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and commit file
             git_ops.write_file("test.txt", "hello world")?;
@@ -462,7 +462,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to read non-existent file
             let result = git_ops.read_file_from_branch("main", "nonexistent.txt");
@@ -482,7 +482,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Write file
             git_ops.write_file("test.txt", "test content")?;
@@ -505,7 +505,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Stage and commit
             git_ops.write_file("test.txt", "content")?;
@@ -528,7 +528,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to commit with nothing staged
             let result = git_ops.commit("Empty commit");
@@ -550,7 +550,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Initially clean
             assert!(git_ops.is_working_directory_clean()?);
@@ -577,7 +577,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create uncommitted changes
             git_ops.write_file("test.txt", "content")?;
@@ -603,7 +603,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to fetch without remote - should not fail
             let result = git_ops.fetch_branch("main");
@@ -623,7 +623,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to fetch all remotes without remote - should not fail
             let result = git_ops.fetch_all_remotes();
@@ -643,7 +643,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to push without remote - should fail
             let result = git_ops.push_branch("main");
@@ -663,7 +663,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try to force push without remote - should fail
             let result = git_ops.force_push_branch("main");
@@ -685,7 +685,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and commit file on main
             git_ops.write_file("base.txt", "base content")?;
@@ -719,7 +719,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create base commit
             git_ops.write_file("base.txt", "base content")?;
@@ -746,7 +746,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create base
             git_ops.write_file("base.txt", "base content")?;
@@ -777,7 +777,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create base with file
             git_ops.write_file("conflict.txt", "base content")?;
@@ -817,7 +817,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Initially no conflicts
             let conflicted_files = git_ops.get_conflicted_files()?;
@@ -837,7 +837,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create some state and clean it
             git_ops.write_file("test.txt", "content")?;
@@ -862,7 +862,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // If branch already exists locally, should not fail
             git_ops.create_local_branch_from_remote("main")?;
@@ -884,7 +884,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create local branches
             git_ops.create_branch_from("dev", "main")?;
@@ -912,7 +912,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create a commit first
             git_ops.write_file("test.txt", "content")?;
@@ -940,7 +940,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create and try to push tag without remote
             git_ops.write_file("test.txt", "content")?;
@@ -966,7 +966,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Main is always "merged" into itself
             assert!(git_ops.is_branch_merged_into("main", "main")?);
@@ -993,7 +993,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             let email = git_ops.get_user_email()?;
             assert_eq!(email, "test@example.com");
@@ -1012,7 +1012,7 @@ mod tests {
             env.git.init()?;
             // Don't configure user
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             let result = git_ops.get_user_email();
             assert!(result.is_err());
@@ -1031,7 +1031,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create commit
             git_ops.write_file("test.txt", "content")?;
@@ -1055,7 +1055,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create commit
             git_ops.write_file("test.txt", "content")?;
@@ -1083,7 +1083,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Try with invalid SHA
             let result = git_ops.get_commit_timestamp("invalid");
@@ -1105,7 +1105,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Setup main branch
             git_ops.write_file("README.md", "# Project")?;
@@ -1159,7 +1159,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Create commit on main
             git_ops.write_file("base.txt", "base")?;
@@ -1197,7 +1197,7 @@ mod tests {
             env.git.init()?;
             env.git.config_user("Test User", "test@example.com")?;
 
-            let git_ops = GitOperations::new()?;
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
             // Test various error conditions
 
