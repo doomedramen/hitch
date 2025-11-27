@@ -47,7 +47,7 @@ pre-push:
 
     # Run tests if they exist
     test:
-      run: cargo test --all-targets --all-features --release || echo "No tests to run"
+      run: cargo test --all-targets --all-features --release -- --test-threads=1 || echo "No tests to run"
       fail_text: |
         🚨 Tests failed!
 
