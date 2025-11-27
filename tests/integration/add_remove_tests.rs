@@ -4,7 +4,7 @@
 mod tests {
     use crate::test_framework::framework::TestSetup;
     use crate::test_framework::*;
-    
+
     #[test]
     fn test_hitch_add_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
