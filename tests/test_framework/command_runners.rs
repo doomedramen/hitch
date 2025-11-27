@@ -108,9 +108,6 @@ impl<'a> HitchCommandBuilder<'a> {
 
         if let Some(dir) = &self.current_dir {
             cmd.current_dir(dir);
-            // Debug: Print working directory for test isolation debugging
-            eprintln!("DEBUG: Hitch command executing in directory: {}", dir.display());
-            eprintln!("DEBUG: Command args: {:?}", self.args);
         }
 
         for (key, value) in &self.env {

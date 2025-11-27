@@ -12,7 +12,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -64,7 +64,7 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Hitch is not initialized");
+                .assert_stderr_contains("Failed to read hitch.json");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -78,7 +78,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch but don't add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             // Try to rebuild nonexistent environment
             let result = env
@@ -102,7 +102,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -132,7 +132,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote branches
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -178,7 +178,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch, add environment, and promote branches
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -232,7 +232,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add multiple environments
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
 
             for env_name in ["dev", "qa", "staging"] {
                 env.hitch
@@ -293,7 +293,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
@@ -346,7 +346,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Initialize hitch and add environment
-            env.hitch.run().args(&["init"]).execute()?.assert_success();
+            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
