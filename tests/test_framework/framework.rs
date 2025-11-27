@@ -130,8 +130,9 @@ impl HitchTestFramework {
     where
         F: FnOnce(&TestEnvironment) -> R,
     {
-        // Store temp dir path to prevent early cleanup
-        let temp_dir_path = self.temp_dir.path().to_path_buf();
+        // Create a new temp dir for this specific test to control cleanup timing
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+        let temp_dir_path = temp_dir.path().to_path_buf();
 
         // Change to temporary directory
         env::set_current_dir(&temp_dir_path).expect("Failed to change to temp directory");
@@ -187,12 +188,12 @@ impl HitchTestFramework {
         }
 
         // Execute test closure and catch panics to ensure directory restoration
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            test_fn(&test_env)
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test_fn(&test_env)));
 
-        // Restore original working directory before temp dir cleanup
+        // Restore original working directory BEFORE temp_dir goes out of scope and gets cleaned up
         env::set_current_dir(&self.original_cwd).expect("Failed to restore original directory");
+
+        // temp_dir gets cleaned up here, after we've restored the working directory
 
         // Return the result or re-panic if the test panicked
         match result {
