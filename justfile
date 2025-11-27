@@ -185,7 +185,7 @@ release:
     echo "🔍 Running pre-flight checks..."
     cargo fmt --all -- --check
     cargo clippy --all-targets --all-features -- -D warnings
-    cargo test --all-targets --all-features --release
+    cargo test --all-targets --all-features --release -- --test-threads=1
 
     # Now that everything passes, update version
     echo "📝 Updating version..."
