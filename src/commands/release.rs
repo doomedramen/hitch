@@ -100,10 +100,13 @@ fn resolve_target_branch(
     }
 
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = config
-        .environments
-        .get(env_name)
-        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
+    let environment = config.environments.get(env_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Environment '{}' does not exist. Available environments: {}",
+            env_name,
+            config.get_environment_names().join(", ")
+        )
+    })?;
 
     let target = target_override.unwrap_or_else(|| environment.base.clone());
 
@@ -136,10 +139,13 @@ fn perform_release_core(
     target_branch: &str,
 ) -> Result<()> {
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = config
-        .environments
-        .get(env_name)
-        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
+    let environment = config.environments.get(env_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Environment '{}' does not exist. Available environments: {}",
+            env_name,
+            config.get_environment_names().join(", ")
+        )
+    })?;
 
     if environment.branches.is_empty() {
         context.log_info(&format!(
@@ -311,10 +317,13 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
 
     // Get environment details to show user what will be released
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = config
-        .environments
-        .get(env_name)
-        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
+    let environment = config.environments.get(env_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Environment '{}' does not exist. Available environments: {}",
+            env_name,
+            config.get_environment_names().join(", ")
+        )
+    })?;
 
     context.log_info("🚨 DANGEROUS OPERATION DETECTED!");
     context.log_info(&format!(

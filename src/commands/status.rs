@@ -350,12 +350,12 @@ enum RebuildStatus {
 
 /// Determine if an environment needs rebuilding
 fn determine_rebuild_status(context: &GlobalContext, env: &Environment) -> Result<RebuildStatus> {
-    // If never rebuilt, it needs rebuilding
-    if env.rebuilt_at.is_none() {
-        return Ok(RebuildStatus::NeverRebuilt);
-    }
+    // Return early if never rebuilt
+    let rebuilt_at = match env.rebuilt_at {
+        Some(timestamp) => timestamp,
+        None => return Ok(RebuildStatus::NeverRebuilt),
+    };
 
-    let rebuilt_at = env.rebuilt_at.unwrap();
     let mut newer_branches = Vec::new();
 
     // Check base branch

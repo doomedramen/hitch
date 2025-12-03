@@ -97,8 +97,99 @@ impl HitchConfig {
         }
     }
 
-    pub fn add_environment(&mut self, name: String, environment: Environment) {
+    /// Validate the configuration for common issues
+    /// Returns Ok(()) if valid, Err with description if invalid
+    pub fn validate(&self) -> Result<(), String> {
+        // Validate environment names
+        for env_name in self.environments.keys() {
+            if env_name.is_empty() {
+                return Err("Environment name cannot be empty".to_string());
+            }
+            if env_name.contains(' ') {
+                return Err(format!("Environment '{}' cannot contain spaces", env_name));
+            }
+            if env_name.to_lowercase() == "hitch-metadata" {
+                return Err("Environment name 'hitch-metadata' is reserved".to_string());
+            }
+        }
+
+        // Validate each environment
+        for (env_name, env) in &self.environments {
+            // Base branch validation
+            if env.base.is_empty() {
+                return Err(format!(
+                    "Environment '{}' has an empty base branch",
+                    env_name
+                ));
+            }
+
+            // Check for circular dependencies
+            if env.branches.contains(&env.base) {
+                return Err(format!(
+                    "Environment '{}' has its base branch '{}' in its promoted branches list",
+                    env_name, env.base
+                ));
+            }
+
+            // Validate branch names
+            for branch in &env.branches {
+                if branch.is_empty() {
+                    return Err(format!(
+                        "Environment '{}' has an empty branch in its list",
+                        env_name
+                    ));
+                }
+                if branch == env_name {
+                    return Err(format!(
+                        "Environment '{}' has itself in its promoted branches list",
+                        env_name
+                    ));
+                }
+            }
+
+            // Check for duplicate branches in the same environment
+            let mut seen_branches = std::collections::HashSet::new();
+            for branch in &env.branches {
+                if !seen_branches.insert(branch) {
+                    return Err(format!(
+                        "Environment '{}' has duplicate branch '{}' in its list",
+                        env_name, branch
+                    ));
+                }
+            }
+        }
+
+        // Cross-environment validation
+        // Check for environments that share base branches (might be intentional, but warn)
+        let mut base_branch_usage = std::collections::HashMap::new();
+        for (env_name, env) in &self.environments {
+            base_branch_usage
+                .entry(env.base.clone())
+                .or_insert_with(Vec::new)
+                .push(env_name.clone());
+        }
+
+        // Note: Multiple environments can share base branches (this is allowed)
+        // The base_branch_usage map could be used for validation or reporting if needed
+
+        Ok(())
+    }
+
+    pub fn add_environment(
+        &mut self,
+        name: String,
+        environment: Environment,
+    ) -> Result<(), String> {
+        // Validate the environment before adding
+        let mut temp_config = self.clone();
+        temp_config
+            .environments
+            .insert(name.clone(), environment.clone());
+        temp_config.validate()?;
+
+        // If validation passes, add to actual config
         self.environments.insert(name, environment);
+        Ok(())
     }
 
     pub fn remove_environment(&mut self, name: &str) {

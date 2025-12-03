@@ -266,7 +266,7 @@ mod tests {
         let mut config = HitchConfig::new();
         let env = Environment::new("main".to_string());
 
-        config.add_environment("dev".to_string(), env);
+let _ =         config.add_environment("dev".to_string(), env);
 
         assert_eq!(config.environments.len(), 1);
         assert!(config.environment_exists("dev"));
@@ -281,7 +281,7 @@ mod tests {
         let env = Environment::new("main".to_string());
 
         // Add environment
-        config.add_environment("dev".to_string(), env);
+let _ =         config.add_environment("dev".to_string(), env);
         assert_eq!(config.environments.len(), 1);
 
         // Remove environment
@@ -312,7 +312,7 @@ mod tests {
         assert!(config.get_environment("dev").is_none());
 
         // Add environment
-        config.add_environment("dev".to_string(), env);
+let _ =         config.add_environment("dev".to_string(), env);
 
         // Test getting existing environment
         let retrieved = config.get_environment("dev").unwrap();
@@ -330,7 +330,7 @@ mod tests {
         assert!(config.get_environment_mut("dev").is_none());
 
         // Add environment
-        config.add_environment("dev".to_string(), env);
+let _ =         config.add_environment("dev".to_string(), env);
 
         // Test getting mutable reference and modifying
         {
@@ -356,7 +356,7 @@ mod tests {
         assert!(!config.environment_exists("dev"));
 
         // Add environment
-        config.add_environment("dev".to_string(), env);
+let _ =         config.add_environment("dev".to_string(), env);
         assert!(config.environment_exists("dev"));
 
         Ok(())
@@ -370,9 +370,9 @@ mod tests {
         assert!(config.get_environment_names().is_empty());
 
         // Add multiple environments
-        config.add_environment("dev".to_string(), Environment::new("main".to_string()));
-        config.add_environment("qa".to_string(), Environment::new("main".to_string()));
-        config.add_environment("prod".to_string(), Environment::new("main".to_string()));
+let _ =         config.add_environment("dev".to_string(), Environment::new("main".to_string()));
+let _ =         config.add_environment("qa".to_string(), Environment::new("main".to_string()));
+let _ =         config.add_environment("prod".to_string(), Environment::new("main".to_string()));
 
         let names = config.get_environment_names();
         assert_eq!(names.len(), 3);
@@ -388,9 +388,9 @@ mod tests {
         let mut config = HitchConfig::new();
 
         // Add multiple environments
-        config.add_environment("dev".to_string(), Environment::new("develop".to_string()));
-        config.add_environment("qa".to_string(), Environment::new("main".to_string()));
-        config.add_environment("prod".to_string(), Environment::new("main".to_string()));
+let _ =         config.add_environment("dev".to_string(), Environment::new("develop".to_string()));
+let _ =         config.add_environment("qa".to_string(), Environment::new("main".to_string()));
+let _ =         config.add_environment("prod".to_string(), Environment::new("main".to_string()));
 
         // Modify environments
         {
@@ -456,9 +456,9 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             let mut original_config = HitchConfig::new();
-            original_config
+            let _ = original_config
                 .add_environment("dev".to_string(), Environment::new("develop".to_string()));
-            original_config
+            let _ = original_config
                 .add_environment("prod".to_string(), Environment::new("main".to_string()));
 
             // Serialize to JSON
@@ -564,7 +564,7 @@ mod tests {
         ];
 
         for name in &special_names {
-            config.add_environment(name.to_string(), Environment::new("main".to_string()));
+let _ =             config.add_environment(name.to_string(), Environment::new("main".to_string()));
             assert!(config.environment_exists(name));
         }
 

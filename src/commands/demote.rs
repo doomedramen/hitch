@@ -98,9 +98,14 @@ fn demote_branch_from_environment(
 
     // Modify metadata to remove the branch
     crate::utils::prelude::modify_metadata(context, |config| {
-        let environment = config
-            .get_environment_mut(env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
+        let available_envs = config.get_environment_names().join(", ");
+        let environment = config.get_environment_mut(env_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Environment '{}' not found in hitch configuration. Available environments: {}",
+                env_name,
+                available_envs
+            )
+        })?;
 
         // Remove the branch from the environment's branches list
         environment.remove_branch(branch);

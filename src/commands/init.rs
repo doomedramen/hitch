@@ -52,7 +52,9 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
 
             for env_name in env_names {
                 let env = Environment::new("main".to_string()); // Default to main as per spec
-                config.add_environment(env_name.clone(), env);
+                config.add_environment(env_name.clone(), env).map_err(|e| {
+                    anyhow::anyhow!("Failed to add environment '{}': {}", env_name, e)
+                })?;
             }
         }
 

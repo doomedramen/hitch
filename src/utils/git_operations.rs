@@ -36,7 +36,11 @@ impl GitOperations {
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
-        cmd.output().context("Failed to execute git command")
+        cmd.output().context(format!(
+            "Failed to execute git command: git {} in repository at {}",
+            args.join(" "),
+            self.repo_path
+        ))
     }
 
     /// Run multiple git commands sequentially, returning early on first failure
@@ -56,6 +60,16 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Get the current branch name, handling special cases properly
+    ///
+    /// This function handles:
+    /// - Normal branches: Returns the branch name
+    /// - Orphan branches: Returns the branch name
+    /// - Detached HEAD: Returns "detached-HEAD-abcdef1" where abcdef1 is the first 7 chars of the commit hash
+    ///
+    /// # Returns
+    /// - `Ok(String)`: Branch name or special detached HEAD identifier
+    /// - `Err(anyhow::Error)`: If git commands fail
     pub fn get_current_branch(&self) -> Result<String> {
         // Use git command to handle orphan branches properly
         let output = self.run_git_command(&["branch", "--show-current"])?;
@@ -100,6 +114,22 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Create an orphan branch (a branch with no history)
+    ///
+    /// An orphan branch is a branch that starts with no commits and no history.
+    /// This is used for the hitch-metadata branch to store configuration separately
+    /// from the main project history.
+    ///
+    /// # Process
+    /// 1. Creates orphan branch with --orphan flag
+    /// 2. Removes all files from the working directory (since orphan branches start clean)
+    ///
+    /// # Arguments
+    /// - `branch_name`: Name of the orphan branch to create
+    ///
+    /// # Returns
+    /// - `Ok(())`: Orphan branch created and cleaned
+    /// - `Err(anyhow::Error)`: If git commands fail
     pub fn create_orphan_branch(&self, branch_name: &str) -> Result<()> {
         let output = self.run_git_command(&["checkout", "--orphan", branch_name])?;
 
@@ -111,10 +141,11 @@ impl GitOperations {
             ));
         }
 
-        // Clean working directory
-        let _ = self
-            .run_git_command(&["rm", "-rf", "."])
-            .context("Failed to clean working directory")?;
+        // Clean working directory after creating orphan branch
+        let _ = self.run_git_command(&["rm", "-rf", "."]).context(format!(
+            "Failed to clean working directory after creating orphan branch '{}'",
+            branch_name
+        ))?;
 
         Ok(())
     }
@@ -161,7 +192,10 @@ impl GitOperations {
             ));
         }
 
-        let content = String::from_utf8(output.stdout).context("Failed to parse file content")?;
+        let content = String::from_utf8(output.stdout).context(format!(
+            "Failed to parse file content: '{}' from branch '{}' (file may contain binary data)",
+            file, branch
+        ))?;
 
         Ok(content)
     }
@@ -172,6 +206,21 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Fetch a specific branch from the remote origin
+    ///
+    /// This function attempts to fetch a specific branch from the origin remote.
+    /// It's designed to be graceful about failures - if the fetch fails due to
+    /// no remote or branch not existing remotely, it continues without error.
+    ///
+    /// This is important because Hitch should work in offline mode or with
+    /// local-only repositories.
+    ///
+    /// # Arguments
+    /// - `branch`: Branch name to fetch from origin
+    ///
+    /// # Returns
+    /// - `Ok(())`: Always returns Ok (even if fetch fails for expected reasons)
+    /// - `Err(anyhow::Error)`: Only for unexpected errors
     pub fn fetch_branch(&self, branch: &str) -> Result<()> {
         let output = self.run_git_command(&["fetch", "origin", branch])?;
 
@@ -436,6 +485,23 @@ impl GitOperations {
     }
 
     /// Squash merge a branch into the current branch
+    ///
+    /// This function performs a squash merge which combines all changes from the source branch
+    /// into the current branch as a single commit. It's used during environment rebuilds.
+    ///
+    /// # Process
+    /// 1. Stages changes from source branch without committing (--squash)
+    /// 2. Adds any untracked files to ensure complete state capture
+    /// 3. Checks if there are actually changes to commit (handles no-op merges)
+    /// 4. Creates a single commit with the provided message, bypassing git hooks
+    ///
+    /// # Arguments
+    /// - `source_branch`: Branch to squash merge into the current branch
+    /// - `message`: Commit message for the squash merge
+    ///
+    /// # Returns
+    /// - `Ok(())`: Merge succeeded (or was a no-op)
+    /// - `Err(anyhow::Error)`: If any git command fails
     pub fn squash_merge(&self, source_branch: &str, message: &str) -> Result<()> {
         let output = self.run_git_command(&["merge", "--squash", source_branch])?;
 
@@ -619,8 +685,20 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Synchronize branches: ensure all specified branches are available locally
-    /// This will fetch all remotes and create local branches from remote tracking branches as needed
+    /// Synchronize branches to ensure they're available locally
+    ///
+    /// This function ensures all specified branches exist locally by:
+    /// 1. Fetching all remotes to get latest updates
+    /// 2. Creating local branches from remote tracking branches if they don't exist locally
+    ///
+    /// This is critical before operations like rebuild to ensure we have all necessary branches.
+    ///
+    /// # Arguments
+    /// - `branches`: List of branch names to ensure are available locally
+    ///
+    /// # Returns
+    /// - `Ok(())`: All branches are now available locally
+    /// - `Err(anyhow::Error)`: If fetch or branch creation fails
     pub fn synchronize_branches(&self, branches: &[String]) -> Result<()> {
         // First, fetch all remote branches to get latest updates
         self.fetch_all_remotes()?;

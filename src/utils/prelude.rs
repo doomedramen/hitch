@@ -1,5 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
+use crate::utils::progress::{ConsoleProgressReporter, StepProgress};
 use anyhow::{Context, Result};
 
 /// Reusable pre-check function for all commands
@@ -137,7 +138,15 @@ where
     let config: HitchConfig =
         serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
 
-    context.log_verbose("✓ hitch.json loaded successfully (read-only)");
+    // Validate configuration
+    if let Err(validation_error) = config.validate() {
+        return Err(anyhow::anyhow!(
+            "Configuration validation failed: {}",
+            validation_error
+        ));
+    }
+
+    context.log_verbose("✓ hitch.json loaded and validated successfully (read-only)");
 
     // Execute user closure with read-only access
     closure(&config)
@@ -159,9 +168,11 @@ where
     context.log_verbose("Accessing hitch metadata...");
 
     // Check if we're already on hitch-metadata branch (for init case)
-    let current_branch = context.git().get_current_branch();
-    let already_on_metadata_branch =
-        current_branch.is_ok() && current_branch.unwrap() == "hitch-metadata";
+    let already_on_metadata_branch = context
+        .git()
+        .get_current_branch()
+        .map(|branch| branch == "hitch-metadata")
+        .unwrap_or(false);
 
     if !already_on_metadata_branch {
         // Fetch latest hitch-metadata from remote
@@ -178,21 +189,33 @@ where
     let modification_closure = || {
         // Load and parse hitch.json
         context.log_verbose("Loading hitch.json...");
-        let config_json = context
+        let config_json = match context
             .git()
             .read_file_from_branch("hitch-metadata", "hitch.json")
-            .unwrap_or_else(|e| {
+        {
+            Ok(content) => content,
+            Err(e) => {
                 // If file doesn't exist, create default config
                 context.log_info(&format!(
                     "hitch.json not found or unreadable ({}), creating default configuration",
                     e
                 ));
                 let default_config = HitchConfig::new();
-                serde_json::to_string_pretty(&default_config).unwrap()
-            });
+                serde_json::to_string_pretty(&default_config)
+                    .context("Failed to serialize default hitch configuration")?
+            }
+        };
 
         let mut config: HitchConfig =
             serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
+
+        // Validate configuration
+        if let Err(validation_error) = config.validate() {
+            return Err(anyhow::anyhow!(
+                "Configuration validation failed: {}",
+                validation_error
+            ));
+        }
 
         context.log_verbose("✓ hitch.json loaded successfully");
 
@@ -332,6 +355,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     ));
 
     // Record original branch for cleanup - this is the branch the user was on when we started
+    // We always return users to their original branch, even if the rebuild fails
     let user_original_branch = context.git().get_current_branch()?;
     context.log_verbose(&format!(
         "Recorded user's original branch: {}",
@@ -339,35 +363,59 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     ));
     let mut cleanup_needed = false;
 
-    // Get environment configuration
+    // Get environment configuration to understand how to rebuild
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = config
         .environments
         .get(env_name)
         .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
 
-    // Step 2: Prepare temp branch
+    // Set up progress tracking
+    let base_steps = 4; // Initialize, create temp, merge/replace, cleanup
+    let merge_steps = if environment.branches.is_empty() {
+        1
+    } else {
+        environment.branches.len()
+    };
+    let total_steps = base_steps + merge_steps;
+    let mut progress = StepProgress::new(
+        format!("Rebuilding environment '{}'", env_name),
+        total_steps,
+        Box::new(ConsoleProgressReporter::new(context.verbose)),
+    );
+
+    // Step 1: Initialize
+    progress.step("Initializing rebuild".to_string());
+
+    // Step 2: Prepare temp branch with timestamp to avoid conflicts
+    // The temp branch allows us to build the new environment state without affecting the real branch
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let temp_branch = format!("hitch-tmp-{}-{}", environment.base, timestamp);
 
+    // Use a closure to ensure proper cleanup even if an error occurs
     let result = (|| -> Result<()> {
-        context.log_info(&format!(
-            "Creating temporary branch '{}' from '{}'",
-            temp_branch, environment.base
+        progress.step(format!(
+            "Creating temporary branch from '{}'",
+            environment.base
         ));
         create_temp_branch_for_rebuild(context, &temp_branch, &environment.base)?;
-        cleanup_needed = true;
+        cleanup_needed = true; // Mark that we have something to clean up
 
-        // Step 3: Merge branches into temp branch
+        // Step 3: Merge all promoted branches into temp branch using squash merges
+        // Squash merges combine all changes without creating merge commits, keeping history clean
         if !environment.branches.is_empty() {
-            context.log_info("Merging promoted branches into temporary branch...");
+            progress.step(format!(
+                "Merging {} promoted branches",
+                environment.branches.len()
+            ));
             perform_squash_merges_for_rebuild(context, &temp_branch, &environment.branches)?;
         } else {
-            context.log_info("No branches promoted to this environment, using base branch only");
+            progress.step("No promoted branches to merge".to_string());
         }
 
-        // Step 4: Replace environment branch with temp branch
-        context.log_info(&format!(
+        // Step 4: Replace the real environment branch with our rebuilt temp branch
+        // This creates a backup first, then atomically replaces the branch
+        progress.step(format!(
             "Replacing '{}' branch with rebuilt content",
             env_name
         ));
@@ -377,8 +425,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         // Update rebuiltAt timestamp on success
         update_rebuilt_timestamp_for_rebuild(context, env_name)?;
 
-        // Cleanup: delete backup branch (force delete since it's a backup we don't need)
-        // Only try to delete if the backup branch actually exists
+        // Cleanup Step 1: Delete backup branch (it was created as a safety net during replacement)
+        // We use force delete since the backup might have been merged or have other references
         let mut cleanup_errors = Vec::new();
         if context.git().branch_exists(&backup_branch)? {
             context.log_verbose(&format!("Cleaning up backup branch '{}'", backup_branch));
@@ -395,9 +443,12 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             ));
         }
 
-        // Cleanup: delete temp branch (try regular delete first, then force if needed)
+        // Cleanup Step 2: Delete the temporary branch we used for rebuilding
+        // Try regular delete first (if branch is fully merged), then force delete if needed
         context.log_verbose(&format!("Cleaning up temporary branch '{}'", temp_branch));
         if let Err(_e) = context.git().delete_branch(&temp_branch, false) {
+            // Regular delete failed, likely because branch wasn't merged
+            // Try force delete to remove it anyway
             context.log_verbose(&format!(
                 "Regular delete failed, trying force delete for '{}'",
                 temp_branch
@@ -426,31 +477,35 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             }
         }
 
-        cleanup_needed = false;
+        cleanup_needed = false; // Mark that cleanup is complete
         Ok(())
     })();
 
-    // Ensure cleanup happens even if rebuild fails
+    // CRITICAL: Ensure cleanup happens even if rebuild fails
+    // This is the error recovery path - we must always clean up temp branches
+    // and return the user to their original branch
     if cleanup_needed {
         context.log_warning("Rebuild failed, performing cleanup...");
 
-        // Return to user's original branch if we're not already there
+        // Determine current branch to decide if we need to switch back
         let current_branch = match context.git().get_current_branch() {
             Ok(branch) => branch,
             Err(_) => {
                 context.log_error("Failed to get current branch during cleanup");
+                // Assume we need to switch back if we can't determine current branch
                 user_original_branch.clone()
             }
         };
 
+        // If we're not on the user's original branch, we need to switch back
         if current_branch != user_original_branch {
             context.log_info(&format!(
                 "Returning to user's original branch '{}'",
                 user_original_branch
             ));
 
-            // First, abort any ongoing merge and reset working directory to clean state
-            // This is necessary because checkout will fail if there are unresolved conflicts
+            // CRITICAL: Abort any ongoing merge before checking out
+            // Git will refuse checkout if there are unresolved merge conflicts
             if let Err(e) = context.git().abort_merge_and_clean() {
                 context.log_warning(&format!(
                     "Failed to reset working directory before checkout: {}",
@@ -536,6 +591,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             ));
         }
     }
+
+    progress.complete();
 
     context.log_verbose(&format!(
         "✓ Rebuild process completed for environment '{}'",
@@ -705,10 +762,14 @@ fn safe_replace_environment_branch_for_rebuild(
         // Ask for user confirmation
         use std::io::{self, Write};
         print!("Do you want to proceed? [y/N]: ");
-        io::stdout().flush().unwrap();
+        io::stdout()
+            .flush()
+            .context("Failed to flush stdout for user prompt")?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        io::stdin()
+            .read_line(&mut input)
+            .context("Failed to read user input")?;
         let input = input.trim().to_lowercase();
 
         if input == "y" || input == "yes" {

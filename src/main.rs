@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 
 mod commands;
 mod types;
@@ -59,8 +60,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
+    // Configure logger for the specific command
+    let command_name = match &cli.command {
+        Commands::Init(_) => "init",
+        Commands::Add(_) => "add",
+        Commands::Remove(_) => "remove",
+        Commands::Promote(_) => "promote",
+        Commands::Demote(_) => "demote",
+        Commands::Rebuild(_) => "rebuild",
+        Commands::Release(_) => "release",
+        Commands::Status(_) => "status",
+        Commands::Lock(_) => "lock",
+        Commands::Unlock(_) => "unlock",
+        Commands::Guard(_) => "guard",
+    };
+
+    // Create a new logger configured for this command
+    use crate::utils::logging::Logger;
+    let logger = Arc::new(Logger::for_command(command_name, cli.verbose));
+
     // Create global context with flags
-    let context = GlobalContext::new(cli.verbose, cli.no_push)?;
+    let context = GlobalContext::new(cli.verbose, cli.no_push, logger)?;
 
     // Execute the appropriate command
     match cli.command {

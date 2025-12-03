@@ -64,7 +64,9 @@ fn add_environment(context: &GlobalContext, env_name: &str, source: &Option<Stri
         use crate::types::Environment;
 
         let environment = Environment::new(base_branch.to_string());
-        config.add_environment(env_name.to_string(), environment);
+        config
+            .add_environment(env_name.to_string(), environment)
+            .map_err(|e| anyhow::anyhow!("Failed to add environment: {}", e))?;
 
         context.log_verbose(&format!(
             "✓ Added environment '{}' with base branch '{}'",

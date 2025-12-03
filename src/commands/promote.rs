@@ -104,9 +104,14 @@ fn promote_branch_to_environment(
 
     // Modify metadata to add the branch
     crate::utils::prelude::modify_metadata(context, |config| {
-        let environment = config
-            .get_environment_mut(env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
+        let available_envs = config.get_environment_names().join(", ");
+        let environment = config.get_environment_mut(env_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Environment '{}' not found in hitch configuration. Available environments: {}",
+                env_name,
+                available_envs
+            )
+        })?;
 
         // Add the branch to the environment's branches list
         environment.add_branch(branch.to_string());
