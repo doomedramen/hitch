@@ -1112,4 +1112,311 @@ mod tests {
 
         Ok(())
     }
+
+    // New comprehensive conflict analysis tests
+
+    #[test]
+    fn test_get_merge_base() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create initial commit on main
+            git_ops.write_file("base.txt", "base content")?;
+            git_ops.add_and_commit(&["base.txt"], "Initial commit")?;
+
+            // Create feature branch
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("feature.txt", "feature content")?;
+            git_ops.add_and_commit(&["feature.txt"], "Feature commit")?;
+
+            // Switch back to main and make another commit
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("main.txt", "main content")?;
+            git_ops.add_and_commit(&["main.txt"], "Main commit")?;
+
+            // Get merge base between main and feature
+            let merge_base = git_ops.get_merge_base("main", "feature")?;
+            assert!(merge_base.is_some());
+
+            // The merge base should be the initial commit
+            let _base_commit = git_ops.get_branch_commit_sha("main")?;
+            let main_commits = git_ops.run_git_command(&["log", "--format=%H", "-2", "main"])?;
+            let commits_output = String::from_utf8_lossy(&main_commits.stdout);
+            let commits: Vec<&str> = commits_output.lines().collect();
+            if commits.len() >= 2 {
+                assert_eq!(merge_base.unwrap(), commits[1]); // The first commit is main commit, second is initial
+            }
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_commit_date() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create a commit
+            git_ops.write_file("test.txt", "content")?;
+            git_ops.add_and_commit(&["test.txt"], "Test commit")?;
+
+            // Get current date and commit date
+            let today = Utc::now().format("%Y-%m-%d").to_string();
+            let commit_sha = git_ops.get_branch_commit_sha("main")?;
+            let commit_date = git_ops.get_commit_date(&commit_sha)?;
+
+            assert!(commit_date.is_some());
+            assert_eq!(commit_date.unwrap(), today);
+
+            // Test with non-existent commit
+            let fake_date = git_ops.get_commit_date("abcdef1234567890")?;
+            assert!(fake_date.is_none());
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_conflicted_files_with_status() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Initially no conflicts
+            let conflicts = git_ops.get_conflicted_files_with_status()?;
+            assert!(conflicts.is_empty());
+
+            // Create base with file
+            git_ops.write_file("conflict.txt", "base content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Base commit")?;
+
+            // Create feature with conflicting changes
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("conflict.txt", "feature content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Feature commit")?;
+
+            // Return to main and create different change
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("conflict.txt", "main content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Main commit")?;
+
+            // Try to merge feature into main to create conflicts
+            let _ = git_ops.run_git_command(&["merge", "--no-commit", "--no-ff", "feature"]);
+
+            // Now we should have conflicts with status
+            let conflicts = git_ops.get_conflicted_files_with_status()?;
+            assert_eq!(conflicts.len(), 1);
+            assert_eq!(conflicts[0].0, "UU"); // Both modified
+            assert_eq!(conflicts[0].1, "conflict.txt");
+
+            // Clean up
+            git_ops.run_git_command(&["merge", "--abort"])?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_merge_conflicts_comprehensive_no_conflicts() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create base file
+            git_ops.write_file("common.txt", "common content")?;
+            git_ops.add_and_commit(&["common.txt"], "Base commit")?;
+
+            // Create feature with non-conflicting change
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("feature.txt", "feature content")?;
+            git_ops.add_and_commit(&["feature.txt"], "Feature commit")?;
+
+            // Return to main
+            git_ops.checkout_branch("main")?;
+
+            // Check for conflicts
+            let result = git_ops.check_merge_conflicts_comprehensive("feature")?;
+
+            assert!(!result.has_conflicts);
+            assert!(result.conflicted_files.is_empty());
+            assert_eq!(result.source_branch, "feature");
+            assert_eq!(result.target_branch, "main");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_merge_conflicts_comprehensive_with_conflicts() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create base with file
+            git_ops.write_file("conflict.txt", "base content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Base commit")?;
+
+            // Create feature with conflicting changes
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("conflict.txt", "feature content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Feature commit")?;
+
+            // Return to main and create different change
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("conflict.txt", "main content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Main commit")?;
+
+            // Check for conflicts comprehensively
+            let result = git_ops.check_merge_conflicts_comprehensive("feature")?;
+
+            assert!(result.has_conflicts);
+            assert!(!result.conflicted_files.is_empty());
+            assert_eq!(result.source_branch, "feature");
+            assert_eq!(result.target_branch, "main");
+
+            // Check conflict file details
+            let conflict_file = &result.conflicted_files[0];
+            assert_eq!(conflict_file.path, "conflict.txt");
+            assert!(conflict_file.conflict_content.is_some());
+
+            // Should contain conflict markers
+            let content = conflict_file.conflict_content.as_ref().unwrap();
+            assert!(content.contains("<<<<<<<"));
+            assert!(content.contains("main content"));
+            assert!(content.contains("feature content"));
+            assert!(content.contains(">>>>>>>"));
+
+            // Merge base should be available
+            assert!(result.merge_base.is_some());
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_file_conflict_content() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create base
+            git_ops.write_file("test.txt", "base\nline2\n")?;
+            git_ops.add_and_commit(&["test.txt"], "Base")?;
+
+            // Create conflicting branch
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("test.txt", "feature\nline2\n")?;
+            git_ops.add_and_commit(&["test.txt"], "Feature")?;
+
+            // Back to main with different change
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("test.txt", "main\nline2\n")?;
+            git_ops.add_and_commit(&["test.txt"], "Main change")?;
+
+            // Create conflict
+            git_ops.run_git_command(&["merge", "--no-commit", "--no-ff", "feature"])?;
+
+            // Get conflict content
+            let content = git_ops.get_file_conflict_content("test.txt")?;
+            assert!(content.is_some());
+
+            let content_str = content.unwrap();
+            assert!(content_str.contains("main"));
+            assert!(content_str.contains("feature"));
+            assert!(content_str.contains("======="));
+
+            // Clean up
+            git_ops.run_git_command(&["merge", "--abort"])?;
+
+            // Test with non-existent file
+            let no_content = git_ops.get_file_conflict_content("nonexistent.txt")?;
+            assert!(no_content.is_none());
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_detailed_conflicts_integration() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Create multiple files in base
+            git_ops.write_file("file1.txt", "base1")?;
+            git_ops.write_file("file2.txt", "base2")?;
+            git_ops.add_and_commit(&["file1.txt", "file2.txt"], "Base")?;
+
+            // Create feature with changes to both files
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("file1.txt", "feature1")?;
+            git_ops.write_file("file2.txt", "feature2")?;
+            git_ops.add_and_commit(&["file1.txt", "file2.txt"], "Feature changes")?;
+
+            // Back to main with different changes
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("file1.txt", "main1")?;
+            git_ops.write_file("file2.txt", "main2")?;
+            git_ops.add_and_commit(&["file1.txt", "file2.txt"], "Main changes")?;
+
+            // Create conflicts
+            git_ops.run_git_command(&["merge", "--no-commit", "--no-ff", "feature"])?;
+
+            // Check comprehensive conflict detection
+            let result = git_ops.check_merge_conflicts_comprehensive("feature")?;
+
+            assert!(result.has_conflicts);
+            assert_eq!(result.conflicted_files.len(), 2);
+
+            // Both files should have conflicts
+            let paths: Vec<String> = result
+                .conflicted_files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect();
+            assert!(paths.contains(&"file1.txt".to_string()));
+            assert!(paths.contains(&"file2.txt".to_string()));
+
+            // Each should have conflict content
+            for conflict_file in &result.conflicted_files {
+                assert!(conflict_file.conflict_content.is_some());
+                let content = conflict_file.conflict_content.as_ref().unwrap();
+                assert!(content.contains("main") || content.contains("feature"));
+            }
+
+            // Clean up
+            git_ops.run_git_command(&["merge", "--abort"])?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

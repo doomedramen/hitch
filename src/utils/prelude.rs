@@ -1,5 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
+use crate::utils::conflict_report::format_conflict_report;
 use crate::utils::progress::{ConsoleProgressReporter, StepProgress};
 use anyhow::{Context, Result};
 
@@ -408,7 +409,13 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
                 "Merging {} promoted branches",
                 environment.branches.len()
             ));
-            perform_squash_merges_for_rebuild(context, &temp_branch, &environment.branches)?;
+            perform_squash_merges_for_rebuild(
+                context,
+                &temp_branch,
+                &environment.branches,
+                &environment.base,
+                env_name,
+            )?;
         } else {
             progress.step("No promoted branches to merge".to_string());
         }
@@ -636,6 +643,8 @@ fn perform_squash_merges_for_rebuild(
     context: &GlobalContext,
     temp_branch: &str,
     branches: &[String],
+    base_branch: &str,
+    env_name: &str,
 ) -> Result<()> {
     // Record original branch
     let original_branch = context.git().get_current_branch()?;
@@ -670,34 +679,17 @@ fn perform_squash_merges_for_rebuild(
             }
 
             // Check for merge conflicts before attempting squash merge
-            let (has_conflicts, conflicted_files) =
-                context.git().check_merge_conflicts_detailed(branch)?;
-            if has_conflicts {
-                let mut error_msg =
-                    format!("Merge conflict detected when merging branch '{}'", branch);
-
-                if let Some(files) = conflicted_files {
-                    if !files.is_empty() {
-                        error_msg.push_str("\n\nConflicting files:");
-                        for file in files {
-                            error_msg.push_str(&format!("\n  • {}", file));
-                        }
-                    } else {
-                        error_msg.push_str("\n\nUnable to determine specific conflicting files.");
-                    }
-                }
-
-                error_msg.push_str("\n\nTo resolve this:");
-                error_msg.push_str(&format!(
-                    "\n1. Check out '{}' branch: git checkout {}",
-                    branch, branch
-                ));
-                error_msg.push_str("\n2. Resolve conflicts manually");
-                error_msg.push_str("\n3. Commit the resolution");
-                error_msg.push_str(&format!(
-                    "\n4. Try rebuilding again: hitch rebuild {} --force",
-                    context.git().get_current_branch().unwrap_or_default()
-                ));
+            let conflict_result = context.git().check_merge_conflicts_comprehensive(branch)?;
+            if conflict_result.has_conflicts {
+                // Generate detailed conflict report
+                let error_msg = format_conflict_report(
+                    branch,
+                    &conflict_result.target_branch,
+                    base_branch,
+                    env_name,
+                    &conflict_result.conflicted_files,
+                    conflict_result.merge_base.as_ref(),
+                );
 
                 return Err(anyhow::anyhow!("{}", error_msg));
             }

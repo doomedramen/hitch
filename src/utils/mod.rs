@@ -1,4 +1,5 @@
 pub mod command_helpers;
+pub mod conflict_report;
 pub mod diff;
 pub mod git_error;
 pub mod git_operations;

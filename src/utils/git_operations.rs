@@ -3,6 +3,53 @@ use chrono::{DateTime, Utc};
 use git2::Repository;
 use std::process::Command;
 
+use super::conflict_report::{parse_conflict_type, ConflictedFile, MergeBaseInfo};
+
+/// Detailed result from a merge conflict check
+#[derive(Debug)]
+pub struct MergeConflictResult {
+    /// Whether conflicts were detected
+    pub has_conflicts: bool,
+    /// List of conflicted files with detailed info
+    pub conflicted_files: Vec<ConflictedFile>,
+    /// Merge base information
+    pub merge_base: Option<MergeBaseInfo>,
+    /// The source branch that was being merged
+    #[allow(dead_code)]
+    pub source_branch: String,
+    /// The target branch (current branch)
+    pub target_branch: String,
+}
+
+impl MergeConflictResult {
+    /// Create a new result indicating no conflicts
+    pub fn no_conflicts(source_branch: String, target_branch: String) -> Self {
+        Self {
+            has_conflicts: false,
+            conflicted_files: Vec::new(),
+            merge_base: None,
+            source_branch,
+            target_branch,
+        }
+    }
+
+    /// Create a new result indicating conflicts
+    pub fn with_conflicts(
+        source_branch: String,
+        target_branch: String,
+        conflicted_files: Vec<ConflictedFile>,
+        merge_base: Option<MergeBaseInfo>,
+    ) -> Self {
+        Self {
+            has_conflicts: true,
+            conflicted_files,
+            merge_base,
+            source_branch,
+            target_branch,
+        }
+    }
+}
+
 pub struct GitOperations {
     #[allow(dead_code)]
     repo: Repository,
@@ -602,6 +649,118 @@ impl GitOperations {
         Ok((false, None))
     }
 
+    /// Check if a merge would result in conflicts and return comprehensive conflict information
+    ///
+    /// This enhanced version provides:
+    /// - Detailed conflict type for each file
+    /// - Full conflict content with markers
+    /// - Merge base information
+    ///
+    /// # Arguments
+    /// * `source_branch` - The branch to merge into the current branch
+    ///
+    /// # Returns
+    /// A `MergeConflictResult` with all conflict details
+    pub fn check_merge_conflicts_comprehensive(
+        &self,
+        source_branch: &str,
+    ) -> Result<MergeConflictResult> {
+        let target_branch = self
+            .get_current_branch()
+            .unwrap_or_else(|_| "HEAD".to_string());
+
+        let output = self.run_git_command(&["merge", "--no-commit", "--no-ff", source_branch])?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Check if it's a non-existent branch error
+            if stderr.contains("did not match any file(s) known to git")
+                || stderr.contains("unknown revision or path")
+                || stderr.contains("not something we can merge")
+                || stderr.contains("Non-fast-forward commit does not make sense into an empty head")
+            {
+                return Err(anyhow::anyhow!("Branch '{}' does not exist", source_branch));
+            }
+
+            // Check if it's unrelated histories error
+            if stderr.contains("refusing to merge unrelated histories") {
+                let _ = self.run_git_command(&["merge", "--abort"]);
+                return Ok(MergeConflictResult::with_conflicts(
+                    source_branch.to_string(),
+                    target_branch,
+                    vec![ConflictedFile::new(
+                        "(unrelated histories)".to_string(),
+                        super::conflict_report::ConflictType::Unknown,
+                    )],
+                    None,
+                ));
+            }
+
+            // Get detailed conflict information before aborting
+            let conflicted_files = self.collect_detailed_conflicts()?;
+
+            // Get merge base information
+            let merge_base = self
+                .get_merge_base(&target_branch, source_branch)?
+                .map(|hash| {
+                    let date = self.get_commit_date(&hash).ok().flatten();
+                    let mut base_info = MergeBaseInfo::new(hash);
+                    if let Some(d) = date {
+                        base_info = base_info.with_date(d);
+                    }
+                    base_info
+                });
+
+            // Abort the failed merge to clean up the working directory
+            let _ = self.run_git_command(&["merge", "--abort"]);
+
+            return Ok(MergeConflictResult::with_conflicts(
+                source_branch.to_string(),
+                target_branch,
+                conflicted_files,
+                merge_base,
+            ));
+        }
+
+        // Abort the test merge
+        let _ = self.run_git_command(&["merge", "--abort"]);
+
+        Ok(MergeConflictResult::no_conflicts(
+            source_branch.to_string(),
+            target_branch,
+        ))
+    }
+
+    /// Collect detailed information about conflicted files
+    ///
+    /// This function gathers:
+    /// - File paths
+    /// - Conflict types (UU, AA, UD, DU, etc.)
+    /// - Actual conflict content from files
+    fn collect_detailed_conflicts(&self) -> Result<Vec<ConflictedFile>> {
+        let conflicts_with_status = self.get_conflicted_files_with_status()?;
+
+        let mut detailed_conflicts = Vec::new();
+
+        for (status, file_path) in conflicts_with_status {
+            let conflict_type = parse_conflict_type(&status);
+
+            // Try to read the conflict content from the file
+            let conflict_content = self.get_file_conflict_content(&file_path).ok().flatten();
+
+            let conflicted_file = if let Some(content) = conflict_content {
+                ConflictedFile::with_content(file_path, conflict_type, content)
+            } else {
+                ConflictedFile::new(file_path, conflict_type)
+            };
+
+            detailed_conflicts.push(conflicted_file);
+        }
+
+        Ok(detailed_conflicts)
+    }
+
     /// Get list of conflicted files in the current working directory
     pub fn get_conflicted_files(&self) -> Result<Vec<String>> {
         let output = self.run_git_command(&["diff", "--name-only", "--diff-filter=U"])?;
@@ -775,5 +934,146 @@ impl GitOperations {
         let output =
             self.run_git_command(&["merge-base", "--is-ancestor", source_branch, target_branch])?;
         Ok(output.status.success())
+    }
+
+    /// Get the merge base (common ancestor) between two branches
+    ///
+    /// # Arguments
+    /// * `branch1` - First branch name
+    /// * `branch2` - Second branch name
+    ///
+    /// # Returns
+    /// The commit hash of the merge base, or an error if not found
+    pub fn get_merge_base(&self, branch1: &str, branch2: &str) -> Result<Option<String>> {
+        let output = self.run_git_command(&["merge-base", branch1, branch2])?;
+
+        if output.status.success() {
+            let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !hash.is_empty() {
+                Ok(Some(hash))
+            } else {
+                Ok(None)
+            }
+        } else {
+            // No common ancestor (unrelated histories)
+            Ok(None)
+        }
+    }
+
+    /// Get the date of a commit
+    ///
+    /// # Arguments
+    /// * `commit_hash` - The commit hash to get the date for
+    ///
+    /// # Returns
+    /// The commit date in YYYY-MM-DD format
+    pub fn get_commit_date(&self, commit_hash: &str) -> Result<Option<String>> {
+        let output = self.run_git_command(&["log", "-1", "--format=%cs", commit_hash])?;
+
+        if output.status.success() {
+            let date = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !date.is_empty() {
+                Ok(Some(date))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get detailed conflict information with status codes
+    ///
+    /// Returns a list of (status_code, file_path) tuples for conflicted files.
+    /// Status codes are two-letter codes from git status:
+    /// - UU: both modified
+    /// - AA: both added
+    /// - UD: modified/deleted
+    /// - DU: deleted/modified
+    pub fn get_conflicted_files_with_status(&self) -> Result<Vec<(String, String)>> {
+        // Use git status --porcelain to get status codes
+        let output = self.run_git_command(&["status", "--porcelain"])?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let conflicts: Vec<(String, String)> = stdout
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.len() >= 3 {
+                    let status = &line[0..2];
+                    // Check if it's a conflict status (contains U or both same letter)
+                    if status.contains('U') || status == "AA" || status == "DD" {
+                        let file_path = line[3..].trim().to_string();
+                        return Some((status.to_string(), file_path));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        Ok(conflicts)
+    }
+
+    /// Read the conflict markers from a file
+    ///
+    /// This reads the file and extracts all conflict sections (between <<<<<<< and >>>>>>>)
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the file relative to repo root
+    ///
+    /// # Returns
+    /// The full file content with conflict markers, or None if file doesn't exist
+    pub fn get_file_conflict_content(&self, file_path: &str) -> Result<Option<String>> {
+        use std::fs;
+        use std::path::Path;
+
+        let full_path = Path::new(&self.repo_path).join(file_path);
+
+        if !full_path.exists() {
+            return Ok(None);
+        }
+
+        match fs::read_to_string(&full_path) {
+            Ok(content) => {
+                // Extract just the conflict sections
+                let mut result = String::new();
+                let mut in_conflict = false;
+                let mut conflict_count = 0;
+
+                for line in content.lines() {
+                    if line.starts_with("<<<<<<<") {
+                        in_conflict = true;
+                        conflict_count += 1;
+                        if conflict_count > 1 {
+                            result.push_str("\n---\n\n"); // Separator between conflicts
+                        }
+                    }
+
+                    if in_conflict {
+                        result.push_str(line);
+                        result.push('\n');
+                    }
+
+                    if line.starts_with(">>>>>>>") {
+                        in_conflict = false;
+                    }
+                }
+
+                if result.is_empty() {
+                    // No conflict markers found, but file is marked as conflicted
+                    // This can happen with binary files or certain conflict types
+                    Ok(Some(
+                        "(Binary file or conflict markers not available)".to_string(),
+                    ))
+                } else {
+                    Ok(Some(result.trim().to_string()))
+                }
+            }
+            Err(_) => Ok(None),
+        }
     }
 }
