@@ -155,17 +155,73 @@ Hitch provides a comprehensive overview of your environments:
    💡 Run 'hitch rebuild production' to initialize
 ```
 
-## 🛡️ Pre-commit Protection
+## 🛡️ Branch Protection with `hitch guard`
 
-Protect your environment branches from direct commits:
+Prevent direct commits to environment branches by integrating `hitch guard` into your git hooks. The guard command:
+- **Blocks commits** on environment branches (e.g., `dev`, `qa`, `production`)
+- **Allows commits** on feature branches, even if they're promoted
+- **Exits with error** if hitch is not initialized, blocking commits in hitch-enabled repos
+
+### Manual Git Hook
 
 ```bash
 # Add to your .git/hooks/pre-commit
-hitch guard
+#!/bin/sh
+hitch guard || exit 1
+```
 
-# Now attempts to commit directly to environment branches will fail
+### Lefthook
+
+```yaml
+# lefthook.yml
+pre-commit:
+  commands:
+    hitch-guard:
+      run: hitch guard
+```
+
+### Husky
+
+```json
+// package.json
+{
+  "husky": {
+    "hooks": {
+      "pre-commit": "hitch guard"
+    }
+  }
+}
+```
+
+### pre-commit
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: local
+    hooks:
+      - id: hitch-guard
+        name: Hitch Guard
+        entry: hitch guard
+        language: system
+        stages: [commit]
+```
+
+### Example Workflow
+
+```bash
+# Environment branches are protected
 git checkout qa
-git commit -m "hotfix"  # ❌ Blocked by hitch guard
+echo "fix" > hotfix.txt && git add . && git commit -m "hotfix"
+# ❌ Error: Current branch 'qa' conflicts with environment(s): qa
+
+# Feature branches are allowed
+git checkout feature/my-fix
+echo "fix" > hotfix.txt && git add . && git commit -m "hotfix"
+# ✅ Commit succeeds
+
+# Hitch commands bypass protection (they use --no-verify internally)
+hitch rebuild qa  # ✅ Works even with guard installed
 ```
 
 ## 📦 Installation

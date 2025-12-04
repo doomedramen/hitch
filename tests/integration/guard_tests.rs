@@ -318,4 +318,76 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_hitch_guard_blocks_environment_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // Add a dev environment
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Rebuild to create the dev branch
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Checkout the dev environment branch
+            env.git.run(&["checkout", "dev"])?;
+
+            // Guard should FAIL because we're on an environment branch
+            let result = env.hitch.run().args(&["guard"]).execute()?;
+            result
+                .assert_failure()
+                .assert_stderr_contains("conflicts with environment")
+                .assert_stderr_contains("should not be directly modified");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_guard_allows_promoted_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // Add a dev environment
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create and checkout a feature branch
+            env.git.run(&["checkout", "-b", "feature/my-feature"])?;
+            env.fs.write_file("feature.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature"])?;
+
+            // Promote the feature branch to dev
+            env.hitch
+                .run()
+                .args(&["promote", "feature/my-feature", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Guard should PASS - we're on a feature branch, even though it's promoted
+            let result = env.hitch.run().args(&["guard"]).execute()?;
+            result
+                .assert_success()
+                .assert_stdout_contains("Guard check passed");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

@@ -68,14 +68,10 @@ fn perform_guard_check(
     };
 
     for env_name in &environments_to_check {
-        if let Some(environment) = config.get_environment(env_name) {
+        if config.get_environment(env_name).is_some() {
             // Check if current branch matches the environment branch name
+            // This blocks direct commits to environment branches like 'dev', 'qa', 'staging'
             if current_branch == env_name {
-                conflicting_environments.push(env_name.clone());
-            }
-
-            // Also check if current branch is one of the promoted branches
-            if environment.branches.contains(&current_branch.to_string()) {
                 conflicting_environments.push(env_name.clone());
             }
         }
