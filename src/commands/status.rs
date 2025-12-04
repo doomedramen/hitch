@@ -11,6 +11,10 @@ pub struct StatusCommand {
     /// Print detailed step-by-step logs
     #[arg(long)]
     pub verbose: bool,
+
+    /// Show changes compared to the last commit
+    #[arg(long)]
+    pub diff: bool,
 }
 
 pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
@@ -30,6 +34,11 @@ pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
 
     // Display status
     display_status(&context, &config)?;
+
+    // Show diff if requested
+    if args.diff {
+        display_diff(&context)?;
+    }
 
     context.log_verbose("Status command completed successfully");
     Ok(())
@@ -504,6 +513,48 @@ fn check_and_display_cleanup_needs(
                 println!("│      {}", cmd.dimmed());
             }
         }
+    }
+
+    Ok(())
+}
+
+/// Display changes compared to the last commit
+fn display_diff(context: &GlobalContext) -> Result<()> {
+    use crate::utils::diff::{diff_configs, format_diff};
+
+    let git = context.git();
+
+    // Get the last committed configuration
+    let old_config_json = match git.read_file_from_branch("hitch-metadata", "hitch.json") {
+        Ok(content) => content,
+        Err(_) => {
+            context.log_info("No previous configuration found to compare against.");
+            return Ok(());
+        }
+    };
+
+    let old_config: HitchConfig = match serde_json::from_str(&old_config_json) {
+        Ok(config) => config,
+        Err(e) => {
+            context.log_warning(&format!("Failed to parse previous configuration: {}", e));
+            return Ok(());
+        }
+    };
+
+    // Get current configuration
+    let current_config_json = std::fs::read_to_string("hitch.json")?;
+    let current_config: HitchConfig = serde_json::from_str(&current_config_json)?;
+
+    // Generate and display diff
+    let changes = diff_configs(&old_config, &current_config);
+    let diff_output = format_diff(&changes);
+
+    println!("{}", diff_output);
+
+    // Show summary
+    let summary = crate::utils::diff::create_summary(&changes);
+    if !summary.is_empty() && summary != "No changes" {
+        context.log_info(&format!("Summary: {}", summary));
     }
 
     Ok(())

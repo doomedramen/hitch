@@ -1,4 +1,6 @@
 pub mod command_helpers;
+pub mod diff;
+pub mod git_error;
 pub mod git_operations;
 pub mod hooks;
 pub mod log_macros;

@@ -1,6 +1,7 @@
 pub mod global_context;
 
 pub mod add;
+pub mod completion;
 pub mod demote;
 pub mod guard;
 pub mod init;

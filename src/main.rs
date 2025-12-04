@@ -15,7 +15,7 @@ use commands::global_context::GlobalContext;
 )]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(author = "Martin Page")]
-struct Cli {
+pub struct Cli {
     /// Print detailed step-by-step logs for commands
     #[arg(long, global = true)]
     verbose: bool,
@@ -52,6 +52,8 @@ enum Commands {
     Unlock(commands::unlock::UnlockCommand),
     /// Guard against direct commits to environment branches
     Guard(commands::guard::GuardCommand),
+    /// Generate shell completion script
+    Completion(commands::completion::CompletionCommand),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -73,6 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(_) => "lock",
         Commands::Unlock(_) => "unlock",
         Commands::Guard(_) => "guard",
+        Commands::Completion(_) => "completion",
     };
 
     // Create a new logger configured for this command
@@ -95,5 +98,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
         Commands::Guard(args) => commands::guard::run(args, &context).map_err(|e| e.into()),
+        Commands::Completion(args) => {
+            commands::completion::run(args, &context).map_err(|e| e.into())
+        }
     }
 }
