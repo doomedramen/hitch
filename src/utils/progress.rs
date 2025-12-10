@@ -6,7 +6,8 @@
 #![allow(dead_code)]
 
 use std::fmt;
-use std::sync::Arc;
+use std::io::Write;
+use std::sync::{Arc, RwLock};
 
 /// Progress information for long-running operations
 #[derive(Debug, Clone)]
@@ -105,12 +106,92 @@ pub trait ProgressReporter: Send + Sync {
 pub struct ConsoleProgressReporter {
     /// Whether to use verbose output
     verbose: bool,
+    /// Last reported progress (for resume capability)
+    last_progress: RwLock<Option<ProgressInfo>>,
+    /// Whether progress bar is currently suspended
+    suspended: RwLock<bool>,
 }
 
 impl ConsoleProgressReporter {
     /// Create a new console progress reporter
     pub fn new(verbose: bool) -> Self {
-        Self { verbose }
+        Self {
+            verbose,
+            last_progress: RwLock::new(None),
+            suspended: RwLock::new(false),
+        }
+    }
+
+    /// Suspend the progress bar (clears the current line)
+    /// Call this before printing log messages to avoid interleaved output
+    pub fn suspend(&self) {
+        if self.verbose {
+            return; // Verbose mode doesn't use progress bar
+        }
+
+        let has_progress = self.last_progress.read().unwrap().is_some();
+        let already_suspended = *self.suspended.read().unwrap();
+
+        if has_progress && !already_suspended {
+            // Clear the current line by overwriting with spaces and returning to start
+            print!("\r{}\r", " ".repeat(120));
+            std::io::stdout().flush().unwrap();
+            *self.suspended.write().unwrap() = true;
+        }
+    }
+
+    /// Resume the progress bar (redraws the last progress state)
+    /// Call this after printing log messages
+    pub fn resume(&self) {
+        if self.verbose {
+            return; // Verbose mode doesn't use progress bar
+        }
+
+        let is_suspended = *self.suspended.read().unwrap();
+        if is_suspended {
+            let last_progress = self.last_progress.read().unwrap();
+            if let Some(ref progress) = *last_progress {
+                // Don't resume if we're already complete
+                if progress.percentage.is_some_and(|p| p >= 1.0) {
+                    drop(last_progress);
+                    *self.suspended.write().unwrap() = false;
+                    return;
+                }
+                self.draw_progress_bar(progress);
+            }
+            drop(last_progress);
+            *self.suspended.write().unwrap() = false;
+        }
+    }
+
+    /// Draw the progress bar without storing state
+    fn draw_progress_bar(&self, progress: &ProgressInfo) {
+        if let Some(percentage) = progress.percentage {
+            let bar_width = 40;
+            let filled = (percentage * bar_width as f32) as usize;
+            let empty = bar_width - filled;
+
+            print!("\r{}: [", progress.operation);
+            for _ in 0..filled {
+                print!("=");
+            }
+            for _ in 0..empty {
+                print!(" ");
+            }
+            print!(
+                "] {:.0}% - {}",
+                percentage * 100.0,
+                progress.step_description
+            );
+            std::io::stdout().flush().unwrap();
+
+            // Move to next line when complete
+            if percentage >= 1.0 {
+                println!();
+            }
+        } else {
+            println!("{}", progress);
+        }
     }
 }
 
@@ -120,34 +201,12 @@ impl ProgressReporter for ConsoleProgressReporter {
             // Verbose mode shows all steps
             println!("{}", progress);
         } else {
-            // Non-verbose mode shows a progress bar
-            if let Some(percentage) = progress.percentage {
-                let bar_width = 40;
-                let filled = (percentage * bar_width as f32) as usize;
-                let empty = bar_width - filled;
+            // Store the progress for potential resume
+            *self.last_progress.write().unwrap() = Some(progress.clone());
+            *self.suspended.write().unwrap() = false;
 
-                print!("\r{}: [", progress.operation);
-                for _ in 0..filled {
-                    print!("=");
-                }
-                for _ in 0..empty {
-                    print!(" ");
-                }
-                print!(
-                    "] {:.0}% - {}",
-                    percentage * 100.0,
-                    progress.step_description
-                );
-                use std::io::Write;
-                std::io::stdout().flush().unwrap();
-
-                // Move to next line when complete
-                if percentage >= 1.0 {
-                    println!();
-                }
-            } else {
-                println!("{}", progress);
-            }
+            // Draw the progress bar
+            self.draw_progress_bar(progress);
         }
     }
 }
@@ -166,12 +225,16 @@ pub struct StepProgress {
     operation: String,
     current_step: usize,
     total_steps: usize,
-    reporter: Arc<dyn ProgressReporter>,
+    reporter: Arc<ConsoleProgressReporter>,
 }
 
 impl StepProgress {
     /// Create a new step progress
-    pub fn new(operation: String, total_steps: usize, reporter: Box<dyn ProgressReporter>) -> Self {
+    pub fn new(
+        operation: String,
+        total_steps: usize,
+        reporter: Box<ConsoleProgressReporter>,
+    ) -> Self {
         Self {
             operation,
             current_step: 0,
@@ -202,33 +265,28 @@ impl StepProgress {
         );
         self.reporter.report(&progress);
     }
+
+    /// Suspend the progress bar (clears the current line)
+    /// Call this before printing log messages to avoid interleaved output
+    pub fn suspend(&self) {
+        self.reporter.suspend();
+    }
+
+    /// Resume the progress bar (redraws the last progress state)
+    /// Call this after printing log messages
+    pub fn resume(&self) {
+        self.reporter.resume();
+    }
+
+    /// Get a reference to the reporter for sharing with other components
+    pub fn reporter(&self) -> Arc<ConsoleProgressReporter> {
+        Arc::clone(&self.reporter)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TestReporter {
-        reports: std::sync::Arc<std::sync::Mutex<Vec<ProgressInfo>>>,
-    }
-
-    impl TestReporter {
-        fn new() -> Self {
-            Self {
-                reports: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            }
-        }
-
-        fn get_reports(&self) -> Vec<ProgressInfo> {
-            self.reports.lock().unwrap().clone()
-        }
-    }
-
-    impl ProgressReporter for TestReporter {
-        fn report(&self, progress: &ProgressInfo) {
-            self.reports.lock().unwrap().push(progress.clone());
-        }
-    }
 
     #[test]
     fn test_progress_info() {
@@ -242,7 +300,8 @@ mod tests {
 
     #[test]
     fn test_step_progress() {
-        let reporter = Box::new(TestReporter::new());
+        // Use verbose mode to avoid terminal output during tests
+        let reporter = Box::new(ConsoleProgressReporter::new(true));
         let mut progress = StepProgress::new("Test".to_string(), 2, reporter);
 
         progress.step("Step 1".to_string());

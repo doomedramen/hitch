@@ -385,6 +385,9 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         Box::new(ConsoleProgressReporter::new(context.verbose)),
     );
 
+    // Register the progress reporter with the context for suspend/resume during logging
+    context.set_active_progress(progress.reporter());
+
     // Step 1: Initialize
     progress.step("Initializing rebuild".to_string());
 
@@ -409,6 +412,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
                 "Merging {} promoted branches",
                 environment.branches.len()
             ));
+            context.log_verbose(&format!("Branches to merge: {:?}", environment.branches));
             perform_squash_merges_for_rebuild(
                 context,
                 &temp_branch,
@@ -492,6 +496,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     // This is the error recovery path - we must always clean up temp branches
     // and return the user to their original branch
     if cleanup_needed {
+        // Clear progress bar before cleanup messages
+        context.clear_active_progress();
         context.log_warning("Rebuild failed, performing cleanup...");
 
         // Determine current branch to decide if we need to switch back
@@ -599,6 +605,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         }
     }
 
+    // Clear the active progress reporter before completing
+    context.clear_active_progress();
     progress.complete();
 
     context.log_verbose(&format!(
@@ -679,8 +687,13 @@ fn perform_squash_merges_for_rebuild(
             }
 
             // Check for merge conflicts before attempting squash merge
+            context.log_verbose(&format!(
+                "Checking for merge conflicts in branch '{}'...",
+                branch
+            ));
             let conflict_result = context.git().check_merge_conflicts_comprehensive(branch)?;
             if conflict_result.has_conflicts {
+                context.log_verbose(&format!("Merge conflicts detected in branch '{}'", branch));
                 // Generate detailed conflict report
                 let error_msg = format_conflict_report(
                     branch,
@@ -692,12 +705,21 @@ fn perform_squash_merges_for_rebuild(
                 );
 
                 return Err(anyhow::anyhow!("{}", error_msg));
+            } else {
+                context.log_verbose(&format!("No conflicts detected in branch '{}'", branch));
             }
 
             // Perform squash merge
             let merge_message = format!("hitch: squash merge '{}' into environment", branch);
+            context.log_verbose(&format!(
+                "Attempting to squash merge '{}' into temp branch...",
+                branch
+            ));
             context.git().squash_merge(branch, &merge_message)?;
-            context.log_verbose(&format!("✓ Squash merged '{}' into temp branch", branch));
+            context.log_verbose(&format!(
+                "✓ Successfully squash merged '{}' into temp branch",
+                branch
+            ));
         }
 
         Ok(())
@@ -745,11 +767,19 @@ fn safe_replace_environment_branch_for_rebuild(
     // Step 4c: Handle remote branch replacement - always prompt when push is enabled
     if context.should_push() {
         // Interactive confirmation for force push
-        context.log_info(&format!(
-            "This will replace the remote '{}' branch with the rebuilt version.",
+        // Suspend progress bar for the entire confirmation flow
+        context.suspend_progress();
+
+        println!(); // Add newline for clean separation
+        context.log_warning(&format!(
+            "Ready to force push the rebuilt '{}' branch to 'origin/{}'.",
+            env_name, env_name
+        ));
+        context.log_warning(&format!(
+            "This will OVERWRITE the remote '{}' branch with the new rebuilt version.",
             env_name
         ));
-        context.log_warning("This action cannot be undone and will overwrite the remote branch.");
+        context.log_warning("This action cannot be undone.");
 
         // Ask for user confirmation
         use std::io::{self, Write};
@@ -794,6 +824,9 @@ fn safe_replace_environment_branch_for_rebuild(
                 env_name, env_name
             ));
         }
+
+        // Resume progress bar after confirmation flow
+        context.resume_progress();
     } else {
         context.log_verbose(&format!(
             "Skipping remote operations for '{}' branch due to --no-push flag",

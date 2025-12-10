@@ -3,7 +3,7 @@ use crate::utils::logging::Logger;
 use crate::utils::progress::{ConsoleProgressReporter, ProgressReporter};
 use colored::*;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -13,6 +13,8 @@ pub struct GlobalContext {
     pub git_ops: Rc<GitOperations>,
     pub progress_reporter: Arc<dyn ProgressReporter>,
     pub logger: Arc<Logger>,
+    /// Active progress reporter for suspend/resume during logging
+    active_progress: Arc<RwLock<Option<Arc<ConsoleProgressReporter>>>>,
 }
 
 #[allow(dead_code)]
@@ -34,6 +36,7 @@ impl GlobalContext {
             git_ops,
             progress_reporter,
             logger,
+            active_progress: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -51,26 +54,62 @@ impl GlobalContext {
         &self.git_ops
     }
 
+    /// Set the active progress reporter for suspend/resume during logging
+    pub fn set_active_progress(&self, reporter: Arc<ConsoleProgressReporter>) {
+        *self.active_progress.write().unwrap() = Some(reporter);
+    }
+
+    /// Clear the active progress reporter
+    pub fn clear_active_progress(&self) {
+        *self.active_progress.write().unwrap() = None;
+    }
+
+    /// Suspend the active progress bar (clears the line)
+    /// Use this before printing content that should appear cleanly without the progress bar
+    pub fn suspend_progress(&self) {
+        if let Some(ref reporter) = *self.active_progress.read().unwrap() {
+            reporter.suspend();
+        }
+    }
+
+    /// Resume the active progress bar (redraws it)
+    /// Use this after printing content when you want the progress bar to reappear
+    pub fn resume_progress(&self) {
+        if let Some(ref reporter) = *self.active_progress.read().unwrap() {
+            reporter.resume();
+        }
+    }
+
     pub fn log_verbose(&self, message: &str) {
         if self.verbose {
+            self.suspend_progress();
             println!("{}", message);
+            self.resume_progress();
         }
     }
 
     pub fn log_info(&self, message: &str) {
+        self.suspend_progress();
         println!("{} {}", "ℹ️".blue(), message);
+        self.resume_progress();
     }
 
     pub fn log_success(&self, message: &str) {
+        self.suspend_progress();
         println!("{} {}", "✅".green(), message);
+        self.resume_progress();
     }
 
     pub fn log_warning(&self, message: &str) {
+        self.suspend_progress();
         println!("{} {}", "⚠️".yellow(), message);
+        self.resume_progress();
     }
 
     pub fn log_error(&self, message: &str) {
+        self.suspend_progress();
         eprintln!("{} {}", "❌".red(), message);
+        self.resume_progress();
     }
 
     pub fn should_push(&self) -> bool {
