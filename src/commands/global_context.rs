@@ -56,27 +56,35 @@ impl GlobalContext {
 
     /// Set the active progress reporter for suspend/resume during logging
     pub fn set_active_progress(&self, reporter: Arc<ConsoleProgressReporter>) {
-        *self.active_progress.write().unwrap() = Some(reporter);
+        if let Ok(mut guard) = self.active_progress.write() {
+            *guard = Some(reporter);
+        }
     }
 
     /// Clear the active progress reporter
     pub fn clear_active_progress(&self) {
-        *self.active_progress.write().unwrap() = None;
+        if let Ok(mut guard) = self.active_progress.write() {
+            *guard = None;
+        }
     }
 
     /// Suspend the active progress bar (clears the line)
     /// Use this before printing content that should appear cleanly without the progress bar
     pub fn suspend_progress(&self) {
-        if let Some(ref reporter) = *self.active_progress.read().unwrap() {
-            reporter.suspend();
+        if let Ok(guard) = self.active_progress.read() {
+            if let Some(ref reporter) = *guard {
+                reporter.suspend();
+            }
         }
     }
 
     /// Resume the active progress bar (redraws it)
     /// Use this after printing content when you want the progress bar to reappear
     pub fn resume_progress(&self) {
-        if let Some(ref reporter) = *self.active_progress.read().unwrap() {
-            reporter.resume();
+        if let Ok(guard) = self.active_progress.read() {
+            if let Some(ref reporter) = *guard {
+                reporter.resume();
+            }
         }
     }
 

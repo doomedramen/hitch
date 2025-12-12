@@ -237,18 +237,21 @@ jobs:
   #       alert-threshold: '200%'
   #       fail-on-alert: true
 
-  # Temporarily disabled due to resource constraints
-  # security-audit:
-  #   name: Security Audit
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - name: Checkout repository
-  #     uses: actions/checkout@v6
-  #
-  #   - name: Security audit
-  #     uses: actions-rs/audit-check@v1
-  #     with:
-  #       token: ${{ secrets.GITHUB_TOKEN }}
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Run security audit
+      run: cargo audit
 
   # cargo-deny:
   #   name: Cargo Deny (Licenses & Security)

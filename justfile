@@ -178,7 +178,8 @@ release:
             # Restore original version if it was changed
             if [ -n "${current_version}" ] && [ -n "${new_version}" ]; then
                 echo "🔄 Restoring version from v${new_version} to v${current_version}"
-                sed -i '' "s/^version = \"${new_version}\"/version = \"${current_version}\"/" Cargo.toml
+                # Use portable sed -i with backup, then remove backup (works on macOS and Linux)
+                sed -i.bak "s/^version = \"${new_version}\"/version = \"${current_version}\"/" Cargo.toml && rm -f Cargo.toml.bak
 
                 # Discard any Cargo.lock changes
                 git restore Cargo.lock 2>/dev/null || true
@@ -214,7 +215,8 @@ release:
 
     # Now that everything passes, update version
     echo "📝 Updating version..."
-    sed -i '' "s/^version = \"${current_version}\"/version = \"${new_version}\"/" Cargo.toml
+    # Use portable sed -i with backup, then remove backup (works on macOS and Linux)
+    sed -i.bak "s/^version = \"${current_version}\"/version = \"${new_version}\"/" Cargo.toml && rm -f Cargo.toml.bak
 
     # Build release with new version
     echo "🔨 Building release v${new_version}..."

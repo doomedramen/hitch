@@ -410,7 +410,8 @@ impl GitOperations {
             .parse()
             .context("Failed to parse timestamp as integer")?;
 
-        Ok(DateTime::from_timestamp(timestamp_i64, 0).unwrap_or_else(Utc::now))
+        DateTime::from_timestamp(timestamp_i64, 0)
+            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", timestamp_i64))
     }
 
     /// Check if a branch exists (local or remote)
@@ -461,17 +462,43 @@ impl GitOperations {
     /// Delete a branch (local)
     pub fn delete_branch(&self, branch: &str, force: bool) -> Result<()> {
         // Get current branch to ensure we're not trying to delete the branch we're on
-        let current_branch = self.get_current_branch().unwrap_or_default();
+        let current_branch = self.get_current_branch()?;
 
-        // If we're currently on the branch we want to delete, switch to main first
+        // If we're currently on the branch we want to delete, we need to switch away first
         if current_branch == branch {
+            // Try to find a safe branch to switch to
+            // Priority: main -> master -> any other branch that's not the one being deleted
+            let safe_branch: String = if self.branch_exists("main")? {
+                "main".to_string()
+            } else if self.branch_exists("master")? {
+                "master".to_string()
+            } else {
+                // Find any other branch
+                let output = self.run_git_command(&["branch", "--list"])?;
+                let branches = String::from_utf8_lossy(&output.stdout);
+                branches
+                    .lines()
+                    .map(|b| b.trim().trim_start_matches("* ").to_string())
+                    .find(|b| !b.is_empty() && b != branch)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Cannot delete branch '{}': no other branch to switch to",
+                            branch
+                        )
+                    })?
+            };
+
             let output = self
-                .run_git_command(&["checkout", "main"])
-                .context("Failed to switch to main branch before deleting current branch")?;
+                .run_git_command(&["checkout", &safe_branch])
+                .context(format!(
+                    "Failed to switch to '{}' branch before deleting current branch",
+                    safe_branch
+                ))?;
 
             if !output.status.success() {
                 return Err(anyhow::anyhow!(
-                    "Failed to switch to main branch: {}",
+                    "Failed to switch to '{}' branch: {}",
+                    safe_branch,
                     String::from_utf8_lossy(&output.stderr)
                 ));
             }

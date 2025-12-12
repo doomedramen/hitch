@@ -61,7 +61,7 @@ fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 
     for env_name in env_names {
         let env = &config.environments[env_name];
-        display_environment_status(context, env_name, env)?;
+        display_environment_status(context, env_name, env, config)?;
     }
 
     // Display summary at the end
@@ -172,6 +172,7 @@ fn display_environment_status(
     context: &GlobalContext,
     env_name: &str,
     env: &Environment,
+    config: &HitchConfig,
 ) -> Result<()> {
     // Environment header with visual separator and more info
     let status_indicator = if env.is_locked() {
@@ -218,13 +219,12 @@ fn display_environment_status(
             .dimmed()
         );
     } else {
-        // Pre-compute environment release status for performance
-        let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+        // Pre-compute environment release status for performance (using already-loaded config)
         let mut released_envs = std::collections::HashSet::new();
 
-        for (env_name, env) in &config.environments {
-            if env.released_at.is_some() {
-                released_envs.insert((env_name.clone(), env.base.clone()));
+        for (cfg_env_name, cfg_env) in &config.environments {
+            if cfg_env.released_at.is_some() {
+                released_envs.insert((cfg_env_name.clone(), cfg_env.base.clone()));
             }
         }
 

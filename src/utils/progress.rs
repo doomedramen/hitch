@@ -3,8 +3,6 @@
 //! Provides a simple callback-based progress reporting system
 //! that works without requiring async/await.
 
-#![allow(dead_code)]
-
 use std::fmt;
 use std::io::Write;
 use std::sync::{Arc, RwLock};
@@ -48,6 +46,7 @@ impl ProgressInfo {
     }
 
     /// Create a progress info for a single step operation
+    #[allow(dead_code)]
     pub fn single_step(operation: String, step_description: String) -> Self {
         Self {
             current_step: 0,
@@ -59,6 +58,7 @@ impl ProgressInfo {
     }
 
     /// Update to the next step
+    #[allow(dead_code)]
     pub fn next_step(&self, step_description: String) -> Self {
         Self::new(
             self.operation.clone(),
@@ -69,6 +69,7 @@ impl ProgressInfo {
     }
 
     /// Mark as complete
+    #[allow(dead_code)]
     pub fn complete(&self) -> Self {
         Self::new(
             self.operation.clone(),
@@ -129,14 +130,20 @@ impl ConsoleProgressReporter {
             return; // Verbose mode doesn't use progress bar
         }
 
-        let has_progress = self.last_progress.read().unwrap().is_some();
-        let already_suspended = *self.suspended.read().unwrap();
+        let has_progress = self
+            .last_progress
+            .read()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+        let already_suspended = self.suspended.read().map(|g| *g).unwrap_or(false);
 
         if has_progress && !already_suspended {
             // Clear the current line by overwriting with spaces and returning to start
             print!("\r{}\r", " ".repeat(120));
-            std::io::stdout().flush().unwrap();
-            *self.suspended.write().unwrap() = true;
+            let _ = std::io::stdout().flush();
+            if let Ok(mut guard) = self.suspended.write() {
+                *guard = true;
+            }
         }
     }
 
@@ -147,20 +154,24 @@ impl ConsoleProgressReporter {
             return; // Verbose mode doesn't use progress bar
         }
 
-        let is_suspended = *self.suspended.read().unwrap();
+        let is_suspended = self.suspended.read().map(|g| *g).unwrap_or(false);
         if is_suspended {
-            let last_progress = self.last_progress.read().unwrap();
-            if let Some(ref progress) = *last_progress {
-                // Don't resume if we're already complete
-                if progress.percentage.is_some_and(|p| p >= 1.0) {
-                    drop(last_progress);
-                    *self.suspended.write().unwrap() = false;
-                    return;
+            if let Ok(guard) = self.last_progress.read() {
+                if let Some(ref progress) = *guard {
+                    // Don't resume if we're already complete
+                    if progress.percentage.is_some_and(|p| p >= 1.0) {
+                        drop(guard);
+                        if let Ok(mut suspended) = self.suspended.write() {
+                            *suspended = false;
+                        }
+                        return;
+                    }
+                    self.draw_progress_bar(progress);
                 }
-                self.draw_progress_bar(progress);
             }
-            drop(last_progress);
-            *self.suspended.write().unwrap() = false;
+            if let Ok(mut suspended) = self.suspended.write() {
+                *suspended = false;
+            }
         }
     }
 
@@ -183,7 +194,7 @@ impl ConsoleProgressReporter {
                 percentage * 100.0,
                 progress.step_description
             );
-            std::io::stdout().flush().unwrap();
+            let _ = std::io::stdout().flush();
 
             // Move to next line when complete
             if percentage >= 1.0 {
@@ -202,8 +213,12 @@ impl ProgressReporter for ConsoleProgressReporter {
             println!("{}", progress);
         } else {
             // Store the progress for potential resume
-            *self.last_progress.write().unwrap() = Some(progress.clone());
-            *self.suspended.write().unwrap() = false;
+            if let Ok(mut guard) = self.last_progress.write() {
+                *guard = Some(progress.clone());
+            }
+            if let Ok(mut guard) = self.suspended.write() {
+                *guard = false;
+            }
 
             // Draw the progress bar
             self.draw_progress_bar(progress);
@@ -212,6 +227,7 @@ impl ProgressReporter for ConsoleProgressReporter {
 }
 
 /// No-op progress reporter for tests or when progress is not needed
+#[allow(dead_code)]
 pub struct NoOpProgressReporter;
 
 impl ProgressReporter for NoOpProgressReporter {
@@ -268,12 +284,14 @@ impl StepProgress {
 
     /// Suspend the progress bar (clears the current line)
     /// Call this before printing log messages to avoid interleaved output
+    #[allow(dead_code)]
     pub fn suspend(&self) {
         self.reporter.suspend();
     }
 
     /// Resume the progress bar (redraws the last progress state)
     /// Call this after printing log messages
+    #[allow(dead_code)]
     pub fn resume(&self) {
         self.reporter.resume();
     }
