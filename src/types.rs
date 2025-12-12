@@ -72,11 +72,6 @@ impl Environment {
     pub fn remove_branch(&mut self, branch: &str) {
         self.branches.retain(|b| b != branch);
     }
-
-    #[allow(dead_code)]
-    pub fn has_branch(&self, branch: &str) -> bool {
-        self.branches.contains(&branch.to_string())
-    }
 }
 
 /// Main Hitch configuration structure
@@ -202,11 +197,6 @@ impl HitchConfig {
 
     pub fn get_environment_mut(&mut self, name: &str) -> Option<&mut Environment> {
         self.environments.get_mut(name)
-    }
-
-    #[allow(dead_code)]
-    pub fn environment_exists(&self, name: &str) -> bool {
-        self.environments.contains_key(name)
     }
 
     pub fn get_environment_names(&self) -> Vec<String> {

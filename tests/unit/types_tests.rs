@@ -154,12 +154,12 @@ mod tests {
         let mut env = Environment::new("main".to_string());
 
         // Test empty environment
-        assert!(!env.has_branch("feature-1"));
+        assert!(!env.branches.contains(&"feature-1".to_string()));
 
         // Add branch and test
         env.add_branch("feature-1".to_string());
-        assert!(env.has_branch("feature-1"));
-        assert!(!env.has_branch("feature-2"));
+        assert!(env.branches.contains(&"feature-1".to_string()));
+        assert!(!env.branches.contains(&"feature-2".to_string()));
 
         Ok(())
     }
@@ -269,7 +269,7 @@ mod tests {
         let _ = config.add_environment("dev".to_string(), env);
 
         assert_eq!(config.environments.len(), 1);
-        assert!(config.environment_exists("dev"));
+        assert!(config.environments.contains_key("dev"));
         assert_eq!(config.get_environment_names().len(), 1);
 
         Ok(())
@@ -287,7 +287,7 @@ mod tests {
         // Remove environment
         config.remove_environment("dev");
         assert_eq!(config.environments.len(), 0);
-        assert!(!config.environment_exists("dev"));
+        assert!(!config.environments.contains_key("dev"));
 
         Ok(())
     }
@@ -341,7 +341,7 @@ mod tests {
 
         // Verify changes persisted
         let retrieved = config.get_environment("dev").unwrap();
-        assert!(retrieved.has_branch("feature-1"));
+        assert!(retrieved.branches.contains(&"feature-1".to_string()));
         assert!(retrieved.is_locked());
 
         Ok(())
@@ -353,11 +353,11 @@ mod tests {
         let env = Environment::new("main".to_string());
 
         // Test empty config
-        assert!(!config.environment_exists("dev"));
+        assert!(!config.environments.contains_key("dev"));
 
         // Add environment
         let _ = config.add_environment("dev".to_string(), env);
-        assert!(config.environment_exists("dev"));
+        assert!(config.environments.contains_key("dev"));
 
         Ok(())
     }
@@ -410,7 +410,7 @@ mod tests {
 
         let dev_env = config.get_environment("dev").unwrap();
         assert_eq!(dev_env.base, "develop");
-        assert!(dev_env.has_branch("feature-auth"));
+        assert!(dev_env.branches.contains(&"feature-auth".to_string()));
 
         let qa_env = config.get_environment("qa").unwrap();
         assert!(qa_env.is_locked());
@@ -473,8 +473,8 @@ mod tests {
                 deserialized.environments.len(),
                 original_config.environments.len()
             );
-            assert!(deserialized.environment_exists("dev"));
-            assert!(deserialized.environment_exists("prod"));
+            assert!(deserialized.environments.contains_key("dev"));
+            assert!(deserialized.environments.contains_key("prod"));
 
             Ok::<(), anyhow::Error>(())
         });
@@ -524,7 +524,7 @@ mod tests {
         let mut env = Environment::new("main".to_string());
 
         // Test operations on empty branches list
-        assert!(!env.has_branch("any-branch"));
+        assert!(!env.branches.contains(&"any-branch".to_string()));
         env.remove_branch("non-existent");
         assert!(env.branches.is_empty());
 
@@ -565,7 +565,7 @@ mod tests {
 
         for name in &special_names {
             let _ = config.add_environment(name.to_string(), Environment::new("main".to_string()));
-            assert!(config.environment_exists(name));
+            assert!(config.environments.contains_key(*name));
         }
 
         let retrieved_names = config.get_environment_names();

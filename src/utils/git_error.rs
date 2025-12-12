@@ -2,10 +2,17 @@
 //!
 //! Provides more specific error types for Git operations to improve error handling
 //! and provide better context to users.
+//!
+//! NOTE: This module is currently not integrated into the main codebase (which uses
+//! anyhow for error handling). It's kept as infrastructure for potential future use
+//! when more specific error types and recovery suggestions are needed.
 
 use std::fmt;
 
 /// Custom error types for Git operations
+///
+/// Currently unused - the codebase uses anyhow::Error for simplicity.
+/// This enum provides richer error types with recovery suggestions for future use.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum GitError {

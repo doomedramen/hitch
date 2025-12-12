@@ -194,6 +194,22 @@ release:
 
     echo "🚀 Creating new release with automatic version bump..."
 
+    # Safety checks
+    current_branch=$(git branch --show-current)
+    if [ "$current_branch" != "main" ]; then
+        echo "❌ Error: Releases must be created from the 'main' branch"
+        echo "   Current branch: $current_branch"
+        echo "   Please checkout main and try again: git checkout main"
+        exit 1
+    fi
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "❌ Error: Working directory has uncommitted changes"
+        echo "   Please commit or stash your changes before releasing"
+        git status --short
+        exit 1
+    fi
+
     # Get current version from Cargo.toml
     current_version=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "//' | sed 's/"//')
     echo "Current version: v${current_version}"
