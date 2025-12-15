@@ -5,15 +5,15 @@ pre-commit:
   commands:
     # Rust formatting
     format:
-      run: cargo fmt --all -- --check
+      run: just format-check
       fail_text: |
         🚨 Rust code formatting issues found!
 
-        Run 'cargo fmt' to fix formatting issues.
+        Run 'just format' to fix formatting issues.
 
     # Rust linting
     clippy:
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: just lint
       fail_text: |
         🚨 Clippy found issues!
 
@@ -29,17 +29,17 @@ pre-commit:
 
     # Check if Cargo.lock is up to date
     check-lock:
-      run: cargo check --locked
+      run: just check
       fail_text: |
         🚨 Cargo.lock is out of sync!
 
-        Run 'cargo check' to update Cargo.lock.
+        Run 'just check' to update Cargo.lock.
 
 pre-push:
   commands:
     # Build check (run first to fail fast on compilation issues)
     build:
-      run: cargo build --release
+      run: just build
       fail_text: |
         🚨 Build failed!
 
@@ -47,7 +47,7 @@ pre-push:
 
     # Run tests if they exist
     test:
-      run: cargo test --all-targets --all-features --release -- --test-threads=1 || echo "No tests to run"
+      run: just test
       fail_text: |
         🚨 Tests failed!
 

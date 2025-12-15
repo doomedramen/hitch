@@ -9,6 +9,7 @@ default:
     @echo "  lint          - Run linters"
     @echo "  install       - Install the binary locally"
     @echo "  test          - Run all tests"
+    @echo "  coverage      - Run tests with coverage (llvm-cov)"
     @echo "  clean         - Clean build artifacts"
     @echo "  dev           - Build in debug mode"
     @echo "  run           - Run the hitch binary in debug mode"
@@ -27,10 +28,16 @@ format:
     cargo fmt
     @echo "✅ Code formatted"
 
+# Check code formatting without modifying files
+format-check:
+    @echo "🎨 Checking code formatting..."
+    cargo fmt --all -- --check
+    @echo "✅ Code formatting is correct"
+
 # Run linters (clippy)
 lint:
     @echo "🔍 Running linters..."
-    cargo clippy --all-targets --all-features -- -W clippy::all
+    cargo clippy --all-targets --all-features -- -D warnings
     @echo "✅ Linting completed (check output for warnings)"
 
 # Install the binary locally (release build)
@@ -95,6 +102,14 @@ test-coverage-detailed:
     cargo tarpaulin --out Json --output-dir coverage/ -- --test-threads=1
     cargo tarpaulin --out Xml --output-dir coverage/ -- --test-threads=1
     @echo "✅ Detailed coverage reports generated in coverage/ directory"
+
+# Run coverage using llvm-cov (matches CI command)
+coverage:
+    @echo "🧪 Running tests with coverage (llvm-cov)..."
+    @command -v cargo-llvm-cov >/dev/null 2>&1 || \
+        (echo "❌ cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov" && exit 1)
+    cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info -- --test-threads=1
+    @echo "✅ Coverage report generated: lcov.info"
 
 # Show just the coverage summary without checking thresholds
 test-coverage-summary:

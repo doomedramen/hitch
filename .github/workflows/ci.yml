@@ -35,6 +35,9 @@ jobs:
         toolchain: ${{ matrix.rust }}
         components: rustfmt, clippy
 
+    - name: Install just
+      uses: taiki-e/install-action@just
+
     - name: Cache dependencies
       uses: actions/cache@v5
       with:
@@ -46,14 +49,14 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Run rustfmt
-      run: cargo fmt --all -- --check
+    - name: Run format check
+      run: just format-check
 
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: just lint
 
-    - name: Run basic tests
-      run: cargo test --lib --bins --all-features --verbose
+    - name: Run tests
+      run: just test
 
   build-matrix:
     name: Build Matrix
@@ -114,6 +117,9 @@ jobs:
       with:
         components: llvm-tools-preview
 
+    - name: Install just
+      uses: taiki-e/install-action@just
+
     - name: Cache dependencies
       uses: actions/cache@v5
       with:
@@ -128,11 +134,8 @@ jobs:
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
 
-    - name: Build binary for tests
-      run: cargo build --all-features
-
     - name: Generate coverage report
-      run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info -- --test-threads=1
+      run: just coverage
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
