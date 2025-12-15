@@ -10,6 +10,7 @@ default:
     @echo "  install       - Install the binary locally"
     @echo "  test          - Run all tests"
     @echo "  coverage      - Run tests with coverage (llvm-cov)"
+    @echo "  audit         - Run security audit"
     @echo "  clean         - Clean build artifacts"
     @echo "  dev           - Build in debug mode"
     @echo "  run           - Run the hitch binary in debug mode"
@@ -75,6 +76,12 @@ test-file file:
     @echo "🧪 Running tests in {{ file }}..."
     cargo test --test {{ file }}
     @echo "✅ Tests in {{ file }} passed"
+
+# Run security audit
+audit:
+    @echo "🔒 Running security audit..."
+    cargo audit
+    @echo "✅ Security audit completed"
 
 # Run tests with coverage (requires cargo-tarpaulin)
 test-coverage:
@@ -173,6 +180,12 @@ docs:
     @echo "📚 Generating documentation..."
     cargo doc --no-deps --document-private-items
     @echo "✅ Documentation generated. Open with: cargo doc --open"
+
+# Generate documentation for CI (no-deps, all-features, private items)
+docs-ci:
+    @echo "📚 Generating documentation for CI..."
+    cargo doc --no-deps --all-features --document-private-items
+    @echo "✅ Documentation generated for CI"
 
 # Serve documentation locally
 docs-serve: docs

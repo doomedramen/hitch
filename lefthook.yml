@@ -21,7 +21,7 @@ pre-commit:
 
     # Security audit
     audit:
-      run: cargo audit
+      run: just audit
       fail_text: |
         🚨 Security vulnerabilities found!
 
