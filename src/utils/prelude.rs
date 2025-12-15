@@ -1,7 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
 use crate::utils::conflict_report::format_conflict_report;
-use crate::utils::progress::{ConsoleProgressReporter, StepProgress};
+use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
 
 /// Reusable pre-check function for all commands
@@ -371,7 +371,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         .get(env_name)
         .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
 
-    // Set up progress tracking
+    // Set up step logging
     let base_steps = 4; // Initialize, create temp, merge/replace, cleanup
     let merge_steps = if environment.branches.is_empty() {
         1
@@ -379,17 +379,13 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         environment.branches.len()
     };
     let total_steps = base_steps + merge_steps;
-    let mut progress = StepProgress::new(
+    let mut logger = StepLogger::new(
         format!("Rebuilding environment '{}'", env_name),
         total_steps,
-        Box::new(ConsoleProgressReporter::new(context.verbose)),
     );
 
-    // Register the progress reporter with the context for suspend/resume during logging
-    context.set_active_progress(progress.reporter());
-
     // Step 1: Initialize
-    progress.step("Initializing rebuild".to_string());
+    logger.step("Initializing rebuild".to_string());
 
     // Step 2: Prepare temp branch with timestamp to avoid conflicts
     // The temp branch allows us to build the new environment state without affecting the real branch
@@ -398,7 +394,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
 
     // Use a closure to ensure proper cleanup even if an error occurs
     let result = (|| -> Result<()> {
-        progress.step(format!(
+        logger.step(format!(
             "Creating temporary branch from '{}'",
             environment.base
         ));
@@ -408,7 +404,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         // Step 3: Merge all promoted branches into temp branch using squash merges
         // Squash merges combine all changes without creating merge commits, keeping history clean
         if !environment.branches.is_empty() {
-            progress.step(format!(
+            logger.step(format!(
                 "Merging {} promoted branches",
                 environment.branches.len()
             ));
@@ -421,12 +417,12 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
                 env_name,
             )?;
         } else {
-            progress.step("No promoted branches to merge".to_string());
+            logger.step("No promoted branches to merge".to_string());
         }
 
         // Step 4: Replace the real environment branch with our rebuilt temp branch
         // This creates a backup first, then atomically replaces the branch
-        progress.step(format!(
+        logger.step(format!(
             "Replacing '{}' branch with rebuilt content",
             env_name
         ));
@@ -496,8 +492,6 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     // This is the error recovery path - we must always clean up temp branches
     // and return the user to their original branch
     if cleanup_needed {
-        // Clear progress bar before cleanup messages
-        context.clear_active_progress();
         context.log_warning("Rebuild failed, performing cleanup...");
 
         // Determine current branch to decide if we need to switch back
@@ -605,9 +599,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         }
     }
 
-    // Clear the active progress reporter before completing
-    context.clear_active_progress();
-    progress.complete();
+    logger.complete();
 
     context.log_verbose(&format!(
         "✓ Rebuild process completed for environment '{}'",
@@ -767,8 +759,6 @@ fn safe_replace_environment_branch_for_rebuild(
     // Step 4c: Handle remote branch replacement - always prompt when push is enabled
     if context.should_push() {
         // Interactive confirmation for force push
-        // Suspend progress bar for the entire confirmation flow
-        context.suspend_progress();
 
         println!(); // Add newline for clean separation
         context.log_warning(&format!(
@@ -824,9 +814,6 @@ fn safe_replace_environment_branch_for_rebuild(
                 env_name, env_name
             ));
         }
-
-        // Resume progress bar after confirmation flow
-        context.resume_progress();
     } else {
         context.log_verbose(&format!(
             "Skipping remote operations for '{}' branch due to --no-push flag",

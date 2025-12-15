@@ -234,23 +234,11 @@ fn display_environment_status(
                 if !exists {
                     "❌ ".bright_red().to_string()
                 } else {
-                    // Optimized check: use pre-computed release status
-                    let is_in_source =
-                        if released_envs.contains(&(env_name.to_string(), env.base.clone())) {
-                            // Environment was released, assume branches were incorporated
-                            true
-                        } else {
-                            // Fall back to git merge check for unreleased environments
-                            let is_merged = context
-                                .git()
-                                .is_branch_merged_into(branch, &env.base)
-                                .unwrap_or(false);
-                            // If this branch is actually merged, also add it to a tracking list for cleanup
-                            if is_merged {
-                                // We could track this for cleanup display if needed
-                            }
-                            is_merged
-                        };
+                    // Always check actual merge status regardless of release state
+                    let is_in_source = context
+                        .git()
+                        .is_branch_merged_into(branch, &env.base)
+                        .unwrap_or(false);
 
                     if is_in_source {
                         "⚠️  ".bright_yellow().to_string()
@@ -268,22 +256,16 @@ fn display_environment_status(
                 "".to_string().normal()
             };
 
-            // Use same optimized logic for warning text
-            let source_warning =
-                if released_envs.contains(&(env_name.to_string(), env.base.clone())) {
-                    format!(" (already in {})", env.base.bright_blue())
-                } else {
-                    // For unreleased environments, check git merge status
-                    if context
-                        .git()
-                        .is_branch_merged_into(branch, &env.base)
-                        .unwrap_or(false)
-                    {
-                        format!(" (already in {})", env.base.bright_blue())
-                    } else {
-                        "".to_string()
-                    }
-                };
+            // Check actual merge status for warning text
+            let source_warning = if context
+                .git()
+                .is_branch_merged_into(branch, &env.base)
+                .unwrap_or(false)
+            {
+                format!(" (already in {})", env.base.bright_blue())
+            } else {
+                "".to_string()
+            };
 
             println!(
                 "│  {} {} {}{}",
@@ -457,19 +439,13 @@ fn check_and_display_cleanup_needs(
 ) -> Result<()> {
     let mut branches_in_source = Vec::new();
 
-    // Check released environments first (fast path)
-    if env.released_at.is_some() && !env.branches.is_empty() {
-        // Environment was released, assume all promoted branches were incorporated
-        branches_in_source.extend(env.branches.clone());
-    } else if !env.branches.is_empty() {
-        // For unreleased environments, check git merge status (slower but accurate)
-        if context.git().branch_exists_anywhere(&env.base)? {
-            for branch in &env.branches {
-                if context.git().branch_exists_anywhere(branch)?
-                    && context.git().is_branch_merged_into(branch, &env.base)?
-                {
-                    branches_in_source.push(branch.clone());
-                }
+    // Check all environments for actual merge status
+    if !env.branches.is_empty() && context.git().branch_exists_anywhere(&env.base)? {
+        for branch in &env.branches {
+            if context.git().branch_exists_anywhere(branch)?
+                && context.git().is_branch_merged_into(branch, &env.base)?
+            {
+                branches_in_source.push(branch.clone());
             }
         }
     }
