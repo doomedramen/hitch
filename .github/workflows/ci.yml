@@ -78,6 +78,9 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Install just
+      uses: taiki-e/install-action@just
+
     - name: Install OpenSSL (macOS)
       if: runner.os == 'macOS'
       run: |
@@ -163,6 +166,9 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Install just
+      uses: taiki-e/install-action@just
 
     - name: Cache dependencies
       uses: actions/cache@v5
