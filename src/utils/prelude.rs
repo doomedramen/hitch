@@ -452,7 +452,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         // We use force delete since the backup might have been merged or have other references
         let mut cleanup_errors = Vec::new();
         if context.git().branch_exists(&backup_branch)? {
-            context.log_verbose(&format!("Cleaning up backup branch '{}'", backup_branch));
+            logger.step(format!("Cleaning up backup branch '{}'", backup_branch));
             if let Err(e) = context.git().delete_branch(&backup_branch, true) {
                 let error_msg =
                     format!("Failed to delete backup branch '{}': {}", backup_branch, e);
@@ -468,7 +468,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
 
         // Cleanup Step 2: Delete the temporary branch we used for rebuilding
         // Try regular delete first (if branch is fully merged), then force delete if needed
-        context.log_verbose(&format!("Cleaning up temporary branch '{}'", temp_branch));
+        logger.step(format!("Cleaning up temporary branch '{}'", temp_branch));
         if let Err(_e) = context.git().delete_branch(&temp_branch, false) {
             // Regular delete failed, likely because branch wasn't merged
             // Try force delete to remove it anyway
