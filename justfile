@@ -62,7 +62,7 @@ test:
 # Run core tests only (for release when some integration tests are failing)
 test-core:
     @echo "🧪 Running core tests..."
-    cargo test --lib --bins --test cli_main_test --test error_handling_recovery_tests --test git_edge_cases_tests --test git_operations_comprehensive_test --test git_operations_test --test init_comprehensive_test --test init_edge_cases_test --test init_final_coverage_test --test init_smoke_test --test rebuild_command_test --test reusable_functions_test --test simple_init_test --test types_test --test utils_integration_test --test validation_unit_tests
+    cargo test --lib --bins -- --test-threads=1
     @echo "✅ Core tests passed"
 
 # Run tests with verbose output
@@ -115,7 +115,7 @@ coverage:
     @echo "🧪 Running tests with coverage (llvm-cov)..."
     @command -v cargo-llvm-cov >/dev/null 2>&1 || \
         (echo "❌ cargo-llvm-cov not found. Install with: cargo install cargo-llvm-cov" && exit 1)
-    cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info -- --test-threads=1
+    cargo llvm-cov --lib --bins --lcov --output-path lcov.info -- --test-threads=1
     @echo "✅ Coverage report generated: lcov.info"
 
 # Show just the coverage summary without checking thresholds

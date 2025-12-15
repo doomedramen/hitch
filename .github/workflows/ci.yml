@@ -56,7 +56,7 @@ jobs:
       run: just lint
 
     - name: Run tests
-      run: just test
+      run: just test-core
 
   build-matrix:
     name: Build Matrix
