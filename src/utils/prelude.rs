@@ -53,6 +53,14 @@ where
     let original_branch = context.git().get_current_branch()?;
     context.log_verbose(&format!("Current branch recorded: {}", original_branch));
 
+    // CRITICAL: Clean up any uncommitted files before checkout
+    if let Err(e) = context.git().abort_merge_and_clean() {
+        context.log_warning(&format!(
+            "Failed to reset working directory before checkout: {}",
+            e
+        ));
+    }
+
     // Checkout target branch
     context.git().checkout_branch(target_branch)?;
     context.log_verbose(&format!("Switched to branch: {}", target_branch));
@@ -65,6 +73,14 @@ where
         "Switching back to original branch: {}",
         original_branch
     ));
+
+    // CRITICAL: Clean up any uncommitted files before returning
+    if let Err(e) = context.git().abort_merge_and_clean() {
+        context.log_warning(&format!(
+            "Failed to reset working directory before returning: {}",
+            e
+        ));
+    }
 
     // Handle detached HEAD case specially
     let checkout_result = if original_branch.starts_with("detached-HEAD-") {
