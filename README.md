@@ -140,6 +140,58 @@ hitch approvals cleanup --older-than 90
 - **Audit Trail:** Tracks who requested, who approved, and when
 - **Automatic Application:** Promotion applies automatically when threshold is reached
 
+#### Branch Protection Setup (Recommended)
+
+While Hitch enforces approvals at the application level, you should also configure branch protection rules on your Git hosting platform to prevent bypassing Hitch with direct `git push` commands.
+
+**GitHub:**
+```
+Settings → Branches → Branch protection rules
+
+For environment branches (e.g., production, staging):
+☑ Require pull request reviews before merging (optional, for PR-based workflows)
+☑ Require status checks to pass before merging
+☑ Require branches to be up to date before merging
+☑ Do not allow bypassing the above settings
+☑ Restrict who can push to matching branches
+  → Add: CI/CD service account or Hitch automation user
+```
+
+**GitLab:**
+```
+Settings → Repository → Protected Branches
+
+For environment branches:
+- Branch: production
+- Allowed to merge: Maintainers
+- Allowed to push: No one (or CI/CD service account only)
+- Allowed to force push: No
+```
+
+**Bitbucket:**
+```
+Repository settings → Branch permissions
+
+For environment branches:
+- Type: Branch
+- Branch: production
+- Prevent all changes except from: [CI/CD user or specific users]
+- Prevent deletion: Yes
+- Require approvals: Yes (if using PR workflow)
+```
+
+**Why This Matters:**
+- Hitch's approval workflow can be bypassed with `git push --force` or `git push --no-verify`
+- Branch protection rules enforce permissions at the repository level
+- Provides defense-in-depth: Hitch + Git hosting platform protection
+- Essential for production environments with compliance requirements
+
+**Recommended Setup:**
+1. Configure Hitch approval workflow for sensitive environments
+2. Add `hitch guard` to pre-commit hooks (prevents local commits)
+3. Enable branch protection rules on your Git hosting platform (prevents remote pushes)
+4. Use a dedicated service account for CI/CD with push permissions
+
 ### Environment Locking
 ```bash
 # Lock production during critical periods
