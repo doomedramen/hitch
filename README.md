@@ -36,12 +36,14 @@ If you're using branch-based deployments, you've likely faced these challenges:
 - **"Who deployed the feature/api-endpoints branch to production?"**
 - **"Can we lock production while we fix this critical bug?"**
 - **"How do we rebuild staging with all the latest promoted features?"**
+- **"How do we require team approval before production deployments?"**
 
 Hitch solves these problems by providing a structured metadata layer that tracks:
 - Which branches are promoted to which environments
 - When environments were last rebuilt
 - Who locked environments and when
 - Proper promotion/demotion workflows
+- Multi-person approval requirements for sensitive environments
 
 ## 📋 Use Cases
 
@@ -79,6 +81,64 @@ hitch promote feature/new-api dev     # Deploy to development
 hitch promote feature/new-api qa      # Deploy to QA testing
 hitch promote feature/new-api production  # Deploy to production
 ```
+
+### Approval Workflow
+For sensitive environments like production, you can require multi-person approval before promotions are applied. This adds an extra safety layer to prevent unauthorized or premature deployments.
+
+#### Configuration
+Add approval requirements to your environment in `hitch.json`:
+```json
+{
+  "environments": {
+    "production": {
+      "base": "main",
+      "branches": [],
+      "requires_approval": true,
+      "min_approvals": 2,
+      "approvers": ["alice@company.com", "bob@company.com", "charlie@company.com"]
+    }
+  }
+}
+```
+
+#### Approval Workflow Example
+```bash
+# Request promotion (creates approval request instead of direct promotion)
+hitch promote feature/new-api production
+# ✓ Approval request 3f8a92 created - requires 2 approvals
+
+# View pending approval requests
+hitch approvals list --status pending
+# Shows: Request 3f8a92 (0/2 approvals)
+
+# Approvers approve the request
+hitch approvals approve 3f8a92 "Tested in QA, looks good"
+# ✓ Approval recorded (1/2)
+
+hitch approvals approve 3f8a92 "LGTM, ready for production"
+# ✓ Approval threshold reached (2/2)
+# ✓ Promotion applied automatically to production!
+
+# View detailed request status
+hitch approvals status 3f8a92
+
+# Reject a request with reason
+hitch approvals reject 3f8a92 "Needs more testing on edge cases"
+
+# Cancel your own request
+hitch approvals cancel 3f8a92
+
+# Clean up old requests
+hitch approvals cleanup --older-than 90
+```
+
+**Key Features:**
+- **Snapshot Validation:** Captures branch SHAs when requested; rejects if branches change before approval
+- **Authorization:** Only designated approvers can approve/reject
+- **Self-Approval Prevention:** Cannot approve your own requests
+- **Duplicate Prevention:** Cannot approve the same request twice
+- **Audit Trail:** Tracks who requested, who approved, and when
+- **Automatic Application:** Promotion applies automatically when threshold is reached
 
 ### Environment Locking
 ```bash
