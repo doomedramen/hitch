@@ -1,6 +1,7 @@
 pub mod global_context;
 
 pub mod add;
+pub mod approvals;
 pub mod completion;
 pub mod demote;
 pub mod guard;

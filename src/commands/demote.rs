@@ -101,6 +101,28 @@ fn validate_preconditions(
         ));
     }
 
+    // Check if approval is required for this environment
+    if environment.requires_approval_check() {
+        context.log_info(&format!(
+            "Environment '{}' requires approval before demotion",
+            env_name
+        ));
+
+        // Create approval request instead of executing demotion
+        let request_id = crate::utils::prelude::create_approval_request_for_operation(
+            context,
+            env_name,
+            branch,
+            crate::types::Operation::Demote,
+        )?;
+
+        // Display approval request information
+        crate::utils::prelude::display_approval_request_created(context, &request_id)?;
+
+        // Return success without executing demotion
+        return Ok(());
+    }
+
     validation_success(
         context,
         &format!("'{}' from '{}'", branch, env_name),

@@ -107,6 +107,28 @@ fn validate_preconditions(
     // Check if branch exists and is valid for promotion
     validate_branch_for_promotion(context, branch)?;
 
+    // Check if approval is required for this environment
+    if environment.requires_approval_check() {
+        context.log_info(&format!(
+            "Environment '{}' requires approval before promotion",
+            env_name
+        ));
+
+        // Create approval request instead of executing promotion
+        let request_id = crate::utils::prelude::create_approval_request_for_operation(
+            context,
+            env_name,
+            branch,
+            crate::types::Operation::Promote,
+        )?;
+
+        // Display approval request information
+        crate::utils::prelude::display_approval_request_created(context, &request_id)?;
+
+        // Return success without executing promotion
+        return Ok(());
+    }
+
     validation_success(
         context,
         &format!("'{}' to '{}'", branch, env_name),

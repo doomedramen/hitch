@@ -54,6 +54,8 @@ enum Commands {
     Guard(commands::guard::GuardCommand),
     /// Generate shell completion script
     Completion(commands::completion::CompletionCommand),
+    /// Manage approval requests for deployments
+    Approvals(commands::approvals::ApprovalsCommand),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -76,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Unlock(_) => "unlock",
         Commands::Guard(_) => "guard",
         Commands::Completion(_) => "completion",
+        Commands::Approvals(_) => "approvals",
     };
 
     // Create a new logger configured for this command
@@ -101,5 +104,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Completion(args) => {
             commands::completion::run(args, &context).map_err(|e| e.into())
         }
+        Commands::Approvals(args) => commands::approvals::run(args, &context).map_err(|e| e.into()),
     }
 }
