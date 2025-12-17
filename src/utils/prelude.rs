@@ -275,6 +275,42 @@ where
     }
 }
 
+/// Modify metadata with rollback tracking
+///
+/// This function extends modify_metadata by capturing the pre-operation state
+/// for potential rollback purposes. It works the same as modify_metadata
+/// but also captures rollback information.
+pub fn modify_metadata_with_rollback<F>(
+    context: &GlobalContext,
+    rollback_info: &mut crate::types::RollbackInfo,
+    closure: F,
+) -> Result<()>
+where
+    F: FnOnce(&mut HitchConfig) -> Result<()>,
+{
+    context.log_verbose("Accessing hitch metadata with rollback tracking...");
+
+    // Capture current commit SHA before making any changes
+    let commit_before = crate::utils::rollback::capture_current_commit_sha(context)?;
+    rollback_info.metadata_commit_before = Some(commit_before);
+
+    // Execute the normal modify_metadata function
+    let result = modify_metadata(context, closure);
+
+    match &result {
+        Ok(()) => {
+            context.log_verbose("✓ Metadata modified successfully, rollback info captured");
+            Ok(())
+        }
+        Err(e) => {
+            context.log_verbose(&format!("Metadata modification failed: {}", e));
+            // Clear rollback info since modification didn't succeed
+            rollback_info.metadata_commit_before = None;
+            result
+        }
+    }
+}
+
 /// Execute operations within a locked environment context
 ///
 /// According to the specification:

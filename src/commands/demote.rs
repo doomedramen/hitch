@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::types::{RollbackInfo, RollbackOperation};
 use crate::utils::command_helpers::{environment::get_locked_by_user, logging::validation_success};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
@@ -27,17 +28,40 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 2: Additional validation specific to demotion
     validate_preconditions(context, &args.branch, &args.env_name)?;
 
-    // Step 2-4: Execute demotion with automatic locking and unlocking
-    // This will remove the branch from environment, commit metadata, and trigger rebuild
-    crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-        demote_branch_from_environment(context, &args.branch, &args.env_name)
-    })?;
+    // Create rollback info for this operation
+    let mut rollback_info = RollbackInfo::new(
+        RollbackOperation::Demote,
+        args.env_name.clone(),
+        args.branch.clone(),
+    );
 
-    context.log_success(&format!(
-        "Successfully demoted '{}' from environment '{}'!",
-        args.branch, args.env_name
-    ));
-    Ok(())
+    // Step 3: Execute demotion with automatic locking and unlocking and rollback capability
+    let result = crate::utils::prelude::with_locked_env(context, &args.env_name, || {
+        demote_branch_from_environment(context, &args.branch, &args.env_name, &mut rollback_info)
+    });
+
+    // Step 4: Handle result with automatic rollback on failure
+    match result {
+        Ok(()) => {
+            context.log_success(&format!(
+                "Successfully demoted '{}' from environment '{}'!",
+                args.branch, args.env_name
+            ));
+            Ok(())
+        }
+        Err(e) => {
+            // Attempt automatic rollback
+            if let Err(rollback_err) =
+                crate::utils::rollback::rollback_metadata_changes(context, &rollback_info)
+            {
+                context.log_error(&format!(
+                    "CRITICAL: Failed to rollback metadata changes: {}. Manual intervention may be required.",
+                    rollback_err
+                ));
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Validate that branch and environment are ready for demotion
@@ -90,14 +114,19 @@ fn demote_branch_from_environment(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
+    rollback_info: &mut RollbackInfo,
 ) -> anyhow::Result<()> {
     context.log_verbose(&format!(
         "Removing '{}' from environment '{}'...",
         branch, env_name
     ));
 
-    // Modify metadata to remove the branch
-    crate::utils::prelude::modify_metadata(context, |config| {
+    // Capture pre-operation environment state for rollback
+    rollback_info.previous_state =
+        crate::utils::rollback::capture_environment_state(context, env_name)?;
+
+    // Modify metadata to remove the branch with rollback tracking
+    crate::utils::prelude::modify_metadata_with_rollback(context, rollback_info, |config| {
         let available_envs = config.get_environment_names().join(", ");
         let environment = config.get_environment_mut(env_name).ok_or_else(|| {
             anyhow::anyhow!(

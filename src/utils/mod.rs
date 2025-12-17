@@ -8,4 +8,5 @@ pub mod log_macros;
 pub mod logging;
 pub mod prelude;
 pub mod progress;
+pub mod rollback;
 pub mod validation;

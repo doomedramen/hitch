@@ -74,6 +74,44 @@ impl Environment {
     }
 }
 
+/// Types of operations that can be rolled back
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RollbackOperation {
+    Promote,
+    Demote,
+}
+
+/// Information needed to rollback a failed operation
+#[derive(Debug, Clone)]
+pub struct RollbackInfo {
+    /// The type of operation being performed
+    pub operation: RollbackOperation,
+    /// The target environment name
+    pub env_name: String,
+    /// The branch being promoted/demoted
+    pub branch: String,
+    /// The environment state before the operation
+    pub previous_state: Option<Environment>,
+    /// The commit SHA before metadata modification
+    pub metadata_commit_before: Option<String>,
+    /// When the operation was started
+    #[allow(dead_code)]
+    pub timestamp: DateTime<Utc>,
+}
+
+impl RollbackInfo {
+    pub fn new(operation: RollbackOperation, env_name: String, branch: String) -> Self {
+        Self {
+            operation,
+            env_name,
+            branch,
+            previous_state: None,
+            metadata_commit_before: None,
+            timestamp: Utc::now(),
+        }
+    }
+}
+
 /// Main Hitch configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitchConfig {

@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::types::{RollbackInfo, RollbackOperation};
 use crate::utils::command_helpers::{
     ensure_environment_exists, environment::get_locked_by_user, logging::validation_success,
     validate_branch_for_promotion,
@@ -30,17 +31,40 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 2: Additional validation specific to promotion
     validate_preconditions(context, &args.branch, &args.env_name)?;
 
-    // Step 2-4: Execute promotion with automatic locking and unlocking
-    // This will add the branch to environment, commit metadata, and trigger rebuild
-    crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-        promote_branch_to_environment(context, &args.branch, &args.env_name)
-    })?;
+    // Create rollback info for this operation
+    let mut rollback_info = RollbackInfo::new(
+        RollbackOperation::Promote,
+        args.env_name.clone(),
+        args.branch.clone(),
+    );
 
-    context.log_success(&format!(
-        "Successfully promoted '{}' to environment '{}'!",
-        args.branch, args.env_name
-    ));
-    Ok(())
+    // Step 3: Execute promotion with automatic locking and unlocking and rollback capability
+    let result = crate::utils::prelude::with_locked_env(context, &args.env_name, || {
+        promote_branch_to_environment(context, &args.branch, &args.env_name, &mut rollback_info)
+    });
+
+    // Step 4: Handle result with automatic rollback on failure
+    match result {
+        Ok(()) => {
+            context.log_success(&format!(
+                "Successfully promoted '{}' to environment '{}'!",
+                args.branch, args.env_name
+            ));
+            Ok(())
+        }
+        Err(e) => {
+            // Attempt automatic rollback
+            if let Err(rollback_err) =
+                crate::utils::rollback::rollback_metadata_changes(context, &rollback_info)
+            {
+                context.log_error(&format!(
+                    "CRITICAL: Failed to rollback metadata changes: {}. Manual intervention may be required.",
+                    rollback_err
+                ));
+            }
+            Err(e)
+        }
+    }
 }
 
 /// Validate that branch and environment are ready for promotion
@@ -96,14 +120,19 @@ fn promote_branch_to_environment(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
+    rollback_info: &mut RollbackInfo,
 ) -> anyhow::Result<()> {
     context.log_verbose(&format!(
         "Adding '{}' to environment '{}'...",
         branch, env_name
     ));
 
-    // Modify metadata to add the branch
-    crate::utils::prelude::modify_metadata(context, |config| {
+    // Capture pre-operation environment state for rollback
+    rollback_info.previous_state =
+        crate::utils::rollback::capture_environment_state(context, env_name)?;
+
+    // Modify metadata to add the branch with rollback tracking
+    crate::utils::prelude::modify_metadata_with_rollback(context, rollback_info, |config| {
         let available_envs = config.get_environment_names().join(", ");
         let environment = config.get_environment_mut(env_name).ok_or_else(|| {
             anyhow::anyhow!(
