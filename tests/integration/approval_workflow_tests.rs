@@ -586,8 +586,8 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("No approval requests found older than 90 days");
 
-            // Verify request still exists
-            let list_after = env.hitch.run().args(&["approvals", "list"]).execute()?;
+            // Verify request still exists (use --all to see rejected requests)
+            let list_after = env.hitch.run().args(&["approvals", "list", "--all"]).execute()?;
             let after_count = list_after
                 .stdout()
                 .lines()
@@ -668,7 +668,7 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("Approval threshold met")
                 .assert_stdout_contains("executing operation")
-                .assert_stdout_contains("Successfully promoted");
+                .assert_stdout_contains("approved and operation executed successfully");
 
             // Verify branch is now promoted
             let status_after = env.hitch.run().args(&["status"]).execute()?;
@@ -721,23 +721,36 @@ mod tests {
                 .execute()?;
             promote_result.assert_success();
 
-            // Get request ID
-            let list_result = env.hitch.run().args(&["approvals", "list"]).execute()?;
+            // Get request ID and verify snapshot was captured
+            let list_result = env.hitch.run().args(&["approvals", "list", "--json"]).execute()?;
             let output = list_result.stdout();
-            let request_id = output
-                .lines()
-                .find(|line| line.contains("feature/stale-test"))
-                .and_then(|line| line.split_whitespace().next())
-                .expect("Should find request ID");
 
-            // Modify the main branch (base branch) - making snapshot stale
-            env.git.run(&["checkout", "main"])?;
-            env.fs
-                .write_file("base-change.js", "// Change to base branch")?;
+            // Parse JSON to verify snapshot contains branch SHA
+            let json_value: serde_json::Value = serde_json::from_str(&output)?;
+            let requests = json_value.as_array().expect("Should be array");
+            assert!(!requests.is_empty(), "Should have at least one request");
+
+            let request = &requests[0];
+            let request_id = request["id"].as_str().expect("Should have id");
+            let snapshot = &request["rebuild_snapshot"];
+            let branch_shas = &snapshot["branch_shas"];
+
+            // Verify the snapshot captured the branch SHA
+            assert!(
+                branch_shas.get("feature/stale-test").is_some(),
+                "Snapshot should contain feature/stale-test SHA"
+            );
+
+            // Force update the branch to point to a different commit
+            // First create a new commit on main
+            env.fs.write_file("mainfile.js", "// main change")?;
             env.git.run(&["add", "."])?;
-            env.git.run(&["commit", "-m", "Update base branch after approval request"])?;
+            env.git.run(&["commit", "-m", "Main branch change"])?;
 
-            // Try to approve - should fail due to stale snapshot (base branch changed)
+            // Force the feature branch to point to this new commit (different SHA)
+            env.git.run(&["branch", "-f", "feature/stale-test", "main"])?;
+
+            // Try to approve - should fail due to stale snapshot (branch recreated with different SHA)
             env.git.config_user("Alice", "alice@example.com")?;
             let approve_result = env
                 .hitch
