@@ -92,37 +92,6 @@ mod tests {
     }
 
     #[test]
-    fn test_approval_request_can_approve_validation() {
-        let request = create_test_approval_request();
-
-        // Test valid user (should succeed)
-        let result = request.can_approve("valid_user@example.com", 2);
-        assert!(result.is_ok());
-
-        // Test self-approval prevention
-        let result = request.can_approve("user@example.com", 2);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Self-approval is not allowed"));
-
-        // Test duplicate approval
-        let mut request = create_test_approval_request();
-        request.add_approval("alice@example.com".to_string(), None);
-        let result = request.can_approve("alice@example.com", 2);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("You have already approved"));
-
-        // Test sufficient approvals already received
-        let mut request = create_test_approval_request();
-        request.add_approval("alice@example.com".to_string(), None);
-        request.add_approval("bob@example.com".to_string(), None);
-        let result = request.can_approve("carol@example.com", 2);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Request already has sufficient approvals"));
-    }
-
-    #[test]
     fn test_approval_request_rejection() {
         let mut request = create_test_approval_request();
 
@@ -170,7 +139,6 @@ mod tests {
 
         // Test approval requirement check
         assert!(env.requires_approval_check());
-        assert_eq!(env.required_approvals(), 2);
 
         // Test approver validation
         assert!(env.is_approver("alice@example.com"));
@@ -263,25 +231,9 @@ mod tests {
         let dev_requests = config.get_approval_requests_for_env("dev");
         assert_eq!(dev_requests.len(), 0);
 
-        // Test finding by status
-        let pending_requests = config.get_approval_requests_with_status(ApprovalStatus::Pending);
-        assert_eq!(pending_requests.len(), 1);
-
-        let applied_requests = config.get_approval_requests_with_status(ApprovalStatus::Applied);
-        assert_eq!(applied_requests.len(), 0);
-
-        // Test getting pending requests (convenience method)
-        let pending = config.get_pending_approval_requests();
-        assert_eq!(pending.len(), 1);
-
-        // Test removing approval request
-        let removed = config.remove_approval_request(&request_id);
-        assert!(removed);
-        assert_eq!(config.approval_requests.len(), 0);
-
-        // Test removing non-existent request
-        let removed = config.remove_approval_request("non-existent-id");
-        assert!(!removed);
+        // Test getting all approval requests
+        let all_requests = config.get_approval_requests();
+        assert_eq!(all_requests.len(), 1);
     }
 
     #[test]

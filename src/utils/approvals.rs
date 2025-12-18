@@ -304,12 +304,3 @@ pub fn display_approval_request_info(
 
     Ok(())
 }
-
-/// Check if approval is required for an environment
-pub fn is_approval_required(config: &HitchConfig, environment_name: &str) -> Result<bool> {
-    let environment = config
-        .get_environment(environment_name)
-        .ok_or_else(|| anyhow!("Environment '{}' not found", environment_name))?;
-
-    Ok(environment.requires_approval_check())
-}

@@ -94,15 +94,6 @@ impl Environment {
         self.requires_approval
     }
 
-    /// Get the number of approvals required for this environment
-    pub fn required_approvals(&self) -> usize {
-        if self.requires_approval {
-            self.min_approvals
-        } else {
-            0
-        }
-    }
-
     /// Check if a user is authorized to approve changes to this environment
     pub fn is_approver(&self, email: &str) -> bool {
         self.approvers.contains(&email.to_string())
@@ -311,26 +302,6 @@ impl ApprovalRequest {
         self.approvals.len()
     }
 
-    /// Check if the request can be approved by the given user
-    pub fn can_approve(&self, email: &str, min_approvals: usize) -> Result<(), String> {
-        if self.status != ApprovalStatus::Pending {
-            return Err(format!(
-                "Request is not pending (current status: {})",
-                self.status
-            ));
-        }
-        if email == self.requested_by {
-            return Err("Self-approval is not allowed".to_string());
-        }
-        if self.has_approved(email) {
-            return Err("You have already approved this request".to_string());
-        }
-        if self.approval_count() >= min_approvals {
-            return Err("Request already has sufficient approvals".to_string());
-        }
-        Ok(())
-    }
-
     /// Add an approval to this request
     pub fn add_approval(&mut self, approved_by: String, comment: Option<String>) {
         self.approvals.push(Approval {
@@ -530,13 +501,6 @@ impl HitchConfig {
         self.approval_requests.iter_mut().find(|r| r.id == id)
     }
 
-    /// Remove an approval request by ID
-    pub fn remove_approval_request(&mut self, id: &str) -> bool {
-        let initial_len = self.approval_requests.len();
-        self.approval_requests.retain(|r| r.id != id);
-        self.approval_requests.len() < initial_len
-    }
-
     /// Get all approval requests
     pub fn get_approval_requests(&self) -> &[ApprovalRequest] {
         &self.approval_requests
@@ -548,22 +512,6 @@ impl HitchConfig {
             .iter()
             .filter(|r| r.environment == env_name)
             .collect()
-    }
-
-    /// Get approval requests with a specific status
-    pub fn get_approval_requests_with_status(
-        &self,
-        status: ApprovalStatus,
-    ) -> Vec<&ApprovalRequest> {
-        self.approval_requests
-            .iter()
-            .filter(|r| r.status == status)
-            .collect()
-    }
-
-    /// Get pending approval requests
-    pub fn get_pending_approval_requests(&self) -> Vec<&ApprovalRequest> {
-        self.get_approval_requests_with_status(ApprovalStatus::Pending)
     }
 }
 

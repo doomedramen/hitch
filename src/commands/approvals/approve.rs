@@ -21,16 +21,33 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     crate::utils::prelude::pre_check(context)?;
 
     // Step 2: Validate and process the approval
+    context.log_info("");
+    context.log_info("Fetching approval request...");
     let (request_details, environment_name, min_approvals) = validate_and_approve(context, &args)?;
 
     // Step 3: If threshold is met, execute the operation
     let mut executed = false;
     if request_details.threshold_met(min_approvals) {
-        context.log_info("✓ Approval threshold met - executing operation");
+        context.log_info("");
+        context.log_info(&format!(
+            "Approvals: {}/{} - Threshold met!",
+            request_details.approvals.len(),
+            min_approvals
+        ));
+        context.log_info("");
+        context.log_info(&format!(
+            "Executing {}...",
+            if request_details.operation == crate::types::Operation::Promote {
+                "promotion"
+            } else {
+                "demotion"
+            }
+        ));
         executed = execute_approved_operation(context, &args.request_id, &environment_name)?;
     }
 
     // Step 4: Show completion status
+    context.log_info("");
     if executed {
         context.log_success(&format!(
             "✓ Request {} approved and operation executed successfully!",
@@ -41,7 +58,10 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
             "✓ Request {} approved successfully!",
             args.request_id
         ));
-        context.log_info("Waiting for more approvals to execute the operation.");
+        context.log_info(&format!(
+            "Waiting for {} more approval(s) to execute the operation.",
+            min_approvals.saturating_sub(request_details.approvals.len())
+        ));
     }
 
     Ok(())
@@ -53,6 +73,7 @@ fn validate_and_approve(
 ) -> Result<(crate::types::ApprovalRequest, String, usize)> {
     // Get request details first for validation
     let request = crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
+    context.log_info(&format!("  ✓ Request found: {}", &args.request_id[..8]));
     let environment_name = request.environment.clone();
 
     // Get environment configuration
@@ -61,20 +82,28 @@ fn validate_and_approve(
     let min_approvals = environment.min_approvals;
 
     // Validate authorization
-    if !environment.is_approver(&get_current_user_email(context)?) {
+    context.log_info("");
+    context.log_info("Validating authorization...");
+
+    let current_user = get_current_user_email(context)?;
+
+    if !environment.is_approver(&current_user) {
         return Err(anyhow::anyhow!(
             "You are not authorized to approve requests for environment '{}'",
             environment_name
         ));
     }
+    context.log_info(&format!("  ✓ You ({}) are authorized", current_user));
 
-    if request.requested_by == get_current_user_email(context)? {
+    if request.requested_by == current_user {
         return Err(anyhow::anyhow!("Self-approval is not allowed"));
     }
+    context.log_info("  ✓ Not a self-approval");
 
-    if request.has_approved(&get_current_user_email(context)?) {
+    if request.has_approved(&current_user) {
         return Err(anyhow::anyhow!("You have already approved this request"));
     }
+    context.log_info("  ✓ No duplicate approval");
 
     if request.status != crate::types::ApprovalStatus::Pending {
         return Err(anyhow::anyhow!(
@@ -85,9 +114,19 @@ fn validate_and_approve(
 
     // Validate snapshot BEFORE recording approval - if the snapshot is stale,
     // we shouldn't record an approval that can never be executed
+    context.log_info("");
+    context.log_info("Validating snapshot...");
     crate::utils::snapshot::validate_snapshot(context, &request.rebuild_snapshot)?;
+    context.log_info(&format!(
+        "  ✓ Base branch unchanged ({})",
+        &request.rebuild_snapshot.base_sha[..7]
+    ));
+    context.log_info("  ✓ All promoted branches unchanged");
 
     // Perform the approval with rollback protection
+    context.log_info("");
+    context.log_info("Recording approval...");
+
     let mut rollback_info = RollbackInfo::new(
         RollbackOperation::Promote, // Use Promote as default for approval operations
         environment_name.clone(),
@@ -109,8 +148,30 @@ fn validate_and_approve(
                 args.comment.clone(),
             )?;
 
+            context.log_info("  ✓ Approval recorded");
+
+            // Get updated approval count
+            let updated_request = config
+                .get_approval_request(&args.request_id)
+                .ok_or_else(|| anyhow::anyhow!("Request not found after approval"))?;
+
+            context.log_info("");
             if threshold_met {
-                context.log_info("✓ Approval threshold met");
+                context.log_info(&format!(
+                    "Approvals: {}/{} - Threshold met!",
+                    updated_request.approvals.len(),
+                    min_approvals
+                ));
+            } else {
+                context.log_info(&format!(
+                    "Approvals: {}/{}",
+                    updated_request.approvals.len(),
+                    min_approvals
+                ));
+                context.log_info(&format!(
+                    "Waiting for {} more approval(s)",
+                    min_approvals.saturating_sub(updated_request.approvals.len())
+                ));
             }
 
             Ok(())
@@ -161,7 +222,16 @@ fn execute_approved_operation(
     );
 
     // Execute the operation with rollback protection
+    context.log_info(&format!(
+        "  ⏳ Locking environment '{}'...",
+        environment_name
+    ));
     let result = with_locked_env(context, environment_name, || {
+        context.log_info(&format!("  ✓ Environment '{}' locked", environment_name));
+
+        context.log_info("");
+        context.log_info("  ⏳ Updating environment metadata...");
+
         modify_metadata(context, |config| {
             // Store current environment state for rollback
             if let Some(env) = config.get_environment(environment_name) {
@@ -188,6 +258,7 @@ fn execute_approved_operation(
 
     match result {
         Ok(()) => {
+            context.log_info(&format!("  ✓ Environment '{}' unlocked", environment_name));
             context.log_verbose("✓ Operation executed successfully");
             Ok(true)
         }
@@ -222,8 +293,8 @@ fn execute_operation_based_on_request(
 
             if !environment.branches.contains(&request.branch) {
                 environment.add_branch(request.branch.clone());
-                context.log_verbose(&format!(
-                    "✓ Added '{}' to environment '{}'",
+                context.log_info(&format!(
+                    "  ✓ Branch '{}' added to environment '{}'",
                     request.branch, request.environment
                 ));
             } else {
@@ -242,8 +313,8 @@ fn execute_operation_based_on_request(
                 })?;
 
             environment.remove_branch(&request.branch);
-            context.log_verbose(&format!(
-                "✓ Removed '{}' from environment '{}'",
+            context.log_info(&format!(
+                "  ✓ Branch '{}' removed from environment '{}'",
                 request.branch, request.environment
             ));
         }

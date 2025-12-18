@@ -133,16 +133,6 @@ pub fn validate_rejection_authorization(
     Ok(())
 }
 
-/// Check if approval threshold is met
-pub fn is_approval_threshold_met(request: &ApprovalRequest, min_approvals: usize) -> bool {
-    request.threshold_met(min_approvals)
-}
-
-/// Get remaining approvals needed
-pub fn get_remaining_approvals(request: &ApprovalRequest, min_approvals: usize) -> usize {
-    min_approvals.saturating_sub(request.approval_count())
-}
-
 /// Get users who can still approve the request
 pub fn get_remaining_approvers(
     environment: &Environment,

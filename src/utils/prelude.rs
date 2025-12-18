@@ -902,13 +902,6 @@ fn update_rebuilt_timestamp_for_rebuild(context: &GlobalContext, env_name: &str)
 // Approval Workflow Helper Functions
 // =============================================================================
 
-/// Check if approval is required for an environment
-pub fn check_approval_required(context: &GlobalContext, env_name: &str) -> Result<bool> {
-    access_metadata_read_only(context, |config| {
-        crate::utils::approvals::is_approval_required(config, env_name)
-    })
-}
-
 /// Create an approval request for a promote/demote operation
 pub fn create_approval_request_for_operation(
     context: &GlobalContext,
@@ -960,100 +953,6 @@ pub fn get_approval_request_by_id(
     access_metadata_read_only(context, |config| {
         crate::utils::approvals::find_approval_request(config, request_id).cloned()
     })
-}
-
-/// Execute an approved request (promote/demote operation)
-pub fn execute_approved_request(context: &GlobalContext, request_id: &str) -> Result<()> {
-    context.log_verbose(&format!("Executing approved request: {}", request_id));
-
-    // Get the request details
-    let request = get_approval_request_by_id(context, request_id)?;
-
-    // Validate snapshot before execution
-    let snapshot = &request.rebuild_snapshot;
-    crate::utils::snapshot::validate_snapshot(context, snapshot)?;
-
-    // Execute the actual operation based on request type
-    match request.operation {
-        crate::types::Operation::Promote => {
-            // Call the actual promote logic
-            execute_promote_operation(context, &request.environment, &request.branch)?;
-        }
-        crate::types::Operation::Demote => {
-            // Call the actual demote logic
-            execute_demote_operation(context, &request.environment, &request.branch)?;
-        }
-    }
-
-    // Mark request as applied
-    modify_metadata(context, |config| {
-        crate::utils::approvals::mark_request_applied(config, request_id)
-    })?;
-
-    context.log_success(&format!("✓ Request {} executed successfully", request_id));
-    Ok(())
-}
-
-/// Execute promote operation (extracted from promote command)
-fn execute_promote_operation(
-    context: &GlobalContext,
-    env_name: &str,
-    branch_name: &str,
-) -> Result<()> {
-    context.log_verbose(&format!(
-        "Executing promotion: {} -> {}",
-        branch_name, env_name
-    ));
-
-    // Add branch to environment
-    modify_metadata(context, |config| {
-        let environment = config
-            .get_environment_mut(env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
-
-        environment.add_branch(branch_name.to_string());
-        context.log_verbose(&format!(
-            "✓ Added '{}' to environment '{}'",
-            branch_name, env_name
-        ));
-        Ok(())
-    })?;
-
-    // Rebuild the environment
-    rebuild_environment(context, env_name)?;
-
-    Ok(())
-}
-
-/// Execute demote operation (extracted from demote command)
-fn execute_demote_operation(
-    context: &GlobalContext,
-    env_name: &str,
-    branch_name: &str,
-) -> Result<()> {
-    context.log_verbose(&format!(
-        "Executing demotion: {} from {}",
-        branch_name, env_name
-    ));
-
-    // Remove branch from environment
-    modify_metadata(context, |config| {
-        let environment = config
-            .get_environment_mut(env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
-
-        environment.remove_branch(branch_name);
-        context.log_verbose(&format!(
-            "✓ Removed '{}' from environment '{}'",
-            branch_name, env_name
-        ));
-        Ok(())
-    })?;
-
-    // Rebuild the environment
-    rebuild_environment(context, env_name)?;
-
-    Ok(())
 }
 
 /// Display approval request creation information

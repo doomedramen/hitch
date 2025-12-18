@@ -54,7 +54,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with approval requirements
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -96,7 +96,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with approval requirements
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -163,7 +163,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment requiring 2 approvals
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -217,7 +217,7 @@ mod tests {
             approve2_result
                 .assert_success()
                 .assert_stdout_contains("Approval threshold met")
-                .assert_stdout_contains("executing operation")
+                .assert_stdout_contains("Executing")
                 .assert_stdout_contains("approved and operation executed successfully");
 
             Ok::<(), anyhow::Error>(())
@@ -233,7 +233,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with approval requirements
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -357,7 +357,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with approval requirements
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -369,7 +369,8 @@ mod tests {
                     .run(&["checkout", "-b", &format!("feature/old-{}", i)])?;
                 env.fs.write_file(&format!("old-{}.js", i), "// Old code")?;
                 env.git.run(&["add", "."])?;
-                env.git.run(&["commit", "-m", &format!("Old feature {}", i)])?;
+                env.git
+                    .run(&["commit", "-m", &format!("Old feature {}", i)])?;
                 env.git.run(&["checkout", "main"])?;
 
                 // Create approval request
@@ -385,7 +386,11 @@ mod tests {
             let output = list_result.stdout();
 
             // Verify success
-            env.hitch.run().args(&["approvals", "list"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["approvals", "list"])
+                .execute()?
+                .assert_success();
 
             // Extract first request ID for rejection
             let first_request_id = output
@@ -455,7 +460,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -528,7 +533,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -574,20 +579,18 @@ mod tests {
             let dry_run_result = env
                 .hitch
                 .run()
-                .args(&[
-                    "approvals",
-                    "cleanup",
-                    "--older-than",
-                    "90",
-                    "--dry-run",
-                ])
+                .args(&["approvals", "cleanup", "--older-than", "90", "--dry-run"])
                 .execute()?;
             dry_run_result
                 .assert_success()
                 .assert_stdout_contains("No approval requests found older than 90 days");
 
             // Verify request still exists (use --all to see rejected requests)
-            let list_after = env.hitch.run().args(&["approvals", "list", "--all"]).execute()?;
+            let list_after = env
+                .hitch
+                .run()
+                .args(&["approvals", "list", "--all"])
+                .execute()?;
             let after_count = list_after
                 .stdout()
                 .lines()
@@ -611,9 +614,13 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with approval requirements
             create_approval_environment(
-                &env,
+                env,
                 "production",
-                &["alice@example.com", "bob@example.com", "charlie@example.com"],
+                &[
+                    "alice@example.com",
+                    "bob@example.com",
+                    "charlie@example.com",
+                ],
                 2,
             )?;
 
@@ -650,7 +657,13 @@ mod tests {
             let approve1_result = env
                 .hitch
                 .run()
-                .args(&["approvals", "approve", request_id, "--comment", "LGTM, ready for prod"])
+                .args(&[
+                    "approvals",
+                    "approve",
+                    request_id,
+                    "--comment",
+                    "LGTM, ready for prod",
+                ])
                 .execute()?;
             approve1_result
                 .assert_success()
@@ -662,12 +675,18 @@ mod tests {
             let approve2_result = env
                 .hitch
                 .run()
-                .args(&["approvals", "approve", request_id, "--comment", "Approved, looks good"])
+                .args(&[
+                    "approvals",
+                    "approve",
+                    request_id,
+                    "--comment",
+                    "Approved, looks good",
+                ])
                 .execute()?;
             approve2_result
                 .assert_success()
                 .assert_stdout_contains("Approval threshold met")
-                .assert_stdout_contains("executing operation")
+                .assert_stdout_contains("Executing")
                 .assert_stdout_contains("approved and operation executed successfully");
 
             // Verify branch is now promoted
@@ -699,7 +718,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &["alice@example.com", "bob@example.com"],
                 2,
@@ -722,7 +741,11 @@ mod tests {
             promote_result.assert_success();
 
             // Get request ID and verify snapshot was captured
-            let list_result = env.hitch.run().args(&["approvals", "list", "--json"]).execute()?;
+            let list_result = env
+                .hitch
+                .run()
+                .args(&["approvals", "list", "--json"])
+                .execute()?;
             let output = list_result.stdout();
 
             // Parse JSON to verify snapshot contains branch SHA
@@ -748,7 +771,8 @@ mod tests {
             env.git.run(&["commit", "-m", "Main branch change"])?;
 
             // Force the feature branch to point to this new commit (different SHA)
-            env.git.run(&["branch", "-f", "feature/stale-test", "main"])?;
+            env.git
+                .run(&["branch", "-f", "feature/stale-test", "main"])?;
 
             // Try to approve - should fail due to stale snapshot (branch recreated with different SHA)
             env.git.config_user("Alice", "alice@example.com")?;
@@ -775,7 +799,7 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // Setup production environment with min_approvals=3
             create_approval_environment(
-                &env,
+                env,
                 "production",
                 &[
                     "alice@example.com",
@@ -865,6 +889,128 @@ mod tests {
                 "Should display 2/3, got: {}",
                 approval_line_two
             );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_demote_with_approval_workflow() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // Setup production environment with approval requirements
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+
+            // Create and promote a feature branch first (without approval for setup)
+            env.git.run(&["checkout", "-b", "feature/to-demote"])?;
+            env.fs
+                .write_file("demote-test.js", "// Feature to demote")?;
+            env.git.run(&["add", "."])?;
+            env.git
+                .run(&["commit", "-m", "Add feature for demote test"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Manually add the branch to production for testing demote
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let mut config = env.read_hitch_config()?;
+            let prod_env = config.environments.get_mut("production").unwrap();
+            prod_env.branches.push("feature/to-demote".to_string());
+            env.fs.write_json("hitch.json", &config)?;
+            env.git.run(&["add", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "Add branch to production"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Try to demote - should create approval request instead
+            let demote_result = env
+                .hitch
+                .run()
+                .args(&["demote", "feature/to-demote", "production"])
+                .execute()?;
+
+            demote_result
+                .assert_success()
+                .assert_stdout_contains(
+                    "Environment 'production' requires approval before demotion",
+                )
+                .assert_stdout_contains("Approval request created")
+                .assert_stdout_contains("Waiting for 2 approval(s)");
+
+            // Get request ID
+            let list_result = env.hitch.run().args(&["approvals", "list"]).execute()?;
+            let output = list_result.stdout();
+            let request_id = output
+                .lines()
+                .find(|line| line.contains("feature/to-demote"))
+                .and_then(|line| line.split_whitespace().next())
+                .expect("Should find request ID");
+
+            // Verify request shows Demote operation
+            let status_result = env
+                .hitch
+                .run()
+                .args(&["approvals", "status", request_id])
+                .execute()?;
+            status_result
+                .assert_success()
+                .assert_stdout_contains("Operation: Demote")
+                .assert_stdout_contains("Status: ⏳ Pending");
+
+            // Approve with first approver
+            env.git.config_user("Alice", "alice@example.com")?;
+            let approve1_result = env
+                .hitch
+                .run()
+                .args(&["approvals", "approve", request_id])
+                .execute()?;
+            approve1_result
+                .assert_success()
+                .assert_stdout_contains("Approval recorded")
+                .assert_stdout_contains("1/2");
+
+            // Approve with second approver - should trigger demotion
+            env.git.config_user("Bob", "bob@example.com")?;
+            let approve2_result = env
+                .hitch
+                .run()
+                .args(&["approvals", "approve", request_id])
+                .execute()?;
+            approve2_result
+                .assert_success()
+                .assert_stdout_contains("Approval threshold met")
+                .assert_stdout_contains("approved and operation executed successfully");
+
+            // Verify branch is now demoted from production
+            let status_after = env.hitch.run().args(&["status"]).execute()?;
+            let status_output = status_after.stdout();
+
+            // Check that feature/to-demote is no longer in production's branches
+            let production_section = status_output
+                .split("production")
+                .nth(1)
+                .expect("Should find production section");
+
+            assert!(
+                !production_section.contains("feature/to-demote"),
+                "Branch should be demoted from production"
+            );
+
+            // Verify request status is "Applied"
+            let final_status = env
+                .hitch
+                .run()
+                .args(&["approvals", "status", request_id])
+                .execute()?;
+            final_status
+                .assert_success()
+                .assert_stdout_contains("Status: 🚀 Applied");
 
             Ok::<(), anyhow::Error>(())
         });

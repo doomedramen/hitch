@@ -1,4 +1,3 @@
-pub mod approval_validation;
 pub mod approvals;
 pub mod authorization;
 pub mod command_helpers;
