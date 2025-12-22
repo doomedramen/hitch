@@ -897,3 +897,80 @@ fn update_rebuilt_timestamp_for_rebuild(context: &GlobalContext, env_name: &str)
 
     Ok(())
 }
+
+// =============================================================================
+// Approval Workflow Helper Functions
+// =============================================================================
+
+/// Create an approval request for a promote/demote operation
+pub fn create_approval_request_for_operation(
+    context: &GlobalContext,
+    env_name: &str,
+    branch_name: &str,
+    operation: crate::types::Operation,
+) -> Result<String> {
+    context.log_verbose(&format!(
+        "Creating approval request for {} operation: {} -> {}",
+        operation, branch_name, env_name
+    ));
+
+    let mut request_id = String::new();
+    modify_metadata(context, |config| {
+        request_id = crate::utils::approvals::create_approval_request(
+            context,
+            config,
+            env_name,
+            branch_name,
+            operation,
+        )?;
+        Ok(())
+    })?;
+
+    Ok(request_id)
+}
+
+/// Get approval requests with optional filtering
+pub fn get_approval_requests(
+    context: &GlobalContext,
+    environment: Option<&str>,
+    status: Option<crate::types::ApprovalStatus>,
+) -> Result<Vec<crate::types::ApprovalRequest>> {
+    access_metadata_read_only(context, |config| {
+        Ok(
+            crate::utils::approvals::get_approval_requests(config, environment, status)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+    })
+}
+
+/// Get a specific approval request by ID
+pub fn get_approval_request_by_id(
+    context: &GlobalContext,
+    request_id: &str,
+) -> Result<crate::types::ApprovalRequest> {
+    access_metadata_read_only(context, |config| {
+        crate::utils::approvals::find_approval_request(config, request_id).cloned()
+    })
+}
+
+/// Display approval request creation information
+pub fn display_approval_request_created(context: &GlobalContext, request_id: &str) -> Result<()> {
+    access_metadata_read_only(context, |config| {
+        crate::utils::approvals::display_approval_request_info(context, config, request_id)
+    })
+}
+
+/// Get environment configuration for approval checking
+pub fn get_environment_config_for_approval(
+    context: &GlobalContext,
+    env_name: &str,
+) -> Result<crate::types::Environment> {
+    access_metadata_read_only(context, |config| {
+        config
+            .get_environment(env_name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))
+    })
+}

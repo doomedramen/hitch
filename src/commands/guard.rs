@@ -78,11 +78,68 @@ fn perform_guard_check(
     }
 
     if !conflicting_environments.is_empty() {
-        let env_list = conflicting_environments.join(", ");
+        // Check if any of the conflicting environments require approval
+        let approval_required_envs: Vec<String> = conflicting_environments
+            .iter()
+            .filter(|env_name| {
+                if let Some(env) = config.get_environment(env_name) {
+                    env.requires_approval_check()
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
+        if !approval_required_envs.is_empty() {
+            // Environment requires approval - show approval-specific guidance
+            let env_name = &approval_required_envs[0];
+            if let Some(environment) = config.get_environment(env_name) {
+                let mut message = format!(
+                    "✗ Error: Cannot commit directly to environment branch '{}'\n\n\
+                    This environment requires approval for changes.\n\n\
+                    To promote a branch to {}:\n",
+                    env_name, env_name
+                );
+
+                message.push_str(&format!(
+                    "  1. Commit your changes on a feature branch\n\
+                    2. Run: hitch promote <your-branch> {}\n\
+                    3. Wait for approval from:\n",
+                    env_name
+                ));
+
+                for approver in &environment.approvers {
+                    message.push_str(&format!("       - {}\n", approver));
+                }
+
+                if environment.min_approvals > 1 {
+                    message.push_str(&format!(
+                        "     ({} approvals required)\n",
+                        environment.min_approvals
+                    ));
+                }
+
+                message.push_str(
+                    "\nLearn more: hitch help promote\n\
+                    Check status: hitch approvals list",
+                );
+
+                return Err(anyhow::anyhow!("{}", message));
+            }
+        }
+
+        // Regular environment - show standard message
+        let _env_list = conflicting_environments.join(", ");
         return Err(anyhow::anyhow!(
-            "Current branch '{}' conflicts with environment(s): {}. This appears to be an environment branch that should not be directly modified.",
-            current_branch,
-            env_list
+            "✗ Error: Cannot commit directly to environment branch '{}'\n\n\
+            Environment branches are managed by hitch.\n\n\
+            To promote a branch to {}:\n\
+              hitch promote <your-branch> {}\n\n\
+            Learn more: hitch help promote",
+            conflicting_environments[0],
+            conflicting_environments[0],
+            conflicting_environments[0]
         ));
     }
 

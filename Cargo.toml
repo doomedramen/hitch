@@ -40,6 +40,9 @@ git2 = "0.20"
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 
+# UUID generation for approval requests
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
 # Async runtime (for future async commands if needed)
 tokio = { version = "1.0", features = ["full"] }
 

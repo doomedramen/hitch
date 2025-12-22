@@ -1,3 +1,5 @@
+pub mod approvals;
+pub mod authorization;
 pub mod command_helpers;
 pub mod conflict_report;
 pub mod diff;
@@ -9,4 +11,5 @@ pub mod logging;
 pub mod prelude;
 pub mod progress;
 pub mod rollback;
+pub mod snapshot;
 pub mod validation;

@@ -345,8 +345,8 @@ mod tests {
             let result = env.hitch.run().args(&["guard"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("conflicts with environment")
-                .assert_stderr_contains("should not be directly modified");
+                .assert_stderr_contains("Cannot commit directly to environment branch")
+                .assert_stderr_contains("Environment branches are managed by hitch");
 
             Ok::<(), anyhow::Error>(())
         });

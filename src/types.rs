@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Environment configuration as defined in hitch.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +25,18 @@ pub struct Environment {
 
     /// Timestamp when environment was last released (null if never released)
     pub released_at: Option<DateTime<Utc>>,
+
+    /// Whether this environment requires approval for changes
+    #[serde(default)]
+    pub requires_approval: bool,
+
+    /// List of email addresses authorized to approve changes
+    #[serde(default)]
+    pub approvers: Vec<String>,
+
+    /// Minimum number of approvals required
+    #[serde(default = "default_min_approvals")]
+    pub min_approvals: usize,
 }
 
 impl Environment {
@@ -36,6 +49,9 @@ impl Environment {
             locked_at: None,
             rebuilt_at: None,
             released_at: None,
+            requires_approval: false,
+            approvers: Vec::new(),
+            min_approvals: 1,
         }
     }
 
@@ -72,6 +88,49 @@ impl Environment {
     pub fn remove_branch(&mut self, branch: &str) {
         self.branches.retain(|b| b != branch);
     }
+
+    /// Check if approval is required for this environment
+    pub fn requires_approval_check(&self) -> bool {
+        self.requires_approval
+    }
+
+    /// Check if a user is authorized to approve changes to this environment
+    pub fn is_approver(&self, email: &str) -> bool {
+        self.approvers.contains(&email.to_string())
+    }
+
+    /// Validate the approval configuration for this environment
+    pub fn validate_approval_config(&self) -> Result<(), String> {
+        if self.requires_approval {
+            if self.approvers.is_empty() {
+                return Err(
+                    "Environment requires approval but no approvers are specified".to_string(),
+                );
+            }
+            if self.min_approvals == 0 {
+                return Err("Minimum approvals must be at least 1".to_string());
+            }
+            if self.min_approvals > self.approvers.len() {
+                return Err(format!(
+                    "Minimum approvals ({}) cannot be greater than number of approvers ({})",
+                    self.min_approvals,
+                    self.approvers.len()
+                ));
+            }
+            // Validate email format
+            for approver in &self.approvers {
+                if !approver.contains('@') || !approver.contains('.') {
+                    return Err(format!("Invalid email format for approver: {}", approver));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Default function for min_approvals field
+fn default_min_approvals() -> usize {
+    1
 }
 
 /// Types of operations that can be rolled back
@@ -112,6 +171,177 @@ impl RollbackInfo {
     }
 }
 
+/// Type of operation that requires approval
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Operation {
+    Promote,
+    Demote,
+}
+
+impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operation::Promote => write!(f, "Promote"),
+            Operation::Demote => write!(f, "Demote"),
+        }
+    }
+}
+
+/// Status of an approval request
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Applied,
+    Rejected,
+    Cancelled,
+}
+
+impl std::fmt::Display for ApprovalStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApprovalStatus::Pending => write!(f, "Pending"),
+            ApprovalStatus::Approved => write!(f, "Approved"),
+            ApprovalStatus::Applied => write!(f, "Applied"),
+            ApprovalStatus::Rejected => write!(f, "Rejected"),
+            ApprovalStatus::Cancelled => write!(f, "Cancelled"),
+        }
+    }
+}
+
+/// Individual approval record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    /// Email of user who gave approval
+    pub approved_by: String,
+    /// When approval was given
+    pub approved_at: DateTime<Utc>,
+    /// Optional approval comment
+    pub comment: Option<String>,
+}
+
+/// Rejection record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rejection {
+    /// Email of user who rejected
+    pub rejected_by: String,
+    /// When rejection occurred
+    pub rejected_at: DateTime<Utc>,
+    /// Required reason for rejection
+    pub reason: String,
+}
+
+/// Snapshot of branch states at request time
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebuildSnapshot {
+    /// Name of the base branch
+    pub base_branch: String,
+    /// Commit SHA of base branch
+    pub base_sha: String,
+    /// Map of branch name to commit SHA
+    pub branch_shas: std::collections::HashMap<String, String>,
+    /// Whether merge conflicts were detected at request time
+    pub merge_conflicts: bool,
+}
+
+/// Approval request for environment change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    /// Unique identifier for this request
+    pub id: String,
+    /// Target environment name
+    pub environment: String,
+    /// Branch being promoted/demoted
+    pub branch: String,
+    /// Type of operation
+    pub operation: Operation,
+    /// Email of user who requested the change
+    pub requested_by: String,
+    /// When request was created
+    pub requested_at: DateTime<Utc>,
+    /// Current status of request
+    pub status: ApprovalStatus,
+    /// List of approvals received
+    pub approvals: Vec<Approval>,
+    /// Rejection details (if rejected)
+    pub rejection: Option<Rejection>,
+    /// Snapshot of branch states at request time
+    pub rebuild_snapshot: RebuildSnapshot,
+}
+
+impl ApprovalRequest {
+    /// Create a new approval request
+    pub fn new(
+        environment: String,
+        branch: String,
+        operation: Operation,
+        requested_by: String,
+        rebuild_snapshot: RebuildSnapshot,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            environment,
+            branch,
+            operation,
+            requested_by,
+            requested_at: Utc::now(),
+            status: ApprovalStatus::Pending,
+            approvals: Vec::new(),
+            rejection: None,
+            rebuild_snapshot,
+        }
+    }
+
+    /// Check if user has already approved this request
+    pub fn has_approved(&self, email: &str) -> bool {
+        self.approvals.iter().any(|a| a.approved_by == email)
+    }
+
+    /// Get the current number of approvals
+    pub fn approval_count(&self) -> usize {
+        self.approvals.len()
+    }
+
+    /// Add an approval to this request
+    pub fn add_approval(&mut self, approved_by: String, comment: Option<String>) {
+        self.approvals.push(Approval {
+            approved_by,
+            approved_at: Utc::now(),
+            comment,
+        });
+    }
+
+    /// Check if approval threshold is met
+    pub fn threshold_met(&self, min_approvals: usize) -> bool {
+        self.approval_count() >= min_approvals
+    }
+
+    /// Mark request as approved (threshold met)
+    pub fn mark_approved(&mut self) {
+        self.status = ApprovalStatus::Approved;
+    }
+
+    /// Mark request as applied (operation executed)
+    pub fn mark_applied(&mut self) {
+        self.status = ApprovalStatus::Applied;
+    }
+
+    /// Reject the request
+    pub fn reject(&mut self, rejected_by: String, reason: String) {
+        self.status = ApprovalStatus::Rejected;
+        self.rejection = Some(Rejection {
+            rejected_by,
+            rejected_at: Utc::now(),
+            reason,
+        });
+    }
+
+    /// Cancel the request
+    pub fn cancel(&mut self) {
+        self.status = ApprovalStatus::Cancelled;
+    }
+}
+
 /// Main Hitch configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitchConfig {
@@ -120,6 +350,10 @@ pub struct HitchConfig {
 
     /// Map of environment names to environment configurations
     pub environments: std::collections::HashMap<String, Environment>,
+
+    /// List of approval requests
+    #[serde(default)]
+    pub approval_requests: Vec<ApprovalRequest>,
 }
 
 impl HitchConfig {
@@ -127,6 +361,7 @@ impl HitchConfig {
         Self {
             version: "1.0".to_string(),
             environments: std::collections::HashMap::new(),
+            approval_requests: Vec::new(),
         }
     }
 
@@ -190,6 +425,14 @@ impl HitchConfig {
                     ));
                 }
             }
+
+            // Validate approval configuration
+            if let Err(e) = env.validate_approval_config() {
+                return Err(format!(
+                    "Environment '{}' approval configuration invalid: {}",
+                    env_name, e
+                ));
+            }
         }
 
         // Cross-environment validation
@@ -239,6 +482,36 @@ impl HitchConfig {
 
     pub fn get_environment_names(&self) -> Vec<String> {
         self.environments.keys().cloned().collect()
+    }
+
+    // Approval request management methods
+
+    /// Add an approval request
+    pub fn add_approval_request(&mut self, request: ApprovalRequest) {
+        self.approval_requests.push(request);
+    }
+
+    /// Find an approval request by ID
+    pub fn get_approval_request(&self, id: &str) -> Option<&ApprovalRequest> {
+        self.approval_requests.iter().find(|r| r.id == id)
+    }
+
+    /// Find an approval request by ID (mutable)
+    pub fn get_approval_request_mut(&mut self, id: &str) -> Option<&mut ApprovalRequest> {
+        self.approval_requests.iter_mut().find(|r| r.id == id)
+    }
+
+    /// Get all approval requests
+    pub fn get_approval_requests(&self) -> &[ApprovalRequest] {
+        &self.approval_requests
+    }
+
+    /// Get approval requests for a specific environment
+    pub fn get_approval_requests_for_env(&self, env_name: &str) -> Vec<&ApprovalRequest> {
+        self.approval_requests
+            .iter()
+            .filter(|r| r.environment == env_name)
+            .collect()
     }
 }
 
