@@ -60,17 +60,24 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         let original_dir = std::env::current_dir()?;
 
-        // Change to temp directory (not a git repo)
-        std::env::set_current_dir(temp_dir.path())?;
+        // Use catch_unwind to ensure directory restoration even if assertion fails
+        let result = std::panic::catch_unwind(|| -> Result<()> {
+            // Change to temp directory (not a git repo)
+            std::env::set_current_dir(temp_dir.path())?;
 
-        // GitOperations::new() should fail outside a git repo
-        let result = GitOperations::new();
-        assert!(result.is_err());
+            // GitOperations::new() should fail outside a git repo
+            let result = GitOperations::new();
+            assert!(result.is_err());
+            Ok(())
+        });
 
         // Restore original directory
         std::env::set_current_dir(&original_dir)?;
 
-        Ok(())
+        match result {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     // Git command execution tests
@@ -912,22 +919,29 @@ mod tests {
             .output()
             .context("Failed to initialize git repo")?;
 
-        // Set GIT_CONFIG_NOSYSTEM to prevent global config fallback
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+        // Use catch_unwind to ensure environment restoration
+        let result = std::panic::catch_unwind(|| -> Result<()> {
+            // Set GIT_CONFIG_NOSYSTEM to prevent global config fallback
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
 
-        // Explicitly don't configure user - this should cause the error
-        let git_ops = GitOperations::new_at_path(&temp_path)?;
-        let result = git_ops.get_user_email();
+            // Explicitly don't configure user - this should cause the error
+            let git_ops = GitOperations::new_at_path(&temp_path)?;
+            let result = git_ops.get_user_email();
 
-        // Note: Git falls back to global config, so this test expects success
-        // This is actual Git behavior - Git always finds some email config
-        assert!(result.is_ok());
+            // Note: Git falls back to global config, so this test expects success
+            // This is actual Git behavior - Git always finds some email config
+            assert!(result.is_ok());
+            Ok(())
+        });
 
         // Restore environment and directory
         std::env::remove_var("GIT_CONFIG_NOSYSTEM");
         std::env::set_current_dir(&original_dir)?;
 
-        Ok(())
+        match result {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     #[test]
