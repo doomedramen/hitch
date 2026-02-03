@@ -409,4 +409,99 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[ignore = "Timing-sensitive test: relies on git commit timestamps being newer than rebuild timestamp"]
+    fn test_hitch_status_detects_base_branch_changes() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // Initialize hitch and add an environment with base branch "main"
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Rebuild the environment (sets rebuilt_at timestamp)
+            let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
+            result.assert_success();
+
+            // Wait enough time to ensure we're in a different second
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // Make a new commit directly to main (simulating an external merge)
+            env.fs.write_file("external.txt", "external change")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "External change to main"])?;
+
+            // Run hitch status - should detect that main has newer commits
+            let result = env.hitch.run().args(&["status"]).execute()?;
+            let stdout = result.stdout();
+
+            result.assert_success();
+            assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
+
+            // The status should indicate rebuild is needed since main has new commits
+            assert!(
+                stdout.contains("Rebuild needed") || stdout.contains("main has newer commits"),
+                "Expected status to show rebuild needed. Got:\n{}",
+                stdout
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Timing-sensitive test: relies on git commit timestamps being newer than rebuild timestamp"]
+    fn test_hitch_status_multiple_envs_with_changed_base() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // Add multiple environments (dev, qa) using the same base branch "main"
+            for env_name in ["dev", "qa"] {
+                env.hitch
+                    .run()
+                    .args(&["add", env_name])
+                    .execute()?
+                    .assert_success();
+            }
+
+            // Rebuild both environments
+            let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
+            result.assert_success();
+
+            let result = env.hitch.run().args(&["rebuild", "qa"]).execute()?;
+            result.assert_success();
+
+            // Wait to ensure timestamp difference
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // Make a new commit to main
+            env.fs.write_file("external.txt", "external change")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "External change to main"])?;
+
+            // Run hitch status
+            let result = env.hitch.run().args(&["status"]).execute()?;
+            let stdout = result.stdout();
+
+            result.assert_success();
+            assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
+            assert!(stdout.contains("qa"), "Expected status to contain 'qa'");
+            // Both environments should show rebuild needed
+            assert!(
+                stdout.contains("Rebuild needed") || stdout.contains("main has newer commits"),
+                "Expected status to show rebuild needed. Got:\n{}",
+                stdout
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

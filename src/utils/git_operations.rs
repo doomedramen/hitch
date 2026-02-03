@@ -376,18 +376,41 @@ impl GitOperations {
     }
 
     /// Get the latest commit SHA for a branch
+    ///
+    /// This function checks both local and remote branches, similar to branch_exists_anywhere().
+    /// It first tries to get the SHA from the local branch (refs/heads/{branch}),
+    /// and if that fails, tries to get it from the remote branch (refs/remotes/origin/{branch}).
+    ///
+    /// # Arguments
+    /// - `branch`: Branch name to get the commit SHA for
+    ///
+    /// # Returns
+    /// - `Ok(String)`: The commit SHA
+    /// - `Err(anyhow::Error)`: If the branch doesn't exist locally or remotely
     pub fn get_branch_commit_sha(&self, branch: &str) -> Result<String> {
-        let output = self.run_git_command(&["rev-parse", &format!("refs/heads/{}", branch)])?;
+        // First try local branch
+        let local_ref = format!("refs/heads/{}", branch);
+        let output = self.run_git_command(&["rev-parse", &local_ref]);
 
-        if !output.status.success() {
+        if output.is_ok() && output.as_ref().unwrap().status.success() {
+            let sha =
+                String::from_utf8(output.unwrap().stdout).context("Failed to parse commit SHA")?;
+            return Ok(sha.trim().to_string());
+        }
+
+        // If local doesn't exist, try remote branch
+        let remote_ref = format!("refs/remotes/origin/{}", branch);
+        let remote_output = self.run_git_command(&["rev-parse", &remote_ref])?;
+
+        if !remote_output.status.success() {
             return Err(anyhow::anyhow!(
-                "Branch '{}' does not exist or is not accessible: {}",
+                "Branch '{}' does not exist locally or on remote origin: {}",
                 branch,
-                String::from_utf8_lossy(&output.stderr)
+                String::from_utf8_lossy(&remote_output.stderr)
             ));
         }
 
-        let sha = String::from_utf8(output.stdout).context("Failed to parse commit SHA")?;
+        let sha = String::from_utf8(remote_output.stdout).context("Failed to parse commit SHA")?;
         Ok(sha.trim().to_string())
     }
 
