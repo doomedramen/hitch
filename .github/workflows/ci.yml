@@ -23,7 +23,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.83.0  # Minimum supported version (supports latest dependencies)
+          - 1.85.0  # Minimum supported version (supports edition 2024)
 
     steps:
     - name: Checkout repository
