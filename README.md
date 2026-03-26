@@ -6,7 +6,7 @@
 
 > Git branch management for environment-based deployments
 
-Hitch is a CLI tool that brings environment branch management to Git. It helps you organize and track deployment branches (like `dev`, `qa`, `main`) with proper promotion workflows, locking mechanisms, and rebuild automation—turning chaotic branch-based releases into a structured, auditable process.
+Hitch is a CLI tool that treats environment branches as composable layers on top of base branches. Promote feature branches to environments, and Hitch rebuilds the environment branch by squashing them together. Demote to remove. Lock to freeze. Require approvals for production.
 
 ## 🚀 Quick Start
 
@@ -32,18 +32,18 @@ hitch status
 
 If you're using branch-based deployments, you've likely faced these challenges:
 
-- **"Which branches are currently deployed to which environments?"**
-- **"Who deployed the feature/api-endpoints branch to production?"**
-- **"Can we lock production while we fix this critical bug?"**
-- **"How do we rebuild staging with all the latest promoted features?"**
-- **"How do we require team approval before production deployments?"**
+- **"What branches are actually in `dev` right now?"** – You promoted 5 features, but which ones made it?
+- **"Who promoted `feature/api-endpoints` to production?"** – No audit trail.
+- **"Can we freeze production during the holiday sale?"** – Nothing stops accidental deployments.
+- **"How do I rebuild `qa` with the latest from all promoted features?"** – Manual merging is error-prone.
+- **"How do we require team approval before production deployments?"** – No built-in workflow.
 
-Hitch solves these problems by providing a structured metadata layer that tracks:
-- Which branches are promoted to which environments
-- When environments were last rebuilt
-- Who locked environments and when
-- Proper promotion/demotion workflows
-- Multi-person approval requirements for sensitive environments
+Hitch solves these by treating environment branches as **composable layers**:
+
+- Each environment (`dev`, `qa`, `production`) has a base branch (usually `main`)
+- Promote feature branches to environments – Hitch squashes them together and rebuilds the environment branch
+- Demote to remove a layer – Hitch rebuilds without it
+- Full audit trail: who promoted what, when, and to which environment
 
 ## 📋 Use Cases
 
@@ -67,12 +67,26 @@ Ideal for applications with complex deployment pipelines:
 
 ## 🔧 Core Concepts
 
-### Environments
-Named deployment targets (e.g., `dev`, `qa`, `production`) that have:
-- A base source branch (usually `main`)
-- Promoted branches that should be included
-- Lock/unlock state for deployment control
-- Rebuild timestamps for audit trails
+### Environments as Composable Layers
+
+Think of each environment branch as a stack built on top of a base:
+
+```
+production = main + feature/auth
+qa         = main + feature/auth + feature/payments
+dev        = main + feature/auth + feature/payments + feature/ui + feature/api
+```
+
+Each environment has:
+- **Base branch** – The foundation (usually `main`)
+- **Promoted branches** – Feature branches layered on top
+- **Lock state** – Freeze promotions during sensitive periods
+- **Rebuild timestamp** – When the branch was last regenerated
+
+When you promote or demote a branch, Hitch rebuilds the environment by squashing all promoted branches together. This means:
+- Environment branches are **regenerated**, not manually merged
+- You can add/remove layers at will before finally releasing to `main`
+- No merge conflicts accumulating over time – each rebuild is fresh
 
 ### Promotion Workflow
 ```bash
