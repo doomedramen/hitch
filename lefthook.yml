@@ -1,8 +1,25 @@
 # Lefthook configuration for hitch
 # Install with: lefthook install
 
+# Verify lefthook is installed before running any hooks
 pre-commit:
   commands:
+    # Verify lefthook is properly installed
+    verify-hooks:
+      run: |
+        if [ ! -f ".git/hooks/pre-commit" ] || ! grep -q "lefthook" ".git/hooks/pre-commit" 2>/dev/null; then
+          echo "❌ ERROR: Lefthook pre-commit hook is not installed!"
+          echo "💡 Run 'lefthook install' to install git hooks"
+          echo "💡 This ensures code quality checks run before every commit"
+          exit 1
+        fi
+        echo "✅ Lefthook hooks verified"
+      fail_text: |
+        🚨 Lefthook is not installed!
+
+        Run 'lefthook install' to install git hooks.
+        This is required to ensure code quality and security checks.
+
     # Rust formatting
     format:
       run: just format-check
