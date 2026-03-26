@@ -504,4 +504,65 @@ mod tests {
 
         Ok(())
     }
+
+    /// After promoting a branch, adding new commits to it, and checking status,
+    /// the branch list should show a staleness indicator ("new commits since last rebuild").
+    #[test]
+    fn test_status_shows_per_branch_staleness() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create and promote a feature branch.
+            // Use -f to bypass the broad .gitignore inherited from hitch-metadata.
+            env.git.run(&["checkout", "-b", "stale-feature"])?;
+            env.fs.write_file("stale.txt", "v1")?;
+            env.git.run(&["add", "-f", "stale.txt"])?;
+            env.git.run(&["commit", "-m", "Initial feature commit"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "stale-feature", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Add a new commit to the branch AFTER promotion (making it stale).
+            // Use an explicit future author-date to guarantee the commit timestamp is
+            // newer than the rebuild's `rebuilt_at` timestamp regardless of
+            // how fast the test runs.
+            env.git.run(&["checkout", "stale-feature"])?;
+            env.fs.write_file("stale.txt", "v2 - new content")?;
+            env.git.run(&["add", "-f", "stale.txt"])?;
+            // Use an explicit future author-date so the commit is guaranteed
+            // to be newer than the rebuild's rebuilt_at timestamp.
+            env.git.run(&[
+                "commit",
+                "-m",
+                "Update after promotion",
+                "--date",
+                "2099-01-01T00:00:00+00:00",
+            ])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Status should now show the branch as stale
+            let result = env.hitch.run().args(&["status"]).execute()?;
+            let stdout = result.assert_success().stdout().to_string();
+
+            assert!(
+                stdout.contains("new commits since last rebuild"),
+                "Expected staleness indicator for stale-feature. Got:\n{}",
+                stdout
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

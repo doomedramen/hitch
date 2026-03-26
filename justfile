@@ -56,13 +56,13 @@ install-release: build
 # Run all tests
 test:
     @echo "🧪 Running all tests..."
-    cargo test -- --test-threads=1
+    cargo test
     @echo "✅ All tests passed"
 
 # Run core tests only (for release when some integration tests are failing)
 test-core:
     @echo "🧪 Running core tests..."
-    cargo test --lib --bins -- --test-threads=1
+    cargo test --lib --bins
     @echo "✅ Core tests passed"
 
 # Run tests with verbose output

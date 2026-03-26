@@ -129,6 +129,22 @@ fn output_table(
             ApprovalStatus::Cancelled => "⏹",
         };
 
+        // Drift indicator: only check pending/approved requests (others are terminal)
+        let drift_indicator = if matches!(
+            request.status,
+            ApprovalStatus::Pending | ApprovalStatus::Approved
+        ) {
+            let drifted =
+                crate::utils::snapshot::drifted_branches(context, &request.rebuild_snapshot);
+            if drifted.is_empty() {
+                ""
+            } else {
+                " ⚠️DRIFTED"
+            }
+        } else {
+            ""
+        };
+
         // Get min_approvals from environment config
         let min_approvals = config
             .get_environment(&request.environment)
@@ -137,7 +153,7 @@ fn output_table(
         let approvals_str = format!("{}/{}", request.approval_count(), min_approvals);
 
         println!(
-            "{:<id_width$} {:<env_width$} {:<branch_width$} {:<operation_width$} {} {:<status_width$} {:<requested_width$} {:<approvals_width$} {:<12}",
+            "{:<id_width$} {:<env_width$} {:<branch_width$} {:<operation_width$} {} {:<status_width$} {:<requested_width$} {:<approvals_width$} {:<12}{}",
             &request.id[..std::cmp::min(request.id.len(), id_width)],
             &request.environment[..std::cmp::min(request.environment.len(), env_width)],
             &request.branch[..std::cmp::min(request.branch.len(), branch_width)],
@@ -146,7 +162,8 @@ fn output_table(
             request.status.to_string(),
             &request.requested_by[..std::cmp::min(request.requested_by.len(), requested_width)],
             approvals_str,
-            request.requested_at.format("%Y-%m-%d %H:%M")
+            request.requested_at.format("%Y-%m-%d %H:%M"),
+            drift_indicator,
         );
     }
 

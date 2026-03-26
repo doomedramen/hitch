@@ -162,6 +162,36 @@ fn check_for_merge_conflicts(
     Ok(has_conflicts)
 }
 
+/// Return the list of branch names (including the base branch) that have
+/// changed since the snapshot was taken.  Returns an empty vec if nothing
+/// has drifted or if git calls fail (treats errors as "not drifted" so that
+/// a network outage doesn't show false positives in the list command).
+pub fn drifted_branches(context: &GlobalContext, snapshot: &RebuildSnapshot) -> Vec<String> {
+    let mut drifted = Vec::new();
+
+    // Check base branch
+    if let Ok(current) = context.git().get_branch_commit_sha(&snapshot.base_branch) {
+        if current != snapshot.base_sha {
+            drifted.push(format!("{} (base)", snapshot.base_branch));
+        }
+    }
+
+    // Check each tracked branch
+    for (branch, expected_sha) in &snapshot.branch_shas {
+        match context.git().get_branch_commit_sha(branch) {
+            Ok(current) if current != *expected_sha => {
+                drifted.push(branch.clone());
+            }
+            Err(_) => {
+                drifted.push(format!("{} (deleted)", branch));
+            }
+            _ => {}
+        }
+    }
+
+    drifted
+}
+
 /// Format snapshot information for display
 #[allow(dead_code)]
 pub fn format_snapshot_info(snapshot: &RebuildSnapshot) -> String {

@@ -2,13 +2,14 @@ use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
 use crate::utils::conflict_report::format_conflict_report;
 use crate::utils::progress::StepLogger;
+use crate::utils::resolve_state::{write_resolve_state, ResolveState};
 use anyhow::{Context, Result};
 
 /// Reusable pre-check function for all commands
 ///
-/// According to the specification:
-/// - Ensure the current directory is a Git repository
-/// - Ensure the working tree is clean (no unstaged or uncommitted changes)
+/// Verifies the current directory is a Git repository and the working tree is
+/// clean.  Commands that want to tolerate a dirty tree should call
+/// `with_auto_stash` instead (which auto-stashes before running and pops after).
 pub fn pre_check(context: &GlobalContext) -> Result<()> {
     context.log_verbose("Running pre-check validation...");
 
@@ -34,6 +35,71 @@ pub fn pre_check(context: &GlobalContext) -> Result<()> {
 
     context.log_verbose("Pre-check validation completed successfully");
     Ok(())
+}
+
+/// Reusable pre-check that only validates the Git repository (not working-tree
+/// cleanliness).  Use this when the caller manages stashing manually.
+pub fn pre_check_repo_only(context: &GlobalContext) -> Result<()> {
+    context.log_verbose("Running pre-check validation (repo only)...");
+    if let Err(e) = context.git().get_current_branch() {
+        return Err(anyhow::anyhow!(
+            "Not in a Git repository. Please run this command from within a Git repository. Error: {}",
+            e
+        ));
+    }
+    context.log_verbose("✓ Git repository validation passed");
+    Ok(())
+}
+
+/// Run `f` with any uncommitted working-tree changes automatically stashed
+/// beforehand and restored afterward.
+///
+/// If the working tree is already clean this is a no-op wrapper.
+/// If a conflict-resolution state is left in `.git/` after `f` returns (e.g.
+/// the rebuild paused mid-way), the stash is NOT popped — the user will need
+/// to pop it manually (or it will be popped by `hitch resolve --continue/--abort`
+/// once the conflict is resolved).
+pub fn with_auto_stash<F, R>(context: &GlobalContext, f: F) -> Result<R>
+where
+    F: FnOnce() -> Result<R>,
+{
+    let is_clean = context.git().is_working_directory_clean()?;
+
+    let stashed = if !is_clean {
+        context.log_info("Auto-stashing local changes before operation...");
+        let created = context.git().stash_push("hitch: auto-stash before rebuild")?;
+        if created {
+            context.log_verbose("✓ Changes stashed");
+        }
+        created
+    } else {
+        false
+    };
+
+    let result = f();
+
+    if stashed {
+        let resolve_in_progress =
+            crate::utils::resolve_state::resolve_state_exists(&context.git().get_git_dir());
+        if resolve_in_progress {
+            context.log_info(
+                "Note: your stashed changes are saved. They will be restored after you run \
+                 'hitch resolve --continue' or 'hitch resolve --abort'.",
+            );
+        } else {
+            context.log_info("Restoring stashed changes...");
+            if let Err(e) = context.git().stash_pop() {
+                context.log_warning(&format!(
+                    "Failed to restore stashed changes: {}. Run 'git stash pop' to restore manually.",
+                    e
+                ));
+            } else {
+                context.log_verbose("✓ Stashed changes restored");
+            }
+        }
+    }
+
+    result
 }
 
 /// Switch to a branch, execute a closure, and always return to the original branch
@@ -317,6 +383,12 @@ where
 /// - Calls lock(env_name) → executes closure → calls unlock(env_name) even if closure fails
 /// - Ensures environment is safely locked during modifications
 /// - Automatically handles warnings if push fails
+///
+/// EXCEPTION: When a rebuild conflict is in progress (resolve state file exists) we
+/// deliberately skip the automatic unlock.  Unlocking requires switching to the
+/// `hitch-metadata` branch, which would reset the working tree and destroy the conflict
+/// markers the user needs to see.  The environment is unlocked later by
+/// `hitch resolve --continue` or `hitch resolve --abort`.
 pub fn with_locked_env<F, R>(context: &GlobalContext, env_name: &str, closure: F) -> Result<R>
 where
     F: FnOnce() -> Result<R>,
@@ -328,6 +400,18 @@ where
 
     // Execute the closure
     let result = closure();
+
+    // Skip automatic unlock when a conflict resolution is in progress.
+    // The resolve commands own the unlock at that point.
+    let resolve_in_progress =
+        crate::utils::resolve_state::resolve_state_exists(&context.git().get_git_dir());
+    if resolve_in_progress {
+        context.log_verbose(
+            "Resolve state detected — skipping automatic unlock. \
+             Environment will be unlocked when you run 'hitch resolve --continue' or '--abort'.",
+        );
+        return result;
+    }
 
     // Always unlock the environment, even if closure failed
     context.log_verbose(&format!("Unlocking environment '{}'...", env_name));
@@ -406,6 +490,12 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         "Starting rebuild process for environment '{}'",
         env_name
     ));
+
+    // Acquire per-environment rebuild lock to prevent concurrent rebuilds.
+    // The lock is released automatically when `_rebuild_lock` goes out of scope.
+    let git_dir = std::path::PathBuf::from(context.git().get_git_dir());
+    let _rebuild_lock =
+        crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
 
     // Record original branch for cleanup - this is the branch the user was on when we started
     // We always return users to their original branch, even if the rebuild fails
@@ -542,8 +632,14 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
 
     // CRITICAL: Ensure cleanup happens even if rebuild fails
     // This is the error recovery path - we must always clean up temp branches
-    // and return the user to their original branch
-    if cleanup_needed {
+    // and return the user to their original branch.
+    //
+    // EXCEPTION: When a merge conflict is in progress (resolve state file exists),
+    // we deliberately skip cleanup so the user can run `hitch resolve --continue`
+    // or `hitch resolve --abort` to resume/abandon the rebuild.
+    let resolve_state_present =
+        crate::utils::resolve_state::resolve_state_exists(&context.git().get_git_dir());
+    if cleanup_needed && !resolve_state_present {
         context.log_warning("Rebuild failed, performing cleanup...");
 
         // Determine current branch to decide if we need to switch back
@@ -691,6 +787,16 @@ fn create_temp_branch_for_rebuild(
 }
 
 /// Perform squash merges of promoted branches into temp branch for rebuilding
+///
+/// When a squash merge conflicts this function:
+/// 1. Leaves the working tree with conflict markers on `temp_branch`
+/// 2. Writes `.git/hitch-resolve-state.json` so `hitch resolve` can resume
+/// 3. Returns the user to their original branch
+/// 4. Returns a human-readable error telling them to run `hitch resolve`
+///
+/// The caller (`rebuild_environment`) detects the resolve-state file and
+/// skips the normal "abort + delete temp branch" cleanup so the conflict
+/// remains accessible.
 fn perform_squash_merges_for_rebuild(
     context: &GlobalContext,
     temp_branch: &str,
@@ -719,10 +825,11 @@ fn perform_squash_merges_for_rebuild(
                 .clean_working_directory("Clean up before rebuild operations")?;
         }
 
-        for branch in branches {
+        let mut merged_so_far: Vec<String> = Vec::new();
+
+        for (idx, branch) in branches.iter().enumerate() {
             context.log_verbose(&format!("Processing branch '{}'", branch));
 
-            // Check if branch exists (now guaranteed by synchronize_branches, but keep for safety)
             if !context.git().branch_exists(branch)? {
                 return Err(anyhow::anyhow!(
                     "Branch '{}' does not exist locally after synchronization",
@@ -730,16 +837,40 @@ fn perform_squash_merges_for_rebuild(
                 ));
             }
 
-            // Check for merge conflicts before attempting squash merge
+            // Dry-run check first so we can generate the conflict report without
+            // actually leaving the repo in a half-merged state.
             context.log_verbose(&format!(
                 "Checking for merge conflicts in branch '{}'...",
                 branch
             ));
             let conflict_result = context.git().check_merge_conflicts_comprehensive(branch)?;
+
             if conflict_result.has_conflicts {
                 context.log_verbose(&format!("Merge conflicts detected in branch '{}'", branch));
-                // Generate detailed conflict report
-                let error_msg = format_conflict_report(
+
+                // Now do the ACTUAL squash merge (without aborting) so the user
+                // can see conflict markers in their working tree.
+                let _ = context
+                    .git()
+                    .run_git_command(&["merge", "--squash", branch]);
+
+                // Persist resolve state to .git/ so `hitch resolve` can resume
+                let git_dir = context.git().get_git_dir();
+                let remaining: Vec<String> = branches[idx..].to_vec();
+                let state = ResolveState {
+                    env_name: env_name.to_string(),
+                    temp_branch: temp_branch.to_string(),
+                    original_branch: original_branch.clone(),
+                    base_branch: base_branch.to_string(),
+                    merged_so_far: merged_so_far.clone(),
+                    remaining_branches: remaining,
+                    conflict_branch: branch.clone(),
+                };
+                if let Err(e) = write_resolve_state(&git_dir, &state) {
+                    context.log_warning(&format!("Failed to save resolve state: {}", e));
+                }
+
+                let conflict_report = format_conflict_report(
                     branch,
                     &conflict_result.target_branch,
                     base_branch,
@@ -748,12 +879,19 @@ fn perform_squash_merges_for_rebuild(
                     conflict_result.merge_base.as_ref(),
                 );
 
-                return Err(anyhow::anyhow!("{}", error_msg));
-            } else {
-                context.log_verbose(&format!("No conflicts detected in branch '{}'", branch));
+                return Err(anyhow::anyhow!(
+                    "{}\n\nThe conflicted files are now open in your working tree on branch '{}'.\n\
+                     Resolve the conflicts, then run:\n\
+                     \n  hitch resolve --continue\n\
+                     \nOr to abandon the rebuild:\n\
+                     \n  hitch resolve --abort",
+                    conflict_report,
+                    temp_branch
+                ));
             }
 
-            // Perform squash merge
+            context.log_verbose(&format!("No conflicts detected in branch '{}'", branch));
+
             let merge_message = format!("hitch: squash merge '{}' into environment", branch);
             context.log_verbose(&format!(
                 "Attempting to squash merge '{}' into temp branch...",
@@ -764,18 +902,29 @@ fn perform_squash_merges_for_rebuild(
                 "✓ Successfully squash merged '{}' into temp branch",
                 branch
             ));
+            merged_so_far.push(branch.clone());
         }
 
         Ok(())
     })();
 
-    // Always try to return to original branch, even if an error occurred
-    if let Err(e) = context.git().checkout_branch(&original_branch) {
-        context.log_error(&format!(
-            "Failed to return to original branch '{}' after merge operations: {}",
-            original_branch, e
-        ));
+    // Always return to original branch (but DON'T abort the merge if we saved
+    // resolve state — the caller checks for the state file).
+    let resolve_state_present = crate::utils::resolve_state::resolve_state_exists(
+        &context.git().get_git_dir(),
+    );
+    if !resolve_state_present {
+        // No pending resolve: safe to clean up any dangling merge state
+        let _ = context.git().abort_merge_and_clean();
+        if let Err(e) = context.git().checkout_branch(&original_branch) {
+            context.log_error(&format!(
+                "Failed to return to original branch '{}' after merge operations: {}",
+                original_branch, e
+            ));
+        }
     }
+    // If resolve state IS present we intentionally leave the user on temp_branch
+    // so they can see and edit the conflict markers in their working tree.
 
     result
 }
@@ -973,4 +1122,443 @@ pub fn get_environment_config_for_approval(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))
     })
+}
+
+// =============================================================================
+// Pre-promote Conflict Checking
+// =============================================================================
+
+/// Check whether a new branch conflicts with any branch already promoted to an environment
+///
+/// This runs before state is modified, so if a conflict is found no changes have been made.
+/// It checks the new branch pairwise against every existing promoted branch by:
+/// 1. Creating a throwaway branch from base_branch
+/// 2. Squash-merging the existing promoted branch onto it
+/// 3. Dry-run merging the new branch to detect conflicts
+/// 4. Always cleaning up the throwaway branch
+///
+/// All conflicting pairs are collected and reported in a single error.
+pub fn check_pre_promote_conflicts(
+    context: &GlobalContext,
+    new_branch: &str,
+    existing_branches: &[String],
+    base_branch: &str,
+    env_name: &str,
+) -> Result<()> {
+    if existing_branches.is_empty() {
+        return Ok(());
+    }
+
+    context.log_verbose(&format!(
+        "Checking '{}' for conflicts with {} already-promoted branch(es) in '{}'...",
+        new_branch,
+        existing_branches.len(),
+        env_name
+    ));
+
+    // Ensure all relevant branches are available locally before we start
+    let mut all_branches = existing_branches.to_vec();
+    all_branches.push(new_branch.to_string());
+    context.git().synchronize_branches(&all_branches)?;
+
+    let original_branch = context.git().get_current_branch()?;
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
+
+    let mut conflict_pairs: Vec<(String, Vec<crate::utils::conflict_report::ConflictedFile>)> =
+        Vec::new();
+
+    for existing in existing_branches {
+        let preflight_branch = format!("hitch-preflight-{}", timestamp);
+
+        // Always clean up the preflight branch, even if an error occurs
+        let pair_result: Result<Option<Vec<crate::utils::conflict_report::ConflictedFile>>> =
+            (|| {
+                // Create a fresh branch from base
+                context
+                    .git()
+                    .create_branch_from(&preflight_branch, base_branch)?;
+
+                // Squash-merge the existing promoted branch onto it (the "background" state)
+                context.git().checkout_branch(&preflight_branch)?;
+                let merge_msg = format!(
+                    "hitch-preflight: squash merge '{}' for conflict check",
+                    existing
+                );
+                context.git().squash_merge(existing, &merge_msg)?;
+
+                // Now dry-run merge new_branch to see if it conflicts
+                let result =
+                    context.git().check_merge_conflicts_comprehensive(new_branch)?;
+                if result.has_conflicts {
+                    Ok(Some(result.conflicted_files))
+                } else {
+                    Ok(None)
+                }
+            })();
+
+        // Return to original branch and clean up the preflight branch unconditionally
+        let _ = context.git().abort_merge_and_clean();
+        if let Err(e) = context.git().checkout_branch(&original_branch) {
+            context.log_warning(&format!(
+                "Failed to return to branch '{}' during preflight cleanup: {}",
+                original_branch, e
+            ));
+        }
+        if context.git().branch_exists(&preflight_branch).unwrap_or(false) {
+            if let Err(e) = context.git().delete_branch(&preflight_branch, true) {
+                context.log_warning(&format!(
+                    "Failed to clean up preflight branch '{}': {}",
+                    preflight_branch, e
+                ));
+            }
+        }
+
+        // Propagate hard errors (e.g. branch doesn't exist); collect conflict results
+        match pair_result? {
+            Some(conflicts) => conflict_pairs.push((existing.clone(), conflicts)),
+            None => {
+                context.log_verbose(&format!(
+                    "  ✓ No conflict between '{}' and '{}'",
+                    new_branch, existing
+                ));
+            }
+        }
+    }
+
+    if conflict_pairs.is_empty() {
+        return Ok(());
+    }
+
+    // Build a combined error message listing every conflicting pair
+    let mut msg = format!(
+        "Cannot promote '{}' to environment '{}': conflicts detected with already-promoted branches.\n\n",
+        new_branch, env_name
+    );
+    for (sibling, files) in &conflict_pairs {
+        msg.push_str(&format!(
+            "  Conflicts with '{}' ({} file{}):\n",
+            sibling,
+            files.len(),
+            if files.len() == 1 { "" } else { "s" }
+        ));
+        for f in files {
+            msg.push_str(&format!("    - {} ({})\n", f.path, f.conflict_type));
+        }
+        msg.push('\n');
+    }
+    msg.push_str("Resolve by rebasing or merging the conflicting branches before promoting.\n");
+    msg.push_str("You can also use 'hitch resolve' after a failed rebuild to fix conflicts interactively.");
+
+    Err(anyhow::anyhow!("{}", msg))
+}
+
+// =============================================================================
+// Resolve: continue / abort a paused rebuild
+// =============================================================================
+
+/// Complete a rebuild that was interrupted by a merge conflict.
+///
+/// Called by `hitch resolve --continue` after the user has resolved the conflict
+/// markers left on `temp_branch` by the failed rebuild.  It:
+/// 1. Commits the staged resolution on `temp_branch`.
+/// 2. Squash-merges the remaining promoted branches (everything after the conflict branch).
+/// 3. Replaces the real environment branch and updates the rebuilt timestamp.
+/// 4. Cleans up `temp_branch` and removes `.git/hitch-resolve-state.json`.
+/// 5. Checks out `original_branch`.
+pub fn continue_rebuild_after_resolve(
+    context: &GlobalContext,
+    state: &crate::utils::resolve_state::ResolveState,
+) -> Result<()> {
+    let temp_branch = &state.temp_branch;
+    let original_branch = &state.original_branch;
+    let env_name = &state.env_name;
+
+    // Must be on the temp branch for the commit to land in the right place
+    let current = context.git().get_current_branch()?;
+    if current != *temp_branch {
+        return Err(anyhow::anyhow!(
+            "Expected to be on branch '{}' but currently on '{}'. \
+             Please switch to '{}' before running 'hitch resolve --continue'.",
+            temp_branch, current, temp_branch
+        ));
+    }
+
+    // Check for conflict markers in the working tree (unstaged)
+    let wt_grep = context
+        .git()
+        .run_git_command(&["grep", "-l", "^<<<<<<<"])?;
+    if wt_grep.status.success() {
+        let files = String::from_utf8_lossy(&wt_grep.stdout).trim().to_string();
+        if !files.is_empty() {
+            return Err(anyhow::anyhow!(
+                "There are still conflict markers in your working tree.\n\
+                 Please resolve all conflicts and stage the files before running 'hitch resolve --continue'.\n\
+                 Files with conflict markers:\n  {}",
+                files.lines().collect::<Vec<_>>().join("\n  ")
+            ));
+        }
+    }
+
+    // Check for conflict markers in staged files
+    let staged_grep = context
+        .git()
+        .run_git_command(&["grep", "-l", "^<<<<<<<", "--cached"])?;
+    if staged_grep.status.success() {
+        let files = String::from_utf8_lossy(&staged_grep.stdout)
+            .trim()
+            .to_string();
+        if !files.is_empty() {
+            return Err(anyhow::anyhow!(
+                "There are still conflict markers in staged files.\n\
+                 Please resolve all conflicts and re-stage the files before running 'hitch resolve --continue'.\n\
+                 Files with conflict markers:\n  {}",
+                files.lines().collect::<Vec<_>>().join("\n  ")
+            ));
+        }
+    }
+
+    // Stage all changes (the resolved conflict files)
+    let add_output = context.git().run_git_command(&["add", "-A"])?;
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        return Err(anyhow::anyhow!("Failed to stage resolved files: {}", stderr));
+    }
+
+    // Commit the resolution
+    let commit_msg = format!(
+        "hitch: squash merge '{}' into environment (conflicts resolved)",
+        state.conflict_branch
+    );
+    let commit_output = context
+        .git()
+        .run_git_command(&["commit", "-m", &commit_msg])?;
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr);
+        let stdout = String::from_utf8_lossy(&commit_output.stdout);
+        let combined = format!("{}{}", stdout, stderr);
+        // "nothing to commit" is acceptable — the resolution may have been staged already
+        if !combined.contains("nothing to commit") && !combined.contains("nothing added to commit") {
+            return Err(anyhow::anyhow!(
+                "Failed to commit resolved conflicts: {}",
+                combined
+            ));
+        }
+    }
+
+    context.log_success(&format!(
+        "✓ Committed resolution for '{}'",
+        state.conflict_branch
+    ));
+
+    // Continue squash-merging the remaining branches (skip the conflict_branch itself)
+    let remaining = state
+        .remaining_branches
+        .iter()
+        .skip(1) // first element is the conflict_branch we just resolved
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if !remaining.is_empty() {
+        context.log_info(&format!(
+            "Continuing rebuild: {} branch(es) remaining...",
+            remaining.len()
+        ));
+        context.git().synchronize_branches(&remaining)?;
+
+        for branch in &remaining {
+            context.log_verbose(&format!("Squash-merging '{}'...", branch));
+
+            // Dry-run check first
+            let conflict_result = context.git().check_merge_conflicts_comprehensive(branch)?;
+            if conflict_result.has_conflicts {
+                // Write updated resolve state for the new conflict
+                let git_dir = context.git().get_git_dir();
+                let new_idx = state
+                    .remaining_branches
+                    .iter()
+                    .position(|b| b == branch)
+                    .unwrap_or(0);
+                let new_remaining = state.remaining_branches[new_idx..].to_vec();
+                let mut merged_so_far = state.merged_so_far.clone();
+                // Add branches that we just successfully merged
+                for b in &remaining {
+                    if b == branch {
+                        break;
+                    }
+                    merged_so_far.push(b.clone());
+                }
+                let new_state = crate::utils::resolve_state::ResolveState {
+                    env_name: env_name.clone(),
+                    temp_branch: temp_branch.clone(),
+                    original_branch: original_branch.clone(),
+                    base_branch: state.base_branch.clone(),
+                    merged_so_far,
+                    remaining_branches: new_remaining,
+                    conflict_branch: branch.clone(),
+                };
+                // Do the actual squash merge (leaving markers) then save state
+                let _ = context.git().run_git_command(&["merge", "--squash", branch]);
+                if let Err(e) = crate::utils::resolve_state::write_resolve_state(&git_dir, &new_state) {
+                    context.log_warning(&format!("Failed to save resolve state: {}", e));
+                }
+                let conflict_report = format_conflict_report(
+                    branch,
+                    temp_branch,
+                    &state.base_branch,
+                    env_name,
+                    &conflict_result.conflicted_files,
+                    conflict_result.merge_base.as_ref(),
+                );
+                return Err(anyhow::anyhow!(
+                    "{}\n\nThe conflicted files are now open in your working tree on branch '{}'.\n\
+                     Resolve the conflicts, then run:\n\
+                     \n  hitch resolve --continue\n\
+                     \nOr to abandon the rebuild:\n\
+                     \n  hitch resolve --abort",
+                    conflict_report,
+                    temp_branch
+                ));
+            }
+
+            let merge_msg = format!("hitch: squash merge '{}' into environment", branch);
+            context.git().squash_merge(branch, &merge_msg)?;
+            context.log_verbose(&format!("✓ Squash-merged '{}'", branch));
+        }
+    }
+
+    // All branches merged — replace the real environment branch
+    context.log_info(&format!("Finalising rebuild of '{}'...", env_name));
+    let backup_branch = safe_replace_environment_branch_for_rebuild(context, env_name, temp_branch)?;
+
+    update_rebuilt_timestamp_for_rebuild(context, env_name)?;
+
+    // Cleanup: backup branch
+    if context.git().branch_exists(&backup_branch)? {
+        if let Err(e) = context.git().delete_branch(&backup_branch, true) {
+            context.log_warning(&format!("Failed to delete backup branch '{}': {}", backup_branch, e));
+        }
+    }
+
+    // Cleanup: temp branch
+    if context.git().branch_exists(temp_branch)? {
+        let _ = context.git().delete_branch(temp_branch, false).or_else(|_| {
+            context.git().delete_branch(temp_branch, true)
+        });
+    }
+
+    // Remove resolve state file
+    let git_dir = context.git().get_git_dir();
+    if let Err(e) = crate::utils::resolve_state::remove_resolve_state(&git_dir) {
+        context.log_warning(&format!("Failed to remove resolve state file: {}", e));
+    }
+
+    // Return to original branch
+    if let Err(e) = context.git().checkout_branch(original_branch) {
+        context.log_warning(&format!(
+            "Failed to return to '{}': {}. You may need to check it out manually.",
+            original_branch, e
+        ));
+    } else {
+        context.log_verbose(&format!("✓ Returned to '{}'", original_branch));
+    }
+
+    // Unlock the environment now that the rebuild is complete
+    if let Err(e) = unlock_environment(context, env_name) {
+        context.log_warning(&format!(
+            "Failed to unlock environment '{}': {}. You may need to run 'hitch unlock {}' manually.",
+            env_name, e, env_name
+        ));
+    }
+
+    // Pop auto-stash if one was saved before the original rebuild command
+    pop_auto_stash_if_present(context);
+
+    Ok(())
+}
+
+/// Abort a rebuild that was interrupted by a merge conflict.
+///
+/// Called by `hitch resolve --abort`.  It resets the working tree, deletes the
+/// temporary rebuild branch, removes the resolve state file, and checks out
+/// the user's original branch.
+pub fn abort_rebuild_resolve(
+    context: &GlobalContext,
+    state: &crate::utils::resolve_state::ResolveState,
+) -> Result<()> {
+    let temp_branch = &state.temp_branch;
+    let original_branch = &state.original_branch;
+
+    // Reset working tree (clears conflict markers / staged changes)
+    let _ = context.git().run_git_command(&["merge", "--abort"]);
+    let _ = context.git().run_git_command(&["reset", "--hard"]);
+    let _ = context.git().run_git_command(&["clean", "-fd"]);
+
+    // Checkout original branch (may already be there if resolve state was just created)
+    let current = context.git().get_current_branch().unwrap_or_default();
+    if current != *original_branch {
+        if let Err(e) = context.git().checkout_branch(original_branch) {
+            context.log_warning(&format!(
+                "Failed to return to '{}': {}",
+                original_branch, e
+            ));
+        }
+    }
+
+    // Delete temp branch
+    if context.git().branch_exists(temp_branch).unwrap_or(false) {
+        // Reset + clean again now that we're on a different branch
+        let _ = context.git().run_git_command(&["reset", "--hard"]);
+        if let Err(e) = context.git().delete_branch(temp_branch, true) {
+            context.log_warning(&format!(
+                "Failed to delete temp branch '{}': {}",
+                temp_branch, e
+            ));
+        } else {
+            context.log_verbose(&format!("✓ Deleted temp branch '{}'", temp_branch));
+        }
+    }
+
+    // Remove resolve state file
+    let git_dir = context.git().get_git_dir();
+    if let Err(e) = crate::utils::resolve_state::remove_resolve_state(&git_dir) {
+        context.log_warning(&format!("Failed to remove resolve state file: {}", e));
+    }
+
+    // Unlock the environment now that the rebuild is aborted
+    let env_name = &state.env_name;
+    if let Err(e) = unlock_environment(context, env_name) {
+        context.log_warning(&format!(
+            "Failed to unlock environment '{}': {}. You may need to run 'hitch unlock {}' manually.",
+            env_name, e, env_name
+        ));
+    }
+
+    // Pop auto-stash if one was saved before the original rebuild command
+    pop_auto_stash_if_present(context);
+
+    Ok(())
+}
+
+/// Pop the top git stash if its message indicates it was created by hitch's
+/// auto-stash mechanism.  Called after `hitch resolve --continue/--abort` to
+/// restore working-tree changes that were stashed before the interrupted rebuild.
+fn pop_auto_stash_if_present(context: &GlobalContext) {
+    const AUTO_STASH_PREFIX: &str = "On ";
+    const AUTO_STASH_MSG: &str = "hitch: auto-stash before rebuild";
+    if let Some(msg) = context.git().stash_top_message() {
+        // git stash list --format=%s produces "On <branch>: <message>"
+        if msg.contains(AUTO_STASH_MSG) || msg == AUTO_STASH_MSG
+            || msg.starts_with(AUTO_STASH_PREFIX) && msg.contains(AUTO_STASH_MSG)
+        {
+            context.log_info("Restoring stashed changes from before the rebuild...");
+            if let Err(e) = context.git().stash_pop() {
+                context.log_warning(&format!(
+                    "Failed to restore stashed changes: {}. Run 'git stash pop' manually.",
+                    e
+                ));
+            } else {
+                context.log_verbose("✓ Stashed changes restored");
+            }
+        }
+    }
 }

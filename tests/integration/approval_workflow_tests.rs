@@ -1017,4 +1017,148 @@ mod tests {
 
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // Item 9: Approval SHA drift detection
+    // -------------------------------------------------------------------------
+
+    /// When a branch has new commits since the approval request was created,
+    /// `hitch approvals list` should mark the request as DRIFTED.
+    #[test]
+    fn test_approval_list_shows_drift_indicator() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["approver@example.com"],
+                1,
+            )?;
+
+            // Create a branch and request approval
+            env.git.run(&["checkout", "-b", "feat-drift"])?;
+            env.fs.write_file("drift1.txt", "v1")?;
+            env.git.run(&["add", "-f", "drift1.txt"])?;
+            env.git.run(&["commit", "-m", "feat: drift v1"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feat-drift", "production"])
+                .execute()?
+                .assert_success();
+
+            // Get the request ID
+            let list_result = env
+                .hitch
+                .run()
+                .args(&["approvals", "list"])
+                .execute()?
+                .assert_success();
+
+            // Must NOT be drifted yet
+            assert!(
+                !list_result.stdout().contains("DRIFTED"),
+                "Should not show DRIFTED before branch changes"
+            );
+
+            // Push a new commit to feat-drift (simulating drift)
+            env.git.run(&["checkout", "feat-drift"])?;
+            env.fs.write_file("drift2.txt", "v2")?;
+            env.git.run(&["add", "-f", "drift2.txt"])?;
+            env.git.run(&["commit", "-m", "feat: drift v2"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Now the list should show DRIFTED
+            let drifted_list = env
+                .hitch
+                .run()
+                .args(&["approvals", "list"])
+                .execute()?
+                .assert_success();
+            drifted_list.assert_stdout_contains("DRIFTED");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `hitch approvals refresh <id>` should update the snapshot with current
+    /// SHAs and clear prior approvals.
+    #[test]
+    fn test_approval_refresh_clears_old_snapshot() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["approver@example.com"],
+                1,
+            )?;
+
+            // Create a branch and request approval
+            env.git.run(&["checkout", "-b", "feat-refresh"])?;
+            env.fs.write_file("refresh1.txt", "v1")?;
+            env.git.run(&["add", "-f", "refresh1.txt"])?;
+            env.git.run(&["commit", "-m", "feat: refresh v1"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feat-refresh", "production"])
+                .execute()?
+                .assert_success();
+
+            // Get request ID
+            let list_out = env
+                .hitch
+                .run()
+                .args(&["approvals", "list"])
+                .execute()?
+                .assert_success();
+            let stdout = list_out.stdout();
+            let request_id = stdout
+                .lines()
+                .find(|l| l.contains("feat-refresh"))
+                .and_then(|l| l.split_whitespace().next())
+                .unwrap_or_default()
+                .to_string();
+
+            assert!(!request_id.is_empty(), "Could not find request ID in list output");
+
+            // Simulate drift
+            env.git.run(&["checkout", "feat-refresh"])?;
+            env.fs.write_file("refresh2.txt", "v2")?;
+            env.git.run(&["add", "-f", "refresh2.txt"])?;
+            env.git.run(&["commit", "-m", "feat: refresh v2"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Refresh should succeed
+            env.hitch
+                .run()
+                .args(&["approvals", "refresh", &request_id])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("refreshed");
+
+            // After refresh, no DRIFTED indicator in the list
+            let after_list = env
+                .hitch
+                .run()
+                .args(&["approvals", "list"])
+                .execute()?
+                .assert_success();
+            assert!(
+                !after_list.stdout().contains("DRIFTED"),
+                "After refresh there should be no DRIFTED indicator"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

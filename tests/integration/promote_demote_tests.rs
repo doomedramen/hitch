@@ -474,6 +474,124 @@ mod tests {
         Ok(())
     }
 
+    // -------------------------------------------------------------------------
+    // Item 1: Pre-promote conflict check against sibling branches
+    // -------------------------------------------------------------------------
+
+    /// When two branches both modify the same file in incompatible ways, promoting
+    /// the second branch should be blocked before any state is mutated.
+    #[test]
+    fn test_promote_blocked_by_sibling_conflict() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create a shared file on main so both branches have a common ancestor.
+            // Use -f to bypass the broad .gitignore inherited from hitch-metadata.
+            env.fs.write_file("shared.txt", "line one\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "Add shared.txt"])?;
+
+            // Branch A: replaces line one with "from branch-a"
+            env.git.run(&["checkout", "-b", "branch-a"])?;
+            env.fs.write_file("shared.txt", "from branch-a\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "branch-a changes shared.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Branch B: replaces line one with "from branch-b" (incompatible)
+            env.git.run(&["checkout", "-b", "branch-b"])?;
+            env.fs.write_file("shared.txt", "from branch-b\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "branch-b changes shared.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Promote branch-a first – should succeed
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Attempt to promote branch-b – should be blocked
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "branch-b", "dev"])
+                .execute()?;
+
+            result
+                .assert_failure()
+                .assert_stderr_contains("conflicts detected with already-promoted branches");
+
+            // Metadata must be unchanged (branch-b not in the list)
+            let config = env.read_hitch_config()?;
+            let dev_env = config.environments.get("dev").unwrap();
+            assert!(dev_env.branches.contains(&"branch-a".to_string()));
+            assert!(!dev_env.branches.contains(&"branch-b".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// When two branches modify different files they should both be promotable
+    /// with no conflict errors.
+    #[test]
+    fn test_promote_succeeds_with_non_conflicting_siblings() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Branch A touches file-a.txt only
+            env.git.run(&["checkout", "-b", "feat-a"])?;
+            env.fs.write_file("file-a.txt", "content a\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feat-a adds file-a.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Branch B touches file-b.txt only
+            env.git.run(&["checkout", "-b", "feat-b"])?;
+            env.fs.write_file("file-b.txt", "content b\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feat-b adds file-b.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Both promotes should succeed
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.hitch
+                .run()
+                .args(&["promote", "feat-b", "dev"])
+                .execute()?
+                .assert_success();
+
+            let config = env.read_hitch_config()?;
+            let dev_env = config.environments.get("dev").unwrap();
+            assert!(dev_env.branches.contains(&"feat-a".to_string()));
+            assert!(dev_env.branches.contains(&"feat-b".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn test_demote_rollback_functionality() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -594,6 +712,205 @@ mod tests {
             let final_config = env.read_hitch_config()?;
             let final_dev_env = final_config.environments.get("dev").unwrap();
             assert!(!final_dev_env.branches.contains(&"feature-to-demote-functional".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Item 5: --no-rebuild flag for batching promotes/demotes
+    // -------------------------------------------------------------------------
+
+    /// `hitch promote --no-rebuild` should add the branch to metadata but skip
+    /// the rebuild step, printing the "Skipping rebuild" message.
+    #[test]
+    fn test_promote_no_rebuild_skips_rebuild() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feat-no-rebuild"])?;
+            env.fs.write_file("feat.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feat"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "feat-no-rebuild", "dev", "--no-rebuild"])
+                .execute()?;
+
+            result
+                .assert_success()
+                .assert_stdout_contains("Successfully promoted 'feat-no-rebuild' to environment 'dev'")
+                .assert_stdout_contains("Skipping rebuild");
+
+            // Branch must appear in metadata
+            let config = env.read_hitch_config()?;
+            let dev_env = config.environments.get("dev").unwrap();
+            assert!(dev_env.branches.contains(&"feat-no-rebuild".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Batch workflow: promote several branches with `--no-rebuild`, then run
+    /// `hitch rebuild` once. All branches should end up in the env after that
+    /// single rebuild.
+    #[test]
+    fn test_batch_promote_then_rebuild() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create two independent branches
+            for branch in &["batch-feat-1", "batch-feat-2"] {
+                env.git.run(&["checkout", "-b", branch])?;
+                env.fs.write_file(&format!("{}.txt", branch), "content")?;
+                env.git.run(&["add", "."])?;
+                env.git.run(&["commit", "-m", &format!("Add {}", branch)])?;
+                env.git.run(&["checkout", "main"])?;
+            }
+
+            // Promote both with --no-rebuild
+            for branch in &["batch-feat-1", "batch-feat-2"] {
+                env.hitch
+                    .run()
+                    .args(&["promote", branch, "dev", "--no-rebuild"])
+                    .execute()?
+                    .assert_success();
+            }
+
+            // Both should be in metadata
+            let config = env.read_hitch_config()?;
+            let dev_env = config.environments.get("dev").unwrap();
+            assert!(dev_env.branches.contains(&"batch-feat-1".to_string()));
+            assert!(dev_env.branches.contains(&"batch-feat-2".to_string()));
+
+            // Now run a single rebuild
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            // The dev branch should now include commits from both features
+            let feat1_exists = env.git.run(&["log", "dev", "--oneline", "--grep=batch-feat-1"]);
+            let feat2_exists = env.git.run(&["log", "dev", "--oneline", "--grep=batch-feat-2"]);
+            assert!(feat1_exists.is_ok(), "batch-feat-1 commits should be in dev after rebuild");
+            assert!(feat2_exists.is_ok(), "batch-feat-2 commits should be in dev after rebuild");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `hitch demote --no-rebuild` should remove the branch from metadata but
+    /// skip the rebuild step.
+    #[test]
+    fn test_demote_no_rebuild_skips_rebuild() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feat-demote-no-rebuild"])?;
+            env.fs.write_file("feat.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feat"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Promote normally first
+            env.hitch
+                .run()
+                .args(&["promote", "feat-demote-no-rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Demote with --no-rebuild
+            let result = env
+                .hitch
+                .run()
+                .args(&["demote", "feat-demote-no-rebuild", "dev", "--no-rebuild"])
+                .execute()?;
+
+            result
+                .assert_success()
+                .assert_stdout_contains("Successfully demoted 'feat-demote-no-rebuild' from environment 'dev'")
+                .assert_stdout_contains("Skipping rebuild");
+
+            // Branch must be removed from metadata
+            let config = env.read_hitch_config()?;
+            let dev_env = config.environments.get("dev").unwrap();
+            assert!(!dev_env.branches.contains(&"feat-demote-no-rebuild".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// When the working tree is dirty, `hitch promote` should auto-stash, run
+    /// the rebuild, and restore the stashed changes on completion.
+    #[test]
+    fn test_promote_auto_stashes_dirty_working_tree() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create a feature branch
+            env.git.run(&["checkout", "-b", "feature-auto-stash"])?;
+            env.fs.write_file("feature.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Leave uncommitted changes in the working tree
+            env.fs.write_file("wip.txt", "work in progress")?;
+            env.git.run(&["add", "."])?; // staged but not committed
+
+            // Promote should succeed despite dirty working tree
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "feature-auto-stash", "dev"])
+                .execute()?;
+            result
+                .assert_success()
+                .assert_stdout_contains("Successfully promoted");
+
+            // After promotion, wip.txt should be restored
+            let wip_content = env.fs.read_file("wip.txt")?;
+            assert_eq!(
+                wip_content.trim(),
+                "work in progress",
+                "Auto-stash should have restored wip.txt after promotion"
+            );
 
             Ok::<(), anyhow::Error>(())
         });

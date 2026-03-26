@@ -17,25 +17,30 @@ pub struct RebuildCommand {
 pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     context.log_info(&format!("Rebuilding environment '{}'...", args.env_name));
 
-    // Step 1: Precondition checks
+    // Step 1: Precondition checks (allow dirty tree — we'll stash it)
+    // Only check git repo, not working tree cleanliness
+    if let Err(e) = context.git().get_current_branch() {
+        return Err(anyhow::anyhow!(
+            "Not in a Git repository: {}",
+            e
+        ));
+    }
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
 
-    // Step 2-5: Execute rebuild with automatic locking and unlocking
-    // Using the reusable rebuild_environment function from prelude
-
-    if args.force {
-        // For force mode, we need to handle locking manually since the environment is already locked
-        context.log_info(&format!(
-            "Force rebuilding locked environment '{}'...",
-            args.env_name
-        ));
-        crate::utils::prelude::rebuild_environment(context, &args.env_name)?;
-    } else {
-        // Normal mode: use automatic locking and unlocking
-        with_locked_env(context, &args.env_name, || {
+    // Step 2-5: Auto-stash dirty changes, execute rebuild, pop stash
+    crate::utils::prelude::with_auto_stash(context, || {
+        if args.force {
+            context.log_info(&format!(
+                "Force rebuilding locked environment '{}'...",
+                args.env_name
+            ));
             crate::utils::prelude::rebuild_environment(context, &args.env_name)
-        })?;
-    }
+        } else {
+            with_locked_env(context, &args.env_name, || {
+                crate::utils::prelude::rebuild_environment(context, &args.env_name)
+            })
+        }
+    })?;
 
     context.log_success(&format!(
         "Environment '{}' rebuilt successfully!",

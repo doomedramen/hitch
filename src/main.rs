@@ -56,6 +56,12 @@ enum Commands {
     Completion(commands::completion::CompletionCommand),
     /// Manage approval requests for deployments
     Approvals(commands::approvals::ApprovalsCommand),
+    /// Resume or abort a rebuild paused by a merge conflict
+    Resolve(commands::resolve::ResolveCommand),
+    /// Remove local branches that are no longer promoted to any environment
+    Cleanup(commands::cleanup::CleanupCommand),
+    /// Preview the commits each promoted branch would add on rebuild
+    Diff(commands::diff::DiffCommand),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,6 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Guard(_) => "guard",
         Commands::Completion(_) => "completion",
         Commands::Approvals(_) => "approvals",
+        Commands::Resolve(_) => "resolve",
+        Commands::Cleanup(_) => "cleanup",
+        Commands::Diff(_) => "diff",
     };
 
     // Create a new logger configured for this command
@@ -105,5 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             commands::completion::run(args, &context).map_err(|e| e.into())
         }
         Commands::Approvals(args) => commands::approvals::run(args, &context).map_err(|e| e.into()),
+        Commands::Resolve(args) => commands::resolve::run(args, &context).map_err(|e| e.into()),
+        Commands::Cleanup(args) => commands::cleanup::run(args, &context).map_err(|e| e.into()),
+        Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
     }
 }

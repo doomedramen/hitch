@@ -230,52 +230,73 @@ fn display_environment_status(
 
         for (i, branch) in env.branches.iter().enumerate() {
             // Check if branch exists locally or remotely
-            let branch_status = if let Ok(exists) = context.git().branch_exists_anywhere(branch) {
-                if !exists {
-                    "❌ ".bright_red().to_string()
-                } else {
-                    // Always check actual merge status regardless of release state
-                    let is_in_source = context
-                        .git()
-                        .is_branch_merged_into(branch, &env.base)
-                        .unwrap_or(false);
-
-                    if is_in_source {
-                        "⚠️  ".bright_yellow().to_string()
-                    } else {
-                        "✅ ".bright_green().to_string()
-                    }
-                }
-            } else {
-                "❓ ".bright_yellow().to_string()
-            };
-
-            let extra_info = if branch.contains(env_name) {
-                "(matches env name)".to_string().dimmed()
-            } else {
-                "".to_string().normal()
-            };
-
-            // Check actual merge status for warning text
-            let source_warning = if context
+            let branch_exists = context
                 .git()
-                .is_branch_merged_into(branch, &env.base)
-                .unwrap_or(false)
-            {
+                .branch_exists_anywhere(branch)
+                .unwrap_or(false);
+
+            let is_in_source = branch_exists
+                && context
+                    .git()
+                    .is_branch_merged_into(branch, &env.base)
+                    .unwrap_or(false);
+
+            // Check if branch has new commits since the last rebuild (staleness)
+            let is_stale = branch_exists
+                && env.rebuilt_at.map_or(false, |rebuilt_at| {
+                    context
+                        .git()
+                        .get_branch_commit_sha(branch)
+                        .ok()
+                        .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
+                        .map_or(false, |ts| ts > rebuilt_at)
+                });
+
+            let branch_status = if !branch_exists {
+                "❌".bright_red().to_string()
+            } else if is_in_source {
+                "⚠️ ".bright_yellow().to_string()
+            } else if is_stale {
+                "🔄".bright_yellow().to_string()
+            } else {
+                "✅".bright_green().to_string()
+            };
+
+            let source_warning = if is_in_source {
                 format!(" (already in {})", env.base.bright_blue())
             } else {
                 "".to_string()
             };
 
+            let stale_warning = if is_stale && !is_in_source {
+                " (new commits since last rebuild)".bright_yellow().to_string()
+            } else {
+                "".to_string()
+            };
+
             println!(
-                "│  {} {} {}{}",
+                "│  {} {}{}{}",
                 branch_status,
                 format!("{}. {}", i + 1, branch).bright_white(),
-                extra_info,
-                source_warning.normal()
+                source_warning.normal(),
+                stale_warning
             );
         }
     }
+
+    // Check if base branch itself has new commits since last rebuild
+    let base_is_stale = env.rebuilt_at.map_or(false, |rebuilt_at| {
+        context
+            .git()
+            .branch_exists_anywhere(&env.base)
+            .unwrap_or(false)
+            && context
+                .git()
+                .get_branch_commit_sha(&env.base)
+                .ok()
+                .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
+                .map_or(false, |ts| ts > rebuilt_at)
+    });
 
     // Rebuilt information with relative time
     println!("├─ Rebuilt:");
@@ -283,7 +304,21 @@ fn display_environment_status(
         Some(timestamp) => {
             let formatted = format_timestamp(Some(timestamp));
             let relative = format_relative_time(timestamp);
-            format!("• {} ({})", formatted.bright_white(), relative.dimmed())
+            let stale_note = if base_is_stale {
+                format!(
+                    " {} base branch '{}' has new commits",
+                    "⚠️".bright_yellow(),
+                    env.base.bright_blue()
+                )
+            } else {
+                "".to_string()
+            };
+            format!(
+                "• {} ({}){}",
+                formatted.bright_white(),
+                relative.dimmed(),
+                stale_note
+            )
         }
         None => "• Never".bright_red().to_string(),
     };

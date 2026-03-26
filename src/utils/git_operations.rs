@@ -67,6 +67,16 @@ impl GitOperations {
         Ok(GitOperations { repo, repo_path })
     }
 
+    /// Return the path to the `.git` directory for this repository
+    pub fn get_git_dir(&self) -> String {
+        self.repo.path().to_string_lossy().to_string()
+    }
+
+    /// Return the working directory (repo root) for this repository
+    pub fn get_repo_path(&self) -> &str {
+        &self.repo_path
+    }
+
     #[allow(dead_code)]
     pub fn new_at_path(path: &str) -> Result<Self> {
         // Open the repository at the exact path to avoid discovering parent repositories
@@ -416,7 +426,7 @@ impl GitOperations {
 
     /// Get the timestamp for a commit
     pub fn get_commit_timestamp(&self, sha: &str) -> Result<DateTime<Utc>> {
-        let output = self.run_git_command(&["show", "-s", "--format=%ct", sha])?;
+        let output = self.run_git_command(&["log", "-1", "--format=%at", sha])?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -830,6 +840,49 @@ impl GitOperations {
     }
 
     /// Abort any ongoing merge operation and reset working directory to clean state
+    /// Stash all uncommitted changes (staged + unstaged + untracked).
+    ///
+    /// Returns `true` if a stash entry was actually created (i.e. the tree was
+    /// dirty), `false` if there was nothing to stash.
+    pub fn stash_push(&self, message: &str) -> Result<bool> {
+        // First check if there is actually anything to stash
+        let output = self.run_git_command(&["status", "--porcelain"])?;
+        if output.stdout.is_empty() {
+            return Ok(false);
+        }
+
+        let out = self.run_git_command(&["stash", "push", "-u", "-m", message])?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(anyhow::anyhow!("git stash push failed: {}", stderr));
+        }
+        // "No local changes to save" means nothing was stashed
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        Ok(!stdout.contains("No local changes to save"))
+    }
+
+    /// Pop the most recent stash entry.
+    pub fn stash_pop(&self) -> Result<()> {
+        let out = self.run_git_command(&["stash", "pop"])?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(anyhow::anyhow!("git stash pop failed: {}", stderr));
+        }
+        Ok(())
+    }
+
+    /// Return the message of the most recent stash entry, or `None` if there
+    /// is no stash.
+    pub fn stash_top_message(&self) -> Option<String> {
+        let out = self.run_git_command(&["stash", "list", "--format=%s", "-n", "1"]).ok()?;
+        if out.status.success() {
+            let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if msg.is_empty() { None } else { Some(msg) }
+        } else {
+            None
+        }
+    }
+
     pub fn abort_merge_and_clean(&self) -> Result<()> {
         // First try to abort any ongoing merge
         let _ = self.run_git_command(&["merge", "--abort"]);
@@ -1068,6 +1121,27 @@ impl GitOperations {
         Ok(conflicts)
     }
 
+    /// List local branches whose names start with a given prefix
+    ///
+    /// Used to detect stale hitch-managed branches (e.g. hitch-tmp-*, hitch-backup-*)
+    pub fn list_local_branches_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        let pattern = format!("{}*", prefix);
+        let output = self.run_git_command(&["branch", "--list", &pattern])?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let branches: Vec<String> = stdout
+            .lines()
+            .map(|line| line.trim().trim_start_matches("* ").to_string())
+            .filter(|b| !b.is_empty())
+            .collect();
+
+        Ok(branches)
+    }
+
     /// Read the conflict markers from a file
     ///
     /// This reads the file and extracts all conflict sections (between <<<<<<< and >>>>>>>)
@@ -1125,5 +1199,38 @@ impl GitOperations {
             }
             Err(_) => Ok(None),
         }
+    }
+
+    /// Return one-line commit descriptions for commits in `branch` that are
+    /// not reachable from `base` (i.e., `git log --oneline base..branch`).
+    pub fn get_commits_between(&self, base: &str, branch: &str) -> Result<Vec<String>> {
+        let range = format!("{}..{}", base, branch);
+        let output = self.run_git_command(&["log", "--oneline", &range])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git log failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let lines = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        Ok(lines)
+    }
+
+    /// Return the `--stat` summary of changes introduced by `branch` relative
+    /// to its common ancestor with `base` (`git diff --stat base...branch`).
+    pub fn get_diff_stat(&self, base: &str, branch: &str) -> Result<String> {
+        let range = format!("{}...{}", base, branch);
+        let output = self.run_git_command(&["diff", "--stat", &range])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git diff --stat failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }

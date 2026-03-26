@@ -10,6 +10,8 @@ pub mod log_macros;
 pub mod logging;
 pub mod prelude;
 pub mod progress;
+pub mod resolve_state;
+pub mod rebuild_lock;
 pub mod rollback;
 pub mod snapshot;
 pub mod validation;

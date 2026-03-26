@@ -22,12 +22,15 @@ pub enum ApprovalsSubcommand {
     Cancel(cancel::CancelArgs),
     /// Clean up old approval requests
     Cleanup(cleanup::CleanupArgs),
+    /// Re-snapshot a drifted request with current branch SHAs (clears prior approvals)
+    Refresh(refresh::RefreshArgs),
 }
 
 pub mod approve;
 pub mod cancel;
 pub mod cleanup;
 pub mod list;
+pub mod refresh;
 pub mod reject;
 pub mod status;
 
@@ -39,5 +42,6 @@ pub fn run(args: ApprovalsCommand, context: &GlobalContext) -> Result<()> {
         ApprovalsSubcommand::Reject(args) => reject::run(args, context),
         ApprovalsSubcommand::Cancel(args) => cancel::run(args, context),
         ApprovalsSubcommand::Cleanup(args) => cleanup::run(args, context),
+        ApprovalsSubcommand::Refresh(args) => refresh::run(args, context),
     }
 }

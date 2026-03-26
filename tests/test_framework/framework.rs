@@ -99,7 +99,6 @@ use crate::test_framework::mocking::MockCapabilities;
 /// - `TestSetup::HitchWithEnv`: Hitch initialized + a basic "dev" environment created
 pub struct HitchTestFramework {
     temp_dir: TempDir,
-    original_cwd: PathBuf,
     hitch_binary: PathBuf,
 }
 
@@ -108,13 +107,11 @@ impl HitchTestFramework {
     ///
     /// Sets up temporary directory, finds hitch binary, and prepares test environment
     pub fn new() -> anyhow::Result<Self> {
-        let original_cwd = env::current_dir()?;
         let temp_dir = TempDir::new()?;
         let hitch_binary = Self::find_hitch_binary()?;
 
         Ok(HitchTestFramework {
             temp_dir,
-            original_cwd,
             hitch_binary,
         })
     }
@@ -139,8 +136,12 @@ impl HitchTestFramework {
             .expect("Failed to create temp directory");
         let temp_dir_path = temp_dir.path().to_path_buf();
 
-        // Change to temporary directory
-        env::set_current_dir(&temp_dir_path).expect("Failed to change to temp directory");
+        // NOTE: We intentionally do NOT call env::set_current_dir here.
+        // All file, git, and hitch operations use explicit absolute paths via
+        // their respective helpers, so the process CWD does not matter for
+        // correctness. Changing the process CWD would be unsafe when tests
+        // run in parallel (Rust's default) because all threads share the same
+        // CWD.
 
         // Initialize git repository in temp directory
         let git = GitCommandRunner::new(&temp_dir_path)
@@ -192,24 +193,12 @@ impl HitchTestFramework {
             }
         }
 
-        // Execute test closure and catch panics to ensure directory restoration
+        // Execute test closure. The TempDir is cleaned up automatically when
+        // it goes out of scope at the end of this function, regardless of
+        // whether the closure panics.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test_fn(&test_env)));
 
-        // Restore original working directory BEFORE temp_dir goes out of scope and gets cleaned up
-        // Handle the case where the original directory may have been deleted by concurrent test cleanup
-        if let Err(_e) = env::set_current_dir(&self.original_cwd) {
-            // Try to restore to the project root using environment variable or fallback
-            if let Ok(project_root) = env::var("CARGO_MANIFEST_DIR") {
-                if env::set_current_dir(&project_root).is_ok() {
-                    // Successfully restored to project root
-                } else if let Ok(home_dir) = env::var("HOME") {
-                    let _ = env::set_current_dir(home_dir);
-                }
-            }
-            // Don't panic - the temp directory cleanup will handle the rest
-        }
-
-        // temp_dir gets cleaned up here, after we've restored the working directory
+        // temp_dir is dropped here, cleaning up the temporary directory.
 
         // Return the result or re-panic if the test panicked
         match result {

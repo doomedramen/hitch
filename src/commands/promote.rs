@@ -17,6 +17,11 @@ pub struct PromoteCommand {
     /// The environment to promote the branch to
     #[arg()]
     pub env_name: String,
+
+    /// Skip the automatic rebuild after promotion.
+    /// Use this to batch multiple promotes and then run 'hitch rebuild <env>' once.
+    #[arg(long)]
+    pub no_rebuild: bool,
 }
 
 pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
@@ -25,8 +30,8 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
         args.branch, args.env_name
     ));
 
-    // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
-    crate::utils::prelude::pre_check(context)?;
+    // Step 1: Ensure we are in a Git repository
+    crate::utils::prelude::pre_check_repo_only(context)?;
 
     // Step 2: Additional validation specific to promotion
     validate_preconditions(context, &args.branch, &args.env_name)?;
@@ -38,9 +43,11 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
         args.branch.clone(),
     );
 
-    // Step 3: Execute promotion with automatic locking and unlocking and rollback capability
-    let result = crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-        promote_branch_to_environment(context, &args.branch, &args.env_name, &mut rollback_info)
+    // Step 3: Auto-stash dirty changes, execute promotion, then pop stash
+    let result = crate::utils::prelude::with_auto_stash(context, || {
+        crate::utils::prelude::with_locked_env(context, &args.env_name, || {
+            promote_branch_to_environment(context, &args.branch, &args.env_name, &mut rollback_info, args.no_rebuild)
+        })
     });
 
     // Step 4: Handle result with automatic rollback on failure
@@ -107,6 +114,18 @@ fn validate_preconditions(
     // Check if branch exists and is valid for promotion
     validate_branch_for_promotion(context, branch)?;
 
+    // Check if the new branch conflicts with any already-promoted sibling branches
+    if !environment.branches.is_empty() {
+        context.log_verbose("Checking for conflicts with already-promoted branches...");
+        crate::utils::prelude::check_pre_promote_conflicts(
+            context,
+            branch,
+            &environment.branches,
+            &environment.base,
+            env_name,
+        )?;
+    }
+
     // Check if approval is required for this environment
     if environment.requires_approval_check() {
         context.log_info(&format!(
@@ -143,6 +162,7 @@ fn promote_branch_to_environment(
     branch: &str,
     env_name: &str,
     rollback_info: &mut RollbackInfo,
+    no_rebuild: bool,
 ) -> anyhow::Result<()> {
     context.log_verbose(&format!(
         "Adding '{}' to environment '{}'...",
@@ -174,16 +194,23 @@ fn promote_branch_to_environment(
         Ok(())
     })?;
 
-    // Trigger rebuild of the environment
-    context.log_info(&format!(
-        "Triggering rebuild for environment '{}'...",
-        env_name
-    ));
-    crate::utils::prelude::rebuild_environment(context, env_name)?;
+    if no_rebuild {
+        context.log_info(&format!(
+            "Skipping rebuild for environment '{}' (--no-rebuild flag set). Run 'hitch rebuild {}' when ready.",
+            env_name, env_name
+        ));
+    } else {
+        // Trigger rebuild of the environment
+        context.log_info(&format!(
+            "Triggering rebuild for environment '{}'...",
+            env_name
+        ));
+        crate::utils::prelude::rebuild_environment(context, env_name)?;
 
-    context.log_verbose(&format!(
-        "✓ Environment '{}' rebuilt successfully",
-        env_name
-    ));
+        context.log_verbose(&format!(
+            "✓ Environment '{}' rebuilt successfully",
+            env_name
+        ));
+    }
     Ok(())
 }
