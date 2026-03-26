@@ -1775,7 +1775,7 @@ pub struct RebuildSnapshot {
    - Git provider setup
    - Rollout strategy
 
-4. Update CLAUDE.md ✓
+4. Update documentation ✓
    - New command structure
    - Testing instructions
    - Architecture notes
