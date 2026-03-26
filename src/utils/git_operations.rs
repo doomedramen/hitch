@@ -402,10 +402,11 @@ impl GitOperations {
         let local_ref = format!("refs/heads/{}", branch);
         let output = self.run_git_command(&["rev-parse", &local_ref]);
 
-        if output.is_ok() && output.as_ref().unwrap().status.success() {
-            let sha =
-                String::from_utf8(output.unwrap().stdout).context("Failed to parse commit SHA")?;
-            return Ok(sha.trim().to_string());
+        if let Ok(output) = output {
+            if output.status.success() {
+                let sha = String::from_utf8(output.stdout).context("Failed to parse commit SHA")?;
+                return Ok(sha.trim().to_string());
+            }
         }
 
         // If local doesn't exist, try remote branch

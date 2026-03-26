@@ -243,13 +243,13 @@ fn display_environment_status(
 
             // Check if branch has new commits since the last rebuild (staleness)
             let is_stale = branch_exists
-                && env.rebuilt_at.map_or(false, |rebuilt_at| {
+                && env.rebuilt_at.is_some_and(|rebuilt_at| {
                     context
                         .git()
                         .get_branch_commit_sha(branch)
                         .ok()
                         .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
-                        .map_or(false, |ts| ts > rebuilt_at)
+                        .is_some_and(|ts| ts > rebuilt_at)
                 });
 
             let branch_status = if !branch_exists {
@@ -287,7 +287,7 @@ fn display_environment_status(
     }
 
     // Check if base branch itself has new commits since last rebuild
-    let base_is_stale = env.rebuilt_at.map_or(false, |rebuilt_at| {
+    let base_is_stale = env.rebuilt_at.is_some_and(|rebuilt_at| {
         context
             .git()
             .branch_exists_anywhere(&env.base)
@@ -297,7 +297,7 @@ fn display_environment_status(
                 .get_branch_commit_sha(&env.base)
                 .ok()
                 .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
-                .map_or(false, |ts| ts > rebuilt_at)
+                .is_some_and(|ts| ts > rebuilt_at)
     });
 
     // Rebuilt information with relative time
