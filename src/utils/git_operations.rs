@@ -72,11 +72,6 @@ impl GitOperations {
         self.repo.path().to_string_lossy().to_string()
     }
 
-    /// Return the working directory (repo root) for this repository
-    pub fn get_repo_path(&self) -> &str {
-        &self.repo_path
-    }
-
     #[allow(dead_code)]
     pub fn new_at_path(path: &str) -> Result<Self> {
         // Open the repository at the exact path to avoid discovering parent repositories
