@@ -259,7 +259,7 @@ pub fn get_approval_requests<'a>(
         .collect();
 
     // Sort by requested_at (newest first)
-    result.sort_by(|a, b| b.requested_at.cmp(&a.requested_at));
+    result.sort_by_key(|a| std::cmp::Reverse(a.requested_at));
 
     result
 }
