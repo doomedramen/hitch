@@ -335,6 +335,8 @@ setup:
     @command -v cargo-tarpaulin >/dev/null 2>&1 || echo "💡 Install cargo-tarpaulin for test coverage: cargo install cargo-tarpaulin"
     @command -v cargo-outdated >/dev/null 2>&1 || echo "💡 Install cargo-outdated for dependency checking: cargo install cargo-outdated"
     @echo "✅ Development environment ready"
+    @echo ""
+    @echo "💡 Now install git hooks: lefthook install"
 
 # Watch for changes and rebuild (requires cargo-watch)
 watch:

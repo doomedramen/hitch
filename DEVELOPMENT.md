@@ -8,9 +8,10 @@ This document covers the development workflow and release process for the Hitch 
 
 ### Prerequisites
 
-- Rust 1.83.0 or later
+- Rust 1.85.0 or later (edition 2024 support required)
 - Git
 - Just command runner
+- Lefthook (for pre-commit hooks)
 
 ### Quick Setup
 
@@ -25,6 +26,8 @@ just setup
 # Install pre-commit hooks
 lefthook install
 ```
+
+**Why install hooks?** Pre-commit hooks run format checks, clippy, and security audits before every commit. CI runs the same checks, so commits that bypass hooks will still be caught, but you'll fail faster locally.
 
 ### Manual Setup
 
@@ -151,12 +154,14 @@ The Hitch project uses a streamlined CI/CD pipeline with two main workflows:
 
 Every push and pull request triggers:
 
-- **Multi-version Rust testing** (stable, beta, 1.83.0)
+- **Multi-version Rust testing** (stable, beta, 1.85.0)
 - **Code formatting** checks with `rustfmt`
 - **Clippy linting** with strict warnings
 - **Test suite** execution
 - **Cross-platform build** verification on Linux and macOS
 - **Documentation** generation and deployment
+
+CI runs the same checks as pre-commit hooks, ensuring code quality even if hooks are bypassed locally.
 
 ### Continuous Deployment (CD)
 
