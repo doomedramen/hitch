@@ -1029,12 +1029,7 @@ mod tests {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            create_approval_environment(
-                env,
-                "production",
-                &["approver@example.com"],
-                1,
-            )?;
+            create_approval_environment(env, "production", &["approver@example.com"], 1)?;
 
             // Create a branch and request approval
             env.git.run(&["checkout", "-b", "feat-drift"])?;
@@ -1092,12 +1087,7 @@ mod tests {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            create_approval_environment(
-                env,
-                "production",
-                &["approver@example.com"],
-                1,
-            )?;
+            create_approval_environment(env, "production", &["approver@example.com"], 1)?;
 
             // Create a branch and request approval
             env.git.run(&["checkout", "-b", "feat-refresh"])?;
@@ -1127,7 +1117,10 @@ mod tests {
                 .unwrap_or_default()
                 .to_string();
 
-            assert!(!request_id.is_empty(), "Could not find request ID in list output");
+            assert!(
+                !request_id.is_empty(),
+                "Could not find request ID in list output"
+            );
 
             // Simulate drift
             env.git.run(&["checkout", "feat-refresh"])?;

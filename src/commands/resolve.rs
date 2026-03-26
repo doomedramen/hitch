@@ -44,10 +44,7 @@ fn run_status(
     println!("  Base branch   : {}", state.base_branch);
 
     if !state.merged_so_far.is_empty() {
-        println!(
-            "  Already merged: {}",
-            state.merged_so_far.join(", ")
-        );
+        println!("  Already merged: {}", state.merged_so_far.join(", "));
     }
 
     let still_pending: Vec<&String> = state
@@ -119,10 +116,7 @@ fn run_abort(
     context: &GlobalContext,
     state: &crate::utils::resolve_state::ResolveState,
 ) -> Result<()> {
-    context.log_info(&format!(
-        "Aborting rebuild of '{}'...",
-        state.env_name
-    ));
+    context.log_info(&format!("Aborting rebuild of '{}'...", state.env_name));
 
     crate::utils::prelude::abort_rebuild_resolve(context, state)?;
 

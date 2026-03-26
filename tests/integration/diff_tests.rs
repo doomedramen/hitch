@@ -21,8 +21,7 @@ mod tests {
             env.git.run(&["checkout", "-b", "feat-diff-test"])?;
             env.fs.write_file("diff_test.txt", "hello")?;
             env.git.run(&["add", "-f", "diff_test.txt"])?;
-            env.git
-                .run(&["commit", "-m", "feat: add diff_test.txt"])?;
+            env.git.run(&["commit", "-m", "feat: add diff_test.txt"])?;
             env.git.run(&["checkout", "main"])?;
 
             env.hitch
@@ -60,8 +59,7 @@ mod tests {
                 let filename = format!("{}.txt", branch);
                 env.fs.write_file(&filename, "x")?;
                 env.git.run(&["add", "-f", &filename])?;
-                env.git
-                    .run(&["commit", "-m", &format!("add {}", branch)])?;
+                env.git.run(&["commit", "-m", &format!("add {}", branch)])?;
                 env.git.run(&["checkout", "main"])?;
 
                 env.hitch
@@ -79,9 +77,7 @@ mod tests {
 
             // feat-beta must NOT appear in the filtered output
             let stdout = result.stdout();
-            result
-                .assert_success()
-                .assert_stdout_contains("feat-alpha");
+            result.assert_success().assert_stdout_contains("feat-alpha");
 
             assert!(
                 !stdout.contains("feat-beta"),
@@ -118,11 +114,7 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            let result = env
-                .hitch
-                .run()
-                .args(&["diff", "dev", "--stat"])
-                .execute()?;
+            let result = env.hitch.run().args(&["diff", "dev", "--stat"]).execute()?;
 
             result
                 .assert_success()

@@ -19,8 +19,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
     crate::utils::prelude::pre_check_repo_only(context)?;
 
     // Read current hitch configuration
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
 
     // Collect all branch names that are currently promoted (in any / the target env)
     let mut promoted: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -29,11 +28,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
 
     for (env_name, environment) in &config.environments {
         reserved.insert(environment.base.clone());
-        let in_scope = args
-            .env
-            .as_deref()
-            .map(|e| e == env_name)
-            .unwrap_or(true);
+        let in_scope = args.env.as_deref().map(|e| e == env_name).unwrap_or(true);
         if in_scope {
             for b in &environment.branches {
                 promoted.insert(b.clone());
@@ -67,10 +62,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
     }
 
     if args.force {
-        context.log_info(&format!(
-            "Deleting {} branch(es)...",
-            candidates.len()
-        ));
+        context.log_info(&format!("Deleting {} branch(es)...", candidates.len()));
         let mut deleted = 0;
         let mut skipped = 0;
         for branch in &candidates {

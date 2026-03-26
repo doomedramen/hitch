@@ -67,7 +67,9 @@ where
 
     let stashed = if !is_clean {
         context.log_info("Auto-stashing local changes before operation...");
-        let created = context.git().stash_push("hitch: auto-stash before rebuild")?;
+        let created = context
+            .git()
+            .stash_push("hitch: auto-stash before rebuild")?;
         if created {
             context.log_verbose("✓ Changes stashed");
         }
@@ -494,8 +496,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     // Acquire per-environment rebuild lock to prevent concurrent rebuilds.
     // The lock is released automatically when `_rebuild_lock` goes out of scope.
     let git_dir = std::path::PathBuf::from(context.git().get_git_dir());
-    let _rebuild_lock =
-        crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
+    let _rebuild_lock = crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
 
     // Record original branch for cleanup - this is the branch the user was on when we started
     // We always return users to their original branch, even if the rebuild fails
@@ -910,9 +911,8 @@ fn perform_squash_merges_for_rebuild(
 
     // Always return to original branch (but DON'T abort the merge if we saved
     // resolve state — the caller checks for the state file).
-    let resolve_state_present = crate::utils::resolve_state::resolve_state_exists(
-        &context.git().get_git_dir(),
-    );
+    let resolve_state_present =
+        crate::utils::resolve_state::resolve_state_exists(&context.git().get_git_dir());
     if !resolve_state_present {
         // No pending resolve: safe to clean up any dangling merge state
         let _ = context.git().abort_merge_and_clean();
@@ -1187,8 +1187,9 @@ pub fn check_pre_promote_conflicts(
                 context.git().squash_merge(existing, &merge_msg)?;
 
                 // Now dry-run merge new_branch to see if it conflicts
-                let result =
-                    context.git().check_merge_conflicts_comprehensive(new_branch)?;
+                let result = context
+                    .git()
+                    .check_merge_conflicts_comprehensive(new_branch)?;
                 if result.has_conflicts {
                     Ok(Some(result.conflicted_files))
                 } else {
@@ -1204,7 +1205,11 @@ pub fn check_pre_promote_conflicts(
                 original_branch, e
             ));
         }
-        if context.git().branch_exists(&preflight_branch).unwrap_or(false) {
+        if context
+            .git()
+            .branch_exists(&preflight_branch)
+            .unwrap_or(false)
+        {
             if let Err(e) = context.git().delete_branch(&preflight_branch, true) {
                 context.log_warning(&format!(
                     "Failed to clean up preflight branch '{}': {}",
@@ -1247,7 +1252,9 @@ pub fn check_pre_promote_conflicts(
         msg.push('\n');
     }
     msg.push_str("Resolve by rebasing or merging the conflicting branches before promoting.\n");
-    msg.push_str("You can also use 'hitch resolve' after a failed rebuild to fix conflicts interactively.");
+    msg.push_str(
+        "You can also use 'hitch resolve' after a failed rebuild to fix conflicts interactively.",
+    );
 
     Err(anyhow::anyhow!("{}", msg))
 }
@@ -1279,14 +1286,14 @@ pub fn continue_rebuild_after_resolve(
         return Err(anyhow::anyhow!(
             "Expected to be on branch '{}' but currently on '{}'. \
              Please switch to '{}' before running 'hitch resolve --continue'.",
-            temp_branch, current, temp_branch
+            temp_branch,
+            current,
+            temp_branch
         ));
     }
 
     // Check for conflict markers in the working tree (unstaged)
-    let wt_grep = context
-        .git()
-        .run_git_command(&["grep", "-l", "^<<<<<<<"])?;
+    let wt_grep = context.git().run_git_command(&["grep", "-l", "^<<<<<<<"])?;
     if wt_grep.status.success() {
         let files = String::from_utf8_lossy(&wt_grep.stdout).trim().to_string();
         if !files.is_empty() {
@@ -1321,7 +1328,10 @@ pub fn continue_rebuild_after_resolve(
     let add_output = context.git().run_git_command(&["add", "-A"])?;
     if !add_output.status.success() {
         let stderr = String::from_utf8_lossy(&add_output.stderr);
-        return Err(anyhow::anyhow!("Failed to stage resolved files: {}", stderr));
+        return Err(anyhow::anyhow!(
+            "Failed to stage resolved files: {}",
+            stderr
+        ));
     }
 
     // Commit the resolution
@@ -1337,7 +1347,8 @@ pub fn continue_rebuild_after_resolve(
         let stdout = String::from_utf8_lossy(&commit_output.stdout);
         let combined = format!("{}{}", stdout, stderr);
         // "nothing to commit" is acceptable — the resolution may have been staged already
-        if !combined.contains("nothing to commit") && !combined.contains("nothing added to commit") {
+        if !combined.contains("nothing to commit") && !combined.contains("nothing added to commit")
+        {
             return Err(anyhow::anyhow!(
                 "Failed to commit resolved conflicts: {}",
                 combined
@@ -1397,8 +1408,12 @@ pub fn continue_rebuild_after_resolve(
                     conflict_branch: branch.clone(),
                 };
                 // Do the actual squash merge (leaving markers) then save state
-                let _ = context.git().run_git_command(&["merge", "--squash", branch]);
-                if let Err(e) = crate::utils::resolve_state::write_resolve_state(&git_dir, &new_state) {
+                let _ = context
+                    .git()
+                    .run_git_command(&["merge", "--squash", branch]);
+                if let Err(e) =
+                    crate::utils::resolve_state::write_resolve_state(&git_dir, &new_state)
+                {
                     context.log_warning(&format!("Failed to save resolve state: {}", e));
                 }
                 let conflict_report = format_conflict_report(
@@ -1428,22 +1443,27 @@ pub fn continue_rebuild_after_resolve(
 
     // All branches merged — replace the real environment branch
     context.log_info(&format!("Finalising rebuild of '{}'...", env_name));
-    let backup_branch = safe_replace_environment_branch_for_rebuild(context, env_name, temp_branch)?;
+    let backup_branch =
+        safe_replace_environment_branch_for_rebuild(context, env_name, temp_branch)?;
 
     update_rebuilt_timestamp_for_rebuild(context, env_name)?;
 
     // Cleanup: backup branch
     if context.git().branch_exists(&backup_branch)? {
         if let Err(e) = context.git().delete_branch(&backup_branch, true) {
-            context.log_warning(&format!("Failed to delete backup branch '{}': {}", backup_branch, e));
+            context.log_warning(&format!(
+                "Failed to delete backup branch '{}': {}",
+                backup_branch, e
+            ));
         }
     }
 
     // Cleanup: temp branch
     if context.git().branch_exists(temp_branch)? {
-        let _ = context.git().delete_branch(temp_branch, false).or_else(|_| {
-            context.git().delete_branch(temp_branch, true)
-        });
+        let _ = context
+            .git()
+            .delete_branch(temp_branch, false)
+            .or_else(|_| context.git().delete_branch(temp_branch, true));
     }
 
     // Remove resolve state file
@@ -1497,10 +1517,7 @@ pub fn abort_rebuild_resolve(
     let current = context.git().get_current_branch().unwrap_or_default();
     if current != *original_branch {
         if let Err(e) = context.git().checkout_branch(original_branch) {
-            context.log_warning(&format!(
-                "Failed to return to '{}': {}",
-                original_branch, e
-            ));
+            context.log_warning(&format!("Failed to return to '{}': {}", original_branch, e));
         }
     }
 
@@ -1547,7 +1564,8 @@ fn pop_auto_stash_if_present(context: &GlobalContext) {
     const AUTO_STASH_MSG: &str = "hitch: auto-stash before rebuild";
     if let Some(msg) = context.git().stash_top_message() {
         // git stash list --format=%s produces "On <branch>: <message>"
-        if msg.contains(AUTO_STASH_MSG) || msg == AUTO_STASH_MSG
+        if msg.contains(AUTO_STASH_MSG)
+            || msg == AUTO_STASH_MSG
             || msg.starts_with(AUTO_STASH_PREFIX) && msg.contains(AUTO_STASH_MSG)
         {
             context.log_info("Restoring stashed changes from before the rebuild...");

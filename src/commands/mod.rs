@@ -1,11 +1,11 @@
 pub mod global_context;
 
 pub mod add;
-pub mod cleanup;
-pub mod diff;
 pub mod approvals;
+pub mod cleanup;
 pub mod completion;
 pub mod demote;
+pub mod diff;
 pub mod guard;
 pub mod init;
 pub mod lock;

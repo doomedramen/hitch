@@ -46,7 +46,13 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 3: Auto-stash dirty changes, execute promotion, then pop stash
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            promote_branch_to_environment(context, &args.branch, &args.env_name, &mut rollback_info, args.no_rebuild)
+            promote_branch_to_environment(
+                context,
+                &args.branch,
+                &args.env_name,
+                &mut rollback_info,
+                args.no_rebuild,
+            )
         })
     });
 

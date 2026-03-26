@@ -110,11 +110,7 @@ mod tests {
             );
 
             // `hitch resolve` (no flags) should succeed and show useful info
-            let status_result = env
-                .hitch
-                .run()
-                .args(&["--no-push", "resolve"])
-                .execute()?;
+            let status_result = env.hitch.run().args(&["--no-push", "resolve"]).execute()?;
             status_result
                 .assert_success()
                 .assert_stdout_contains("paused due to a merge conflict");
@@ -276,11 +272,7 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             // No rebuild in progress — resolve should report no conflict
-            let result = env
-                .hitch
-                .run()
-                .args(&["--no-push", "resolve"])
-                .execute()?;
+            let result = env.hitch.run().args(&["--no-push", "resolve"]).execute()?;
             result
                 .assert_failure()
                 .assert_stderr_contains("No conflict in progress");

@@ -75,14 +75,11 @@ mod tests {
             env.git.run(&["commit", "-m", "Add feat-merged"])?;
             env.git.run(&["checkout", "main"])?;
             // Merge it so `git branch -d` will succeed
-            env.git.run(&["merge", "--no-ff", "feat-merged", "-m", "Merge feat-merged"])?;
+            env.git
+                .run(&["merge", "--no-ff", "feat-merged", "-m", "Merge feat-merged"])?;
 
             // It was never promoted, so cleanup should offer it
-            let result = env
-                .hitch
-                .run()
-                .args(&["cleanup", "--force"])
-                .execute()?;
+            let result = env.hitch.run().args(&["cleanup", "--force"]).execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("Deleted 'feat-merged'");

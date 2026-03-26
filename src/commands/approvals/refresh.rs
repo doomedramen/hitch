@@ -25,8 +25,7 @@ pub fn run(args: RefreshArgs, context: &GlobalContext) -> Result<()> {
     crate::utils::prelude::pre_check_repo_only(context)?;
 
     // Read the request
-    let request =
-        crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
+    let request = crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
 
     if request.status != ApprovalStatus::Pending {
         return Err(anyhow::anyhow!(
@@ -39,8 +38,7 @@ pub fn run(args: RefreshArgs, context: &GlobalContext) -> Result<()> {
     let branch_name = request.branch.clone();
 
     // Show what drifted
-    let drifted =
-        crate::utils::snapshot::drifted_branches(context, &request.rebuild_snapshot);
+    let drifted = crate::utils::snapshot::drifted_branches(context, &request.rebuild_snapshot);
     if drifted.is_empty() {
         context.log_info("No SHA drift detected — snapshot is already current.");
         return Ok(());

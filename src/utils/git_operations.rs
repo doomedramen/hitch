@@ -874,10 +874,16 @@ impl GitOperations {
     /// Return the message of the most recent stash entry, or `None` if there
     /// is no stash.
     pub fn stash_top_message(&self) -> Option<String> {
-        let out = self.run_git_command(&["stash", "list", "--format=%s", "-n", "1"]).ok()?;
+        let out = self
+            .run_git_command(&["stash", "list", "--format=%s", "-n", "1"])
+            .ok()?;
         if out.status.success() {
             let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if msg.is_empty() { None } else { Some(msg) }
+            if msg.is_empty() {
+                None
+            } else {
+                Some(msg)
+            }
         } else {
             None
         }

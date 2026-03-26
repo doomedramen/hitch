@@ -487,7 +487,10 @@ mod tests {
                 .assert_stdout_contains("rebuilt successfully");
 
             // Lock file must be gone (released on drop)
-            assert!(!lock_path.exists(), "Lock file should be removed after rebuild");
+            assert!(
+                !lock_path.exists(),
+                "Lock file should be removed after rebuild"
+            );
 
             Ok::<(), anyhow::Error>(())
         });

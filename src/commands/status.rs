@@ -269,7 +269,9 @@ fn display_environment_status(
             };
 
             let stale_warning = if is_stale && !is_in_source {
-                " (new commits since last rebuild)".bright_yellow().to_string()
+                " (new commits since last rebuild)"
+                    .bright_yellow()
+                    .to_string()
             } else {
                 "".to_string()
             };

@@ -21,12 +21,12 @@ pub struct DiffCommand {
 pub fn run(args: DiffCommand, context: &GlobalContext) -> Result<()> {
     crate::utils::prelude::pre_check_repo_only(context)?;
 
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
 
-    let environment = config.environments.get(&args.env_name).ok_or_else(|| {
-        anyhow::anyhow!("Environment '{}' does not exist", args.env_name)
-    })?;
+    let environment = config
+        .environments
+        .get(&args.env_name)
+        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))?;
 
     // Validate --branch argument before the empty-env check so we can give
     // a specific error even when no branches are promoted.

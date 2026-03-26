@@ -20,10 +20,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     // Step 1: Precondition checks (allow dirty tree — we'll stash it)
     // Only check git repo, not working tree cleanliness
     if let Err(e) = context.git().get_current_branch() {
-        return Err(anyhow::anyhow!(
-            "Not in a Git repository: {}",
-            e
-        ));
+        return Err(anyhow::anyhow!("Not in a Git repository: {}", e));
     }
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
 

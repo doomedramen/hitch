@@ -43,7 +43,13 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 3: Auto-stash dirty changes, execute demotion, then pop stash
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            demote_branch_from_environment(context, &args.branch, &args.env_name, &mut rollback_info, args.no_rebuild)
+            demote_branch_from_environment(
+                context,
+                &args.branch,
+                &args.env_name,
+                &mut rollback_info,
+                args.no_rebuild,
+            )
         })
     });
 

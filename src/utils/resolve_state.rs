@@ -59,8 +59,7 @@ pub fn read_resolve_state(git_dir: &str) -> Result<ResolveState> {
             path
         )
     })?;
-    serde_json::from_str(&json)
-        .context("Failed to parse resolve state — the file may be corrupted")
+    serde_json::from_str(&json).context("Failed to parse resolve state — the file may be corrupted")
 }
 
 /// Remove resolve state file (called after --continue success or --abort)

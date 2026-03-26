@@ -501,14 +501,16 @@ mod tests {
             env.git.run(&["checkout", "-b", "branch-a"])?;
             env.fs.write_file("shared.txt", "from branch-a\n")?;
             env.git.run(&["add", "-f", "shared.txt"])?;
-            env.git.run(&["commit", "-m", "branch-a changes shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-a changes shared.txt"])?;
             env.git.run(&["checkout", "main"])?;
 
             // Branch B: replaces line one with "from branch-b" (incompatible)
             env.git.run(&["checkout", "-b", "branch-b"])?;
             env.fs.write_file("shared.txt", "from branch-b\n")?;
             env.git.run(&["add", "-f", "shared.txt"])?;
-            env.git.run(&["commit", "-m", "branch-b changes shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-b changes shared.txt"])?;
             env.git.run(&["checkout", "main"])?;
 
             // Promote branch-a first – should succeed
@@ -750,7 +752,9 @@ mod tests {
 
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully promoted 'feat-no-rebuild' to environment 'dev'")
+                .assert_stdout_contains(
+                    "Successfully promoted 'feat-no-rebuild' to environment 'dev'",
+                )
                 .assert_stdout_contains("Skipping rebuild");
 
             // Branch must appear in metadata
@@ -810,10 +814,20 @@ mod tests {
                 .assert_success();
 
             // The dev branch should now include commits from both features
-            let feat1_exists = env.git.run(&["log", "dev", "--oneline", "--grep=batch-feat-1"]);
-            let feat2_exists = env.git.run(&["log", "dev", "--oneline", "--grep=batch-feat-2"]);
-            assert!(feat1_exists.is_ok(), "batch-feat-1 commits should be in dev after rebuild");
-            assert!(feat2_exists.is_ok(), "batch-feat-2 commits should be in dev after rebuild");
+            let feat1_exists = env
+                .git
+                .run(&["log", "dev", "--oneline", "--grep=batch-feat-1"]);
+            let feat2_exists = env
+                .git
+                .run(&["log", "dev", "--oneline", "--grep=batch-feat-2"]);
+            assert!(
+                feat1_exists.is_ok(),
+                "batch-feat-1 commits should be in dev after rebuild"
+            );
+            assert!(
+                feat2_exists.is_ok(),
+                "batch-feat-2 commits should be in dev after rebuild"
+            );
 
             Ok::<(), anyhow::Error>(())
         });
@@ -856,13 +870,17 @@ mod tests {
 
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully demoted 'feat-demote-no-rebuild' from environment 'dev'")
+                .assert_stdout_contains(
+                    "Successfully demoted 'feat-demote-no-rebuild' from environment 'dev'",
+                )
                 .assert_stdout_contains("Skipping rebuild");
 
             // Branch must be removed from metadata
             let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
-            assert!(!dev_env.branches.contains(&"feat-demote-no-rebuild".to_string()));
+            assert!(!dev_env
+                .branches
+                .contains(&"feat-demote-no-rebuild".to_string()));
 
             Ok::<(), anyhow::Error>(())
         });
