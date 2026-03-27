@@ -66,6 +66,9 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
             Ok(())
         }
         Err(e) => {
+            // Show the actual error FIRST so user knows why it failed
+            context.log_error(&format!("Error: {}", e));
+
             // Attempt automatic rollback
             if let Err(rollback_err) =
                 crate::utils::rollback::rollback_metadata_changes(context, &rollback_info)
