@@ -62,6 +62,8 @@ enum Commands {
     Cleanup(commands::cleanup::CleanupCommand),
     /// Preview the commits each promoted branch would add on rebuild
     Diff(commands::diff::DiffCommand),
+    /// Update environment configuration (e.g., change base branch)
+    Set(commands::set::SetCommand),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,6 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Resolve(_) => "resolve",
         Commands::Cleanup(_) => "cleanup",
         Commands::Diff(_) => "diff",
+        Commands::Set(_) => "set",
     };
 
     // Create a new logger configured for this command
@@ -117,5 +120,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Resolve(args) => commands::resolve::run(args, &context).map_err(|e| e.into()),
         Commands::Cleanup(args) => commands::cleanup::run(args, &context).map_err(|e| e.into()),
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
+        Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),
     }
 }

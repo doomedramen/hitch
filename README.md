@@ -71,6 +71,12 @@ hitch release production main
 
 # Guard environment branches from direct commits
 hitch guard
+
+# Update environment configuration
+hitch set dev --base main           # Change base branch
+hitch set production --requires-approval true
+hitch set production --min-approvals 2
+hitch set production --add-approver alice@example.com
 ```
 
 ## 🛡️ Approval Workflow
