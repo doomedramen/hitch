@@ -5,6 +5,128 @@ use crate::utils::progress::StepLogger;
 use crate::utils::resolve_state::{write_resolve_state, ResolveState};
 use anyhow::{Context, Result};
 
+/// Check that the hitch-metadata branch is in a healthy state
+///
+/// This function verifies that the hitch-metadata branch:
+/// 1. Exists locally
+/// 2. Is not behind the remote (i.e., has all remote changes pulled)
+/// 3. Is not in a merge conflict state
+/// 4. Has a clean working tree (if currently on hitch-metadata)
+///
+/// This prevents issues where someone has edited hitch.json on the remote
+/// and the local copy is out of sync, which could cause conflicts or data loss.
+///
+/// # Returns
+/// - `Ok(())`: hitch-metadata is healthy
+/// - `Err`: hitch-metadata is unhealthy with details about the problem
+pub fn check_metadata_health(context: &GlobalContext) -> Result<()> {
+    context.log_verbose("Checking hitch-metadata branch health...");
+
+    // 1. Check that hitch-metadata branch exists locally
+    if !context.git().branch_exists("hitch-metadata")? {
+        return Err(anyhow::anyhow!(
+            "hitch-metadata branch does not exist locally. Run 'hitch init' to initialize Hitch."
+        ));
+    }
+    context.log_verbose("✓ hitch-metadata branch exists locally");
+
+    // 2. Check that local is not behind remote (has un-pulled changes)
+    // We fetch first to ensure we have the latest remote state
+    let _ = context.git().fetch_branch("hitch-metadata");
+    if context.git().is_branch_behind_remote("hitch-metadata")? {
+        return Err(anyhow::anyhow!(
+            "hitch-metadata branch is behind remote. There are changes on origin/hitch-metadata \
+             that have not been pulled.\n\
+             \n\
+             This usually means someone else has modified the Hitch configuration. \
+             Please pull the latest changes before continuing:\n\
+             \n\
+               git checkout hitch-metadata\n\
+               git pull origin hitch-metadata\n\
+               git checkout -\n\
+             \n\
+             Then retry your command."
+        ));
+    }
+    context.log_verbose("✓ hitch-metadata is up to date with remote");
+
+    // 3. Check for merge conflicts
+    // Switch to hitch-metadata temporarily to check its state
+    let current_branch = context.git().get_current_branch()?;
+    let on_metadata_branch = current_branch == "hitch-metadata";
+
+    if !on_metadata_branch {
+        // We need to check hitch-metadata's state, but we can do this without
+        // actually switching by checking if there are any ongoing operations
+        // and by checking the branch's state via git commands
+
+        // Check for merge state files that might indicate a failed operation on hitch-metadata
+        let git_dir = context.git().get_git_dir();
+        let git_path = std::path::Path::new(&git_dir);
+
+        // Check for various merge/rebase state indicators
+        let merge_head = git_path.join("MERGE_HEAD");
+        let rebase_apply = git_path.join("rebase-apply");
+        let rebase_merge = git_path.join("rebase-merge");
+        let cherry_pick = git_path.join("CHERRY_PICK_HEAD");
+        let revert = git_path.join("REVERT_HEAD");
+
+        if merge_head.exists()
+            || rebase_apply.exists()
+            || rebase_merge.exists()
+            || cherry_pick.exists()
+            || revert.exists()
+        {
+            return Err(anyhow::anyhow!(
+                "Git repository is in an unresolved merge/rebase/cherry-pick/revert state.\n\
+                 \n\
+                 Please resolve the current Git operation before using Hitch commands.\n\
+                 \n\
+                 If you want to abort the current operation:\n\
+                   - Merge: git merge --abort\n\
+                   - Rebase: git rebase --abort\n\
+                   - Cherry-pick: git cherry-pick --abort\n\
+                   - Revert: git revert --abort"
+            ));
+        }
+    } else {
+        // We're on hitch-metadata, check for conflicts directly
+        if context.git().has_merge_conflicts()? {
+            return Err(anyhow::anyhow!(
+                "hitch-metadata branch has unresolved merge conflicts.\n\
+                 \n\
+                 Please resolve the conflicts before using Hitch commands.\n\
+                 \n\
+                 After resolving conflicts:\n\
+                   git add .\n\
+                   git commit\n\
+                 \n\
+                 Or to abort the merge:\n\
+                   git merge --abort"
+            ));
+        }
+    }
+    context.log_verbose("✓ No merge conflicts detected");
+
+    // 4. If on hitch-metadata, check working tree is clean
+    if on_metadata_branch && !context.git().is_working_directory_clean()? {
+        return Err(anyhow::anyhow!(
+            "hitch-metadata branch has uncommitted changes.\n\
+             \n\
+             Please commit or stash your changes before using Hitch commands:\n\
+               git status\n\
+               git add .\n\
+               git commit -m \"Your message\"\n\
+             \n\
+             Or stash:\n\
+               git stash"
+        ));
+    }
+
+    context.log_verbose("✓ hitch-metadata health check passed");
+    Ok(())
+}
+
 /// Reusable pre-check function for all commands
 ///
 /// Verifies the current directory is a Git repository and the working tree is
@@ -189,6 +311,9 @@ where
 {
     context.log_verbose("Reading hitch metadata (read-only)...");
 
+    // Check hitch-metadata health before accessing
+    check_metadata_health(context)?;
+
     // Make sure hitch-metadata is up to date
     context.log_verbose("Ensuring hitch-metadata is up to date...");
     if let Err(e) = context.git().fetch_branch("hitch-metadata") {
@@ -260,6 +385,10 @@ where
         .unwrap_or(false);
 
     if !already_on_metadata_branch {
+        // Check hitch-metadata health before modifying
+        // Skip this check during init (when already_on_metadata_branch is true)
+        check_metadata_health(context)?;
+
         // Fetch latest hitch-metadata from remote
         context.log_verbose("Fetching latest hitch-metadata from remote...");
         if let Err(e) = context.git().fetch_branch("hitch-metadata") {

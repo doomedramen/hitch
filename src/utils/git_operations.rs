@@ -1222,6 +1222,82 @@ impl GitOperations {
         Ok(lines)
     }
 
+    /// Check if a local branch is behind its remote counterpart
+    ///
+    /// This compares the local branch to origin/<branch> to determine if
+    /// there are commits on the remote that haven't been pulled locally.
+    ///
+    /// # Arguments
+    /// - `branch`: Branch name to check
+    ///
+    /// # Returns
+    /// - `Ok(true)`: Local branch is behind remote (needs pull)
+    /// - `Ok(false)`: Local branch is up to date or ahead of remote
+    /// - `Err`: If unable to determine (e.g., no remote branch exists)
+    pub fn is_branch_behind_remote(&self, branch: &str) -> Result<bool> {
+        let local_ref = format!("refs/heads/{}", branch);
+        let remote_ref = format!("refs/remotes/origin/{}", branch);
+
+        // Check if remote branch exists
+        let remote_output = self.run_git_command(&["rev-parse", &remote_ref])?;
+        if !remote_output.status.success() {
+            // No remote branch, so can't be behind
+            return Ok(false);
+        }
+
+        // Check if local branch exists
+        let local_output = self.run_git_command(&["rev-parse", &local_ref])?;
+        if !local_output.status.success() {
+            // No local branch
+            return Err(anyhow::anyhow!("Local branch '{}' does not exist", branch));
+        }
+
+        // Check if local is behind remote using rev-list --count
+        // This counts commits in remote that are not in local
+        let output = self.run_git_command(&[
+            "rev-list",
+            "--count",
+            &format!("{}..{}", local_ref, remote_ref),
+        ])?;
+
+        if output.status.success() {
+            let count_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let count: i32 = count_str.parse().unwrap_or(0);
+            return Ok(count > 0);
+        }
+
+        Ok(false)
+    }
+
+    /// Check if there are any merge conflicts in the current working tree
+    ///
+    /// # Returns
+    /// - `Ok(true)`: There are merge conflicts
+    /// - `Ok(false)`: No merge conflicts
+    /// - `Err`: If unable to check
+    pub fn has_merge_conflicts(&self) -> Result<bool> {
+        // Check for merge state
+        let merge_head = self.run_git_command(&["rev-parse", "--verify", "MERGE_HEAD"]);
+
+        // If MERGE_HEAD exists, we're in a merge state
+        if merge_head.is_ok() && merge_head.unwrap().status.success() {
+            // Check if there are actual conflict files
+            let conflicted = self.get_conflicted_files()?;
+            return Ok(!conflicted.is_empty());
+        }
+
+        // Also check for rebase/apply states
+        let git_dir = self.repo.path();
+        let rebase_apply = git_dir.join("rebase-apply");
+        let rebase_merge = git_dir.join("rebase-merge");
+
+        if rebase_apply.exists() || rebase_merge.exists() {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     /// Return the `--stat` summary of changes introduced by `branch` relative
     /// to its common ancestor with `base` (`git diff --stat base...branch`).
     pub fn get_diff_stat(&self, base: &str, branch: &str) -> Result<String> {

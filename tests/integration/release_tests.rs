@@ -66,7 +66,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Failed to read hitch.json");
+                .assert_stderr_contains("hitch-metadata branch does not exist locally");
 
             Ok::<(), anyhow::Error>(())
         });

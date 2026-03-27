@@ -120,7 +120,9 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to add environment without initializing hitch
             let result = env.hitch.run().args(&["add", "dev"]).execute()?;
-            result.assert_failure().assert_stderr_contains("hitch.json");
+            result
+                .assert_failure()
+                .assert_stderr_contains("hitch-metadata branch does not exist locally");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -307,7 +309,9 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::None, |env| {
             // Try to remove environment without initializing hitch
             let result = env.hitch.run().args(&["remove", "dev"]).execute()?;
-            result.assert_failure().assert_stderr_contains("hitch.json");
+            result
+                .assert_failure()
+                .assert_stderr_contains("hitch-metadata branch does not exist locally");
 
             Ok::<(), anyhow::Error>(())
         });
