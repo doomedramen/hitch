@@ -236,6 +236,14 @@ fn apply_changes(context: &GlobalContext, args: &SetCommand) -> Result<()> {
 
         // Update base branch
         if let Some(ref base) = args.base {
+            // If the new base branch is in the promoted branches list, remove it
+            if environment.branches.contains(base) {
+                environment.branches.retain(|b| b != base);
+                context.log_verbose(&format!(
+                    "  ✓ Removed '{}' from promoted branches (now base)",
+                    base
+                ));
+            }
             environment.base = base.clone();
             context.log_verbose(&format!("  ✓ Updated base branch to '{}'", base));
         }
