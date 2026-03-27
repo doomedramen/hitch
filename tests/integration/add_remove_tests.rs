@@ -41,7 +41,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["add", "qa", "--source", "develop"])
+                .args(&["add", "qa", "--base", "develop"])
                 .execute()?;
             result
                 .assert_success()
@@ -101,7 +101,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["add", "dev", "--source", "nonexistent"])
+                .args(&["add", "dev", "--base", "nonexistent"])
                 .execute()?;
             result
                 .assert_failure()

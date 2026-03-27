@@ -10,9 +10,9 @@ pub struct AddCommand {
     /// Environment name to add
     pub env_name: String,
 
-    /// Source branch for the environment (defaults to main)
+    /// Base branch for the environment (defaults to main)
     #[arg(long)]
-    source: Option<String>,
+    base: Option<String>,
 }
 
 pub fn run(args: AddCommand, context: &GlobalContext) -> Result<()> {
@@ -25,7 +25,7 @@ pub fn run(args: AddCommand, context: &GlobalContext) -> Result<()> {
     validate_preconditions(context, &args.env_name)?;
 
     // Step 3: Add the environment
-    add_environment(context, &args.env_name, &args.source)?;
+    add_environment(context, &args.env_name, &args.base)?;
 
     context.log_success(&format!(
         "Successfully added environment '{}'!",

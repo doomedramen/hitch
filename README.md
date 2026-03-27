@@ -15,9 +15,9 @@ Hitch treats environment branches as composable layers. Promote feature branches
 hitch init
 
 # Add environments for your deployment pipeline
-hitch add dev --source main
-hitch add qa --source main
-hitch add production --source main
+hitch add dev --base main
+hitch add qa --base main
+hitch add production --base main
 
 # Promote branches to environments
 hitch promote feature/user-auth dev
@@ -65,6 +65,9 @@ hitch unlock production
 
 # View environment status
 hitch status
+
+# View branch hierarchy
+hitch tree
 
 # Release environment to target branch
 hitch release production main

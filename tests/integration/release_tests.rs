@@ -380,7 +380,7 @@ mod tests {
 
             env.hitch
                 .run()
-                .args(&["add", "staging", "--source", "develop"])
+                .args(&["add", "staging", "--base", "develop"])
                 .execute()?
                 .assert_success();
 

@@ -13,3 +13,4 @@ pub mod release_tests;
 pub mod resolve_tests;
 pub mod set_tests;
 pub mod status_tests;
+pub mod tree_tests;

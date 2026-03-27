@@ -46,6 +46,8 @@ enum Commands {
     Release(commands::release::ReleaseCommand),
     /// Show status of environments and promoted branches
     Status(commands::status::StatusCommand),
+    /// Show hierarchy of branches and environments
+    Tree(commands::tree::TreeCommand),
     /// Lock environment to prevent deployments
     Lock(commands::lock::LockCommand),
     /// Unlock environment to allow deployments
@@ -82,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Rebuild(_) => "rebuild",
         Commands::Release(_) => "release",
         Commands::Status(_) => "status",
+        Commands::Tree(_) => "tree",
         Commands::Lock(_) => "lock",
         Commands::Unlock(_) => "unlock",
         Commands::Guard(_) => "guard",
@@ -110,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Rebuild(args) => commands::rebuild::run(args, &context).map_err(|e| e.into()),
         Commands::Release(args) => commands::release::run(args, &context).map_err(|e| e.into()),
         Commands::Status(args) => commands::status::run(args, &context).map_err(|e| e.into()),
+        Commands::Tree(args) => commands::tree::run(args, &context).map_err(|e| e.into()),
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
         Commands::Guard(args) => commands::guard::run(args, &context).map_err(|e| e.into()),

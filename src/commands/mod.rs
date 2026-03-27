@@ -16,4 +16,5 @@ pub mod remove;
 pub mod resolve;
 pub mod set;
 pub mod status;
+pub mod tree;
 pub mod unlock;
