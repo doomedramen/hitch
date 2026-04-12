@@ -69,7 +69,7 @@ mod tests {
             let result = env.hitch.run().args(&["init"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("Working tree is not clean");
+                .assert_stderr_contains("Hitch is already initialized");
 
             Ok::<(), anyhow::Error>(())
         });

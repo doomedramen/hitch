@@ -24,6 +24,10 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     }
     context.log_verbose("✓ hitch-metadata branch does not exist");
 
+    // Record the original branch before switching to the orphan branch
+    let original_branch = context.git().get_current_branch()?;
+    context.log_verbose(&format!("Original branch recorded: {}", original_branch));
+
     // Step 3: Create orphan branch hitch-metadata
     context.log_info("Creating hitch-metadata branch...");
     context.git().create_orphan_branch("hitch-metadata")?;
@@ -76,9 +80,16 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     }
 
     // Return to original branch
-    let current_branch = context.git().get_current_branch()?;
-    if current_branch != "hitch-metadata" {
-        context.log_verbose("Already on original branch");
+    context.log_verbose(&format!(
+        "Switching back to original branch: {}",
+        original_branch
+    ));
+    if let Err(e) = context.git().checkout_branch(&original_branch) {
+        context.log_error(&format!(
+            "Failed to return to original branch '{}': {}",
+            original_branch, e
+        ));
+        context.log_warning("You may need to manually switch back to your original branch");
     }
 
     context.log_success("Hitch initialized successfully!");

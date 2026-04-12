@@ -299,12 +299,11 @@ impl TestEnvironment {
     /// Setup a proper Git repository for hitch testing
     /// This handles the complex setup required after hitch init
     pub fn setup_git_for_hitch(&self) -> Result<()> {
-        // Create main branch since hitch init leaves us on hitch-metadata branch
-        self.git.run(&["checkout", "-b", "main"])?;
-
-        // Add and commit the .gitignore file that was created by hitch init (force add since it's ignored)
-        self.git.run(&["add", "-f", ".gitignore"])?;
-        self.git.run(&["commit", "-m", "Add .gitignore"])?;
+        // Create main as an orphan branch with its own independent history,
+        // separate from hitch-metadata. This avoids the hitch-metadata .gitignore
+        // (which ignores everything) leaking into the main branch.
+        self.git.run(&["checkout", "--orphan", "main"])?;
+        self.git.run(&["rm", "-rf", "."])?;
 
         // Create initial commit on main branch to establish it as the base branch
         self.fs.write_file("README.md", "# Test Repository")?;

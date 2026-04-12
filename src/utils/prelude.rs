@@ -447,7 +447,7 @@ where
         context.log_verbose("Committing metadata changes...");
         context
             .git()
-            .add_and_commit(&["hitch.json"], "Update hitch configuration")?;
+            .add_and_commit(&["hitch.json", ".gitignore"], "Update hitch configuration")?;
 
         // Optionally push
         if context.should_push() {

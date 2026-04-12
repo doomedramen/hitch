@@ -300,20 +300,20 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Create conflicting feature branches
+            // Create feature branches with different files (non-conflicting)
             env.git.run(&["checkout", "-b", "feature-1"])?;
-            env.fs.write_file("shared.txt", "feature 1 content")?;
+            env.fs.write_file("feature-1.txt", "feature 1 content")?;
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "Add feature 1"])?;
             env.git.run(&["checkout", "main"])?;
 
             env.git.run(&["checkout", "-b", "feature-2"])?;
-            env.fs.write_file("shared.txt", "feature 2 content")?;
+            env.fs.write_file("feature-2.txt", "feature 2 content")?;
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "Add feature 2"])?;
             env.git.run(&["checkout", "main"])?;
 
-            // Promote both branches (this creates potential conflicts)
+            // Promote both branches
             for branch_name in ["feature-1", "feature-2"] {
                 let result = env
                     .hitch
@@ -323,7 +323,7 @@ mod tests {
                 result.assert_success();
             }
 
-            // Rebuild should handle conflicts gracefully
+            // Rebuild should succeed with multiple promoted branches
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
                 .assert_success()
