@@ -52,6 +52,10 @@ When you promote or demote, Hitch rebuilds the environment by squashing all prom
 ## 📋 Key Commands
 
 ```bash
+
+# Create a new feature branch and set up promotion targets
+hitch branch feature/foo develop --to dev --to qa
+
 # Promote/demote branches through environments
 hitch promote feature/new-api dev
 hitch demote feature/new-api dev
