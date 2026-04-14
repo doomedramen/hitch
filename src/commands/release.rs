@@ -196,8 +196,8 @@ fn perform_release_core(
         }
 
         let merge_message = format!(
-            "hitch: release '{}' from environment '{}'",
-            branch, env_name
+            "Hitch: release {} from {} to {}",
+            branch, env_name, target_branch
         );
         context.git().squash_merge(branch, &merge_message)?;
         context.log_verbose(&format!(
@@ -207,10 +207,7 @@ fn perform_release_core(
     }
 
     // Commit the merged changes
-    let commit_message = format!(
-        "hitch: release environment '{}' to '{}'",
-        env_name, target_branch
-    );
+    let commit_message = format!("Hitch: release {} to {}", env_name, target_branch);
     context.git().commit(&commit_message)?;
     context.log_info(&format!("✓ Committed release to '{}'", target_branch));
 

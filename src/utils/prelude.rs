@@ -1022,7 +1022,7 @@ fn perform_squash_merges_for_rebuild(
 
             context.log_verbose(&format!("No conflicts detected in branch '{}'", branch));
 
-            let merge_message = format!("hitch: squash merge '{}' into environment", branch);
+            let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
             context.log_verbose(&format!(
                 "Attempting to squash merge '{}' into temp branch...",
                 branch
@@ -1465,8 +1465,8 @@ pub fn continue_rebuild_after_resolve(
 
     // Commit the resolution
     let commit_msg = format!(
-        "hitch: squash merge '{}' into environment (conflicts resolved)",
-        state.conflict_branch
+        "Hitch: merge {} into {} (conflicts resolved)",
+        state.conflict_branch, env_name
     );
     let commit_output = context
         .git()
@@ -1564,7 +1564,7 @@ pub fn continue_rebuild_after_resolve(
                 ));
             }
 
-            let merge_msg = format!("hitch: squash merge '{}' into environment", branch);
+            let merge_msg = format!("Hitch: merge {} into {}", branch, env_name);
             context.git().squash_merge(branch, &merge_msg)?;
             context.log_verbose(&format!("✓ Squash-merged '{}'", branch));
         }
