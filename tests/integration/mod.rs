@@ -2,6 +2,7 @@
 
 pub mod add_remove_tests;
 pub mod approval_workflow_tests;
+pub mod branch_tests;
 pub mod cleanup_tests;
 pub mod diff_tests;
 pub mod guard_tests;

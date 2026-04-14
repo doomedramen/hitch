@@ -58,6 +58,8 @@ enum Commands {
     Completion(commands::completion::CompletionCommand),
     /// Manage approval requests for deployments
     Approvals(commands::approvals::ApprovalsCommand),
+    /// Create a new branch and set promotion targets
+    Branch(commands::branch::BranchCommand),
     /// Resume or abort a rebuild paused by a merge conflict
     Resolve(commands::resolve::ResolveCommand),
     /// Remove local branches that are no longer promoted to any environment
@@ -94,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Cleanup(_) => "cleanup",
         Commands::Diff(_) => "diff",
         Commands::Set(_) => "set",
+        Commands::Branch(_) => "branch",
     };
 
     // Create a new logger configured for this command
@@ -125,5 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Cleanup(args) => commands::cleanup::run(args, &context).map_err(|e| e.into()),
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
         Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),
+        Commands::Branch(args) => commands::branch::run(args, &context).map_err(|e| e.into()),
     }
 }

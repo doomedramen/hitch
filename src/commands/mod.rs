@@ -2,6 +2,7 @@ pub mod global_context;
 
 pub mod add;
 pub mod approvals;
+pub mod branch;
 pub mod cleanup;
 pub mod completion;
 pub mod demote;

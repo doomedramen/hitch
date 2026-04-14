@@ -1,7 +1,7 @@
-//! Command runners for Hitch and Git operations
-//!
-//! Provides fluent API for running hitch and git commands in tests with
-//! proper error handling and output capture.
+// Command runners for Hitch and Git operations
+//
+// Provides fluent API for running hitch and git commands in tests with
+// proper error handling and output capture.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -289,6 +289,13 @@ impl GitCommandRunner {
             .with_context(|| format!("Failed to write file: {}", file_path))?;
         self.commit(message)?;
         Ok(())
+    }
+
+    /// Get the current checked out branch name
+    pub fn get_current_branch(&self) -> Result<String> {
+        let result = self.run(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+        let branch = result.stdout().trim().to_string();
+        Ok(branch)
     }
 }
 
