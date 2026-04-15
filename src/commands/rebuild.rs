@@ -1,5 +1,7 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::prelude::{access_metadata_read_only, with_locked_env};
+use crate::utils::prelude::{
+    access_metadata_read_only, preflight_compatibility_merge_tree, with_locked_env,
+};
 use anyhow::Result;
 use clap::Args;
 
@@ -9,10 +11,6 @@ pub struct RebuildCommand {
     #[arg()]
     pub env_name: String,
 
-    /// Reuse shared conflict resolutions (rerere) stored in hitch-metadata
-    #[arg(long)]
-    pub reuse_resolutions: bool,
-
     /// Force rebuild even if environment is locked
     #[arg(long)]
     pub force: bool,
@@ -21,71 +19,46 @@ pub struct RebuildCommand {
 pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     context.log_info(&format!("Rebuilding environment '{}'...", args.env_name));
 
-    // Step 1: Precondition checks (allow dirty tree — we'll stash it)
-    // Only check git repo, not working tree cleanliness
-    if let Err(e) = context.git().get_current_branch() {
-        return Err(anyhow::anyhow!("Not in a Git repository: {}", e));
-    }
+    // Step 1: Precondition checks (require clean working tree)
+    crate::utils::prelude::pre_check(context)?;
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
 
-    let rerere_original = if args.reuse_resolutions {
-        let original = context.git().get_git_config("rerere.enabled")?;
-        context.git().set_git_config("rerere.enabled", "true")?;
-        if let Ok(Some(summary)) = crate::utils::rerere::import_shared_rerere_cache(context) {
-            context.log_verbose(&format!(
-                "Imported {} shared rerere entr(y/ies) ({} files).",
-                summary.imported_entries, summary.imported_files
-            ));
-        }
-        original
+    // Step 2: Compatibility preflight (read-only; must happen before locking or creating temp branches)
+    let (base_branch, promoted_branches) = access_metadata_read_only(context, |config| {
+        let env = config
+            .environments
+            .get(&args.env_name)
+            .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))?;
+        Ok((env.base.clone(), env.branches.clone()))
+    })?;
+
+    context.log_info(&format!(
+        "Checking compatibility of {} promoted branches...",
+        promoted_branches.len()
+    ));
+
+    if let Some(failure) =
+        preflight_compatibility_merge_tree(context, &base_branch, &promoted_branches)?
+    {
+        return Err(anyhow::anyhow!(format_compatibility_failure_for_rebuild(
+            &args.env_name,
+            &failure.blocking_branch,
+            &failure.base_branch,
+            &failure.conflicted_files
+        )));
+    }
+
+    // Step 3: Execute rebuild (now we know it can assemble cleanly)
+    if args.force {
+        context.log_info(&format!(
+            "Force rebuilding locked environment '{}'...",
+            args.env_name
+        ));
+        crate::utils::prelude::rebuild_environment(context, &args.env_name)?;
     } else {
-        None
-    };
-
-    // Step 2-5: Auto-stash dirty changes, execute rebuild, pop stash
-    let result = crate::utils::prelude::with_auto_stash(context, || {
-        if args.force {
-            context.log_info(&format!(
-                "Force rebuilding locked environment '{}'...",
-                args.env_name
-            ));
+        with_locked_env(context, &args.env_name, || {
             crate::utils::prelude::rebuild_environment(context, &args.env_name)
-        } else {
-            with_locked_env(context, &args.env_name, || {
-                crate::utils::prelude::rebuild_environment(context, &args.env_name)
-            })
-        }
-    });
-
-    match result {
-        Ok(()) => {
-            if args.reuse_resolutions {
-                restore_rerere_config(context, rerere_original)?;
-            }
-        }
-        Err(e) => {
-            if args.reuse_resolutions
-                && crate::utils::resolve_state::resolve_state_exists(&context.git().get_git_dir())
-            {
-                // Persist the reuse flag + rerere restore information into resolve state so
-                // `hitch resolve --continue/--abort` can export and restore.
-                let git_dir = context.git().get_git_dir();
-                if let Ok(mut state) = crate::utils::resolve_state::read_resolve_state(&git_dir) {
-                    state.reuse_resolutions = true;
-                    state.rerere_restore = true;
-                    state.rerere_original = rerere_original;
-                    let _ = crate::utils::resolve_state::write_resolve_state(&git_dir, &state);
-                }
-
-                // Intentionally keep `rerere.enabled=true` while the user resolves conflicts.
-                return Err(e);
-            }
-
-            if args.reuse_resolutions {
-                let _ = restore_rerere_config(context, rerere_original);
-            }
-            return Err(e);
-        }
+        })?;
     }
 
     context.log_success(&format!(
@@ -95,11 +68,31 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
-fn restore_rerere_config(context: &GlobalContext, original: Option<String>) -> Result<()> {
-    match original {
-        Some(v) => context.git().set_git_config("rerere.enabled", &v),
-        None => context.git().unset_git_config("rerere.enabled"),
+fn format_compatibility_failure_for_rebuild(
+    env_name: &str,
+    blocking_branch: &str,
+    base_branch: &str,
+    conflicted_files: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "✗ Cannot rebuild '{}' — compatibility check failed\n\n",
+        env_name
+    ));
+    out.push_str(&format!(
+        "  {} conflicts with {}\n",
+        blocking_branch, base_branch
+    ));
+    for f in conflicted_files {
+        out.push_str(&format!("    {}\n", f));
     }
+    out.push('\n');
+    out.push_str(&format!("Fix {} first:\n", blocking_branch));
+    out.push_str(&format!(
+        "  git checkout {} && git rebase {}\n",
+        blocking_branch, base_branch
+    ));
+    out
 }
 
 /// Validate that environment exists and is not locked (unless force flag is used)

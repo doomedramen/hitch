@@ -14,8 +14,6 @@ pub mod promote;
 pub mod rebuild;
 pub mod release;
 pub mod remove;
-pub mod resolutions;
-pub mod resolve;
 pub mod set;
 pub mod status;
 pub mod tree;

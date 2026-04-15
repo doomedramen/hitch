@@ -62,10 +62,6 @@ enum Commands {
     Approvals(commands::approvals::ApprovalsCommand),
     /// Create a new branch and set promotion targets
     Branch(commands::branch::BranchCommand),
-    /// Resume or abort a rebuild paused by a merge conflict
-    Resolve(commands::resolve::ResolveCommand),
-    /// Manage shared conflict resolutions (rerere cache) stored in hitch-metadata
-    Resolutions(commands::resolutions::ResolutionsCommand),
     /// Remove local branches that are no longer promoted to any environment
     Cleanup(commands::cleanup::CleanupCommand),
     /// Preview the commits each promoted branch would add on rebuild
@@ -101,8 +97,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Guard(_) => "guard",
         Commands::Completion(_) => "completion",
         Commands::Approvals(_) => "approvals",
-        Commands::Resolve(_) => "resolve",
-        Commands::Resolutions(_) => "resolutions",
         Commands::Cleanup(_) => "cleanup",
         Commands::Diff(_) => "diff",
         Commands::Set(_) => "set",
@@ -134,10 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             commands::completion::run(args, &context).map_err(|e| e.into())
         }
         Commands::Approvals(args) => commands::approvals::run(args, &context).map_err(|e| e.into()),
-        Commands::Resolve(args) => commands::resolve::run(args, &context).map_err(|e| e.into()),
-        Commands::Resolutions(args) => {
-            commands::resolutions::run(args, &context).map_err(|e| e.into())
-        }
         Commands::Cleanup(args) => commands::cleanup::run(args, &context).map_err(|e| e.into()),
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
         Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),

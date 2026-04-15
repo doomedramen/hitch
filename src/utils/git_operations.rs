@@ -56,6 +56,15 @@ pub struct GitOperations {
     repo_path: String,
 }
 
+/// Result of `git merge-tree --write-tree --name-only` used for compatibility preflight.
+#[derive(Debug, Clone)]
+pub struct MergeTreeWriteTreeResult {
+    /// OID of the toplevel tree produced by the merge attempt.
+    pub tree_oid: String,
+    /// List of conflicted file paths (empty when no conflicts).
+    pub conflicted_files: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub sha: String,
@@ -100,6 +109,66 @@ impl GitOperations {
             args.join(" "),
             self.repo_path
         ))
+    }
+
+    /// Perform a merge simulation without touching index or working tree.
+    ///
+    /// This wraps `git merge-tree --write-tree --name-only --merge-base <base> <our_tree> <their_tree>`.
+    /// - On success (exit 0), `conflicted_files` is empty and `tree_oid` is the merged tree.
+    /// - On conflict (exit 1), `conflicted_files` contains the paths listed by git and `tree_oid`
+    ///   is still provided (as printed by git).
+    /// - On other failures, returns an error.
+    pub fn merge_tree_write_tree_name_only(
+        &self,
+        merge_base: &str,
+        our_tree: &str,
+        their_tree: &str,
+    ) -> Result<MergeTreeWriteTreeResult> {
+        let output = self.run_git_command(&[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--merge-base",
+            merge_base,
+            our_tree,
+            their_tree,
+        ])?;
+
+        // git merge-tree returns:
+        // - 0 for clean merge
+        // - 1 for conflicted merge
+        // - other for errors
+        let code = output.status.code().unwrap_or(2);
+        if code != 0 && code != 1 {
+            return Err(anyhow::anyhow!(
+                "git merge-tree failed (exit {}) — {}",
+                code,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines();
+
+        let tree_oid = lines
+            .next()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("git merge-tree produced no tree OID output"))?;
+
+        let mut conflicted_files: Vec<String> = Vec::new();
+        for l in lines {
+            let l = l.trim();
+            if l.is_empty() {
+                break;
+            }
+            conflicted_files.push(l.to_string());
+        }
+
+        Ok(MergeTreeWriteTreeResult {
+            tree_oid,
+            conflicted_files,
+        })
     }
 
     /// Run multiple git commands sequentially, returning early on first failure
@@ -260,6 +329,7 @@ impl GitOperations {
     }
 
     /// Read raw bytes for a file in a branch/ref. Works for binary data.
+    #[allow(dead_code)]
     pub fn read_blob_from_branch(&self, branch: &str, file: &str) -> Result<Vec<u8>> {
         let output = self.run_git_command(&["show", &format!("{}:{}", branch, file)])?;
         if !output.status.success() {
@@ -273,6 +343,7 @@ impl GitOperations {
     }
 
     /// List files under a path prefix inside a branch/ref.
+    #[allow(dead_code)]
     pub fn list_files_in_branch(&self, branch: &str, path_prefix: &str) -> Result<Vec<String>> {
         let output =
             self.run_git_command(&["ls-tree", "-r", "--name-only", branch, "--", path_prefix])?;
@@ -303,6 +374,7 @@ impl GitOperations {
     }
 
     /// Resolve the first reference in `candidates` that exists.
+    #[allow(dead_code)]
     pub fn rev_parse_fallback(&self, candidates: &[&str]) -> Result<String> {
         for c in candidates {
             if let Ok(sha) = self.rev_parse(c) {
@@ -312,6 +384,7 @@ impl GitOperations {
         Err(anyhow::anyhow!("No candidate refs resolved"))
     }
 
+    #[allow(dead_code)]
     pub fn get_git_config(&self, key: &str) -> Result<Option<String>> {
         let output = self.run_git_command(&["config", "--get", key])?;
         if output.status.success() {
@@ -326,6 +399,7 @@ impl GitOperations {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_git_config(&self, key: &str, value: &str) -> Result<()> {
         let output = self.run_git_command(&["config", key, value])?;
         if !output.status.success() {
@@ -339,6 +413,7 @@ impl GitOperations {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn unset_git_config(&self, key: &str) -> Result<()> {
         let output = self.run_git_command(&["config", "--unset-all", key])?;
         if output.status.success() {
@@ -1108,6 +1183,7 @@ impl GitOperations {
 
     /// Return the message of the most recent stash entry, or `None` if there
     /// is no stash.
+    #[allow(dead_code)]
     pub fn stash_top_message(&self) -> Option<String> {
         let out = self
             .run_git_command(&["stash", "list", "--format=%s", "-n", "1"])
@@ -1172,9 +1248,9 @@ impl GitOperations {
             return Ok(());
         }
 
-        // Create local branch from remote tracking branch
+        // Create local branch from remote tracking branch without checking it out
         let output =
-            self.run_git_command(&["checkout", "-b", branch, &format!("origin/{}", branch)])?;
+            self.run_git_command(&["branch", "--track", branch, &format!("origin/{}", branch)])?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(

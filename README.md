@@ -49,6 +49,8 @@ dev        = main + feature/auth + feature/payments + feature/ui + feature/api
 
 When you promote or demote, Hitch rebuilds the environment by squashing all promoted branches together. Environment branches are **regenerated**, not manually merged.
 
+Rebuild is a read-only assembly check first: if any promoted branch can't be composed cleanly (in order) on top of the base, `hitch rebuild` refuses and tells you exactly which branch and files to fix.
+
 ## 📋 Key Commands
 
 ```bash

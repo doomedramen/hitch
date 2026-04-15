@@ -165,11 +165,11 @@ pub fn format_conflict_report(
     // Resolution instructions
     report.push_str("To resolve:\n");
     report.push_str(&format!(
-        "1. Checkout the conflicting branch and merge {}:\n",
+        "1. Checkout the conflicting branch and rebase onto {}:\n",
         base_branch
     ));
     report.push_str(&format!("   git checkout {}\n", source_branch));
-    report.push_str(&format!("   git merge {}\n\n", base_branch));
+    report.push_str(&format!("   git rebase {}\n\n", base_branch));
     report.push_str("2. Resolve conflicts in the files listed above\n\n");
     report.push_str("3. Commit the resolution:\n");
     report.push_str("   git add .\n");
@@ -178,7 +178,7 @@ pub fn format_conflict_report(
         base_branch
     ));
     report.push_str("4. Retry the operation:\n");
-    report.push_str(&format!("   hitch rebuild {} --force\n", env_name));
+    report.push_str(&format!("   hitch rebuild {}\n", env_name));
 
     report
 }
@@ -302,8 +302,8 @@ mod tests {
         assert!(report.contains("README.md"));
         assert!(report.contains("To resolve:"));
         assert!(report.contains("git checkout feature-branch"));
-        assert!(report.contains("git merge main"));
-        assert!(report.contains("hitch rebuild dev --force"));
+        assert!(report.contains("git rebase main"));
+        assert!(report.contains("hitch rebuild dev"));
     }
 
     #[test]

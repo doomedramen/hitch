@@ -6,6 +6,35 @@ mod tests {
     use crate::test_framework::*;
     use std::io::Write;
 
+    /// Helper: inject branches into hitch.json on hitch-metadata without using `hitch promote`.
+    fn inject_branches_into_metadata(
+        env: &TestEnvironment,
+        env_name: &str,
+        branches: &[&str],
+    ) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "hitch-metadata"])?;
+
+        let config_str = env.fs.read_file("hitch.json")?;
+        let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+
+        let branch_array = serde_json::Value::Array(
+            branches
+                .iter()
+                .map(|b| serde_json::Value::String(b.to_string()))
+                .collect(),
+        );
+        config["environments"][env_name]["branches"] = branch_array;
+
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git
+            .run(&["commit", "-m", "test: inject branches into metadata"])?;
+
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
     #[test]
     fn test_hitch_rebuild_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -292,47 +321,59 @@ mod tests {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            // Initialize hitch and add environment
-            // Hitch is already initialized by framework
             env.hitch
                 .run()
                 .args(&["add", "dev"])
                 .execute()?
                 .assert_success();
 
-            // Create feature branches with different files (non-conflicting)
-            env.git.run(&["checkout", "-b", "feature-1"])?;
-            env.fs.write_file("feature-1.txt", "feature 1 content")?;
-            env.git.run(&["add", "."])?;
-            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            // Create a base file on main
+            env.fs.write_file("shared.txt", "base content\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "Add shared.txt"])?;
+
+            // branch-a modifies shared.txt
+            env.git.run(&["checkout", "-b", "branch-a"])?;
+            env.fs.write_file("shared.txt", "from branch-a\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-a: update shared.txt"])?;
             env.git.run(&["checkout", "main"])?;
 
-            env.git.run(&["checkout", "-b", "feature-2"])?;
-            env.fs.write_file("feature-2.txt", "feature 2 content")?;
-            env.git.run(&["add", "."])?;
-            env.git.run(&["commit", "-m", "Add feature 2"])?;
+            // branch-b modifies shared.txt in an incompatible way
+            env.git.run(&["checkout", "-b", "branch-b"])?;
+            env.fs.write_file("shared.txt", "from branch-b\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-b: update shared.txt"])?;
             env.git.run(&["checkout", "main"])?;
 
-            // Promote both branches
-            for branch_name in ["feature-1", "feature-2"] {
-                let result = env
-                    .hitch
-                    .run()
-                    .args(&["promote", branch_name, "dev"])
-                    .execute()?;
-                result.assert_success();
-            }
+            // Inject conflicting branches into metadata (bypass promote gating)
+            inject_branches_into_metadata(env, "dev", &["branch-a", "branch-b"])?;
 
-            // Rebuild should succeed with multiple promoted branches
-            let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
+            // Rebuild should refuse before creating any temp branch
+            let result = env
+                .hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?;
             result
-                .assert_success()
-                .assert_stdout_contains("Environment 'dev' rebuilt successfully");
+                .assert_failure()
+                .assert_stderr_contains("Cannot rebuild 'dev' — compatibility check failed")
+                .assert_stderr_contains("branch-b conflicts with main")
+                .assert_stderr_contains("shared.txt");
 
-            // Verify rebuild timestamp is updated
-            let config = env.read_hitch_config()?;
-            let dev_env = config.environments.get("dev").unwrap();
-            assert!(dev_env.rebuilt_at.is_some());
+            // No hitch-tmp-* branch created
+            let branches = env.git.run(&["branch", "--list", "hitch-tmp-*"])?;
+            assert!(
+                branches.stdout().trim().is_empty(),
+                "expected no hitch-tmp-* branches, got '{}'",
+                branches.stdout().trim()
+            );
+
+            // User remains on main
+            let branch_out = env.git.run(&["branch", "--show-current"])?;
+            assert_eq!(branch_out.stdout().trim(), "main");
 
             Ok::<(), anyhow::Error>(())
         });

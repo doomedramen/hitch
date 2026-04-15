@@ -94,7 +94,7 @@ mod tests {
         );
         assert!(report.contains("Conflicting files (0):"));
         assert!(report.contains("To resolve:"));
-        assert!(report.contains("hitch rebuild staging --force"));
+        assert!(report.contains("hitch rebuild staging"));
     }
 
     #[test]
@@ -132,8 +132,8 @@ mod tests {
         assert!(report.contains(">>>>>>> feature-branch"));
         assert!(report.contains("To resolve:"));
         assert!(report.contains("git checkout feature-branch"));
-        assert!(report.contains("git merge main"));
-        assert!(report.contains("hitch rebuild dev --force"));
+        assert!(report.contains("git rebase main"));
+        assert!(report.contains("hitch rebuild dev"));
     }
 
     #[test]

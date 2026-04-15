@@ -4,7 +4,7 @@
 //! covering branch management, merge operations, conflict detection, and edge cases.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Local, Utc};
 
 use crate::framework::TestSetup;
 use crate::test_framework::*;
@@ -1182,7 +1182,7 @@ mod tests {
             git_ops.add_and_commit(&["test.txt"], "Test commit")?;
 
             // Get current date and commit date
-            let today = Utc::now().format("%Y-%m-%d").to_string();
+            let today = Local::now().format("%Y-%m-%d").to_string();
             let commit_sha = git_ops.get_branch_commit_sha("main")?;
             let commit_date = git_ops.get_commit_date(&commit_sha)?;
 

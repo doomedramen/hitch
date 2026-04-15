@@ -13,8 +13,6 @@ pub mod output;
 pub mod prelude;
 pub mod progress;
 pub mod rebuild_lock;
-pub mod rerere;
-pub mod resolve_state;
 pub mod rollback;
 pub mod snapshot;
 pub mod validation;

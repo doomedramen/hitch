@@ -529,7 +529,9 @@ mod tests {
 
             result
                 .assert_failure()
-                .assert_stderr_contains("conflicts detected with already-promoted branches");
+                .assert_stderr_contains("compatibility check failed")
+                .assert_stderr_contains("branch-b conflicts with main")
+                .assert_stderr_contains("shared.txt");
 
             // Metadata must be unchanged (branch-b not in the list)
             let config = env.read_hitch_config()?;
