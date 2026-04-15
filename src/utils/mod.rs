@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod authorization;
 pub mod command_helpers;
+pub mod confirm;
 pub mod conflict_report;
 pub mod diff;
 pub mod git_error;
@@ -8,6 +9,7 @@ pub mod git_operations;
 pub mod hooks;
 pub mod log_macros;
 pub mod logging;
+pub mod output;
 pub mod prelude;
 pub mod progress;
 pub mod rebuild_lock;

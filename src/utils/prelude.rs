@@ -651,9 +651,10 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         environment.branches.len()
     };
     let total_steps = base_steps + merge_steps;
-    let mut logger = StepLogger::new(
+    let mut logger = StepLogger::new_with_output(
         format!("Rebuilding environment '{}'", env_name),
         total_steps,
+        context.output.clone(),
     );
 
     // Step 1: Initialize
@@ -1086,11 +1087,8 @@ fn safe_replace_environment_branch_for_rebuild(
     ));
     context.git().create_branch_from(env_name, temp_branch)?;
 
-    // Step 4c: Handle remote branch replacement - always prompt when push is enabled
+    // Step 4c: Handle remote branch replacement - prompt/confirm when push is enabled
     if context.should_push() {
-        // Interactive confirmation for force push
-
-        println!(); // Add newline for clean separation
         context.log_warning(&format!(
             "Ready to force push the rebuilt '{}' branch to 'origin/{}'.",
             env_name, env_name
@@ -1101,20 +1099,7 @@ fn safe_replace_environment_branch_for_rebuild(
         ));
         context.log_warning("This action cannot be undone.");
 
-        // Ask for user confirmation
-        use std::io::{self, Write};
-        print!("Do you want to proceed? [y/N]: ");
-        io::stdout()
-            .flush()
-            .context("Failed to flush stdout for user prompt")?;
-
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .context("Failed to read user input")?;
-        let input = input.trim().to_lowercase();
-
-        if input == "y" || input == "yes" {
+        if context.confirm.confirm_force_push_rebuild(env_name)? {
             context.log_info(&format!(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name

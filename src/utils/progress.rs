@@ -4,6 +4,9 @@
 //! that works without requiring async/await.
 
 use std::fmt;
+use std::sync::Arc;
+
+use crate::utils::output::{ConsoleOutputSink, OutputLevel, OutputSink};
 
 /// Progress information for long-running operations
 #[derive(Debug, Clone)]
@@ -108,15 +111,26 @@ pub struct StepLogger {
     operation: String,
     current_step: usize,
     total_steps: usize,
+    output: Arc<dyn OutputSink>,
 }
 
 impl StepLogger {
     /// Create a new step logger
+    #[allow(dead_code)]
     pub fn new(operation: String, total_steps: usize) -> Self {
+        Self::new_with_output(operation, total_steps, Arc::new(ConsoleOutputSink))
+    }
+
+    pub fn new_with_output(
+        operation: String,
+        total_steps: usize,
+        output: Arc<dyn OutputSink>,
+    ) -> Self {
         Self {
             operation,
             current_step: 0,
             total_steps,
+            output,
         }
     }
 
@@ -124,18 +138,24 @@ impl StepLogger {
     pub fn step(&mut self, description: String) {
         self.current_step += 1;
         if self.total_steps > 1 {
-            println!(
-                "ℹ️ [{}/{}] {} - {}",
-                self.current_step, self.total_steps, self.operation, description
+            self.output.log(
+                OutputLevel::Info,
+                &format!(
+                    "[{}/{}] {} - {}",
+                    self.current_step, self.total_steps, self.operation, description
+                ),
             );
         } else {
-            println!("ℹ️ {} - {}", self.operation, description);
+            self.output.log(
+                OutputLevel::Info,
+                &format!("{} - {}", self.operation, description),
+            );
         }
     }
 
     /// Mark the operation as complete
     pub fn complete(&self) {
-        println!("✅ {}", self.operation);
+        self.output.log(OutputLevel::Success, &self.operation);
     }
 }
 
