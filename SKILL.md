@@ -53,10 +53,30 @@ hitch demote feature/auth dev           # Remove branch from environment
 ### Rebuild & Release
 ```bash
 hitch rebuild production                # Rebuild environment from promoted branches
-hitch resolve production                # Resume/abort rebuild after merge conflict
+hitch resolve                           # Show rebuild conflict status (if paused)
+hitch resolve --continue                # Finish rebuild after you resolve + stage conflicts
+hitch resolve --abort                   # Abort paused rebuild and restore original branch
 hitch release production main           # Release environment to target branch
 hitch diff                              # Preview commits each branch would add
 ```
+
+### Shared Conflict Resolutions (rerere)
+Hitch can share rebuild conflict resolutions across clones by exporting/importing Git’s
+`rerere` cache (`.git/rr-cache`) into `hitch-metadata`.
+
+```bash
+hitch rebuild dev --reuse-resolutions   # Import shared rr-cache, enable rerere for the run
+
+hitch resolutions status                # Show shared cache size + top prune candidates
+hitch resolutions prune                 # Prune shared cache down to 200MB cap (manual only)
+hitch resolutions prune --max-size 50   # Prune down to 50MB
+```
+
+Notes:
+- Safety: rerere only reapplies a resolution when the exact conflict “preimage” matches.
+- Sharing depends on `hitch-metadata`: without `--no-push`, Hitch will push updates so other
+  clones can reuse them. With `--no-push`, exports stay local.
+- Storage in `hitch-metadata`: `hitch/rr-cache/entries/<id>/...` + `hitch/rr-cache/index.json`.
 
 ### Status & Inspection
 ```bash
@@ -151,7 +171,9 @@ Hitch stores configuration in `hitch.json` on the `hitch-metadata` branch:
 - Locked environments reject all promotion/demotion attempts
 - After `hitch release`, promoted branches may already be merged — use `hitch cleanup` to remove them
 - Use `hitch diff` before rebuild to preview what commits would be added
-- Use `hitch resolve` to continue or abort a rebuild that hit merge conflicts
+- Use `hitch resolve` / `--continue` / `--abort` to manage a rebuild paused by merge conflicts
+- Use `hitch rebuild <env> --reuse-resolutions` to reuse shared conflict resolutions (rerere)
+- Use `hitch resolutions prune` only when you explicitly want to cap shared cache size
 
 ## Installation
 
