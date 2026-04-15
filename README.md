@@ -86,6 +86,16 @@ hitch set production --min-approvals 2
 hitch set production --add-approver alice@example.com
 ```
 
+## 🖥️ TUI (Default)
+
+Running `hitch` with no subcommand launches an interactive terminal UI (mouse + keyboard).
+
+```bash
+hitch            # launches the TUI
+hitch status     # runs the CLI command directly
+hitch rebuild dev
+```
+
 ## 🛡️ Approval Workflow
 
 For sensitive environments, require multi-person approval before promotions:

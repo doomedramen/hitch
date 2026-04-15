@@ -56,6 +56,13 @@ pub struct GitOperations {
     repo_path: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub timestamp: DateTime<Utc>,
+    pub summary: String,
+}
+
 impl GitOperations {
     pub fn new() -> Result<Self> {
         let repo = Repository::discover(".").context("Not in a git repository")?;
@@ -531,6 +538,148 @@ impl GitOperations {
 
         DateTime::from_timestamp(timestamp_i64, 0)
             .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", timestamp_i64))
+    }
+
+    pub fn list_local_branches(&self) -> Result<Vec<String>> {
+        let output =
+            self.run_git_command(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git for-each-ref failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    /// List remote-tracking branches for `remote` (e.g. `origin`), returned without the `origin/`
+    /// prefix. Does not include `origin/HEAD`.
+    pub fn list_remote_branches(&self, remote: &str) -> Result<Vec<String>> {
+        let prefix = format!("refs/remotes/{}/", remote);
+        let output = self.run_git_command(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("refs/remotes/{}", remote),
+        ])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git for-each-ref failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim();
+                if !l.starts_with(&prefix) {
+                    return None;
+                }
+                let short = l.trim_start_matches(&prefix);
+                if short == "HEAD" || short.is_empty() {
+                    None
+                } else {
+                    Some(short.to_string())
+                }
+            })
+            .collect())
+    }
+
+    /// Return a ref to treat as the repo's default branch (e.g. `origin/main`, `main`, etc.).
+    pub fn get_default_branch_ref(&self) -> Result<String> {
+        // Try to resolve origin/HEAD first.
+        if let Ok(output) =
+            self.run_git_command(&["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
+        {
+            if output.status.success() {
+                let full = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if let Some(suffix) = full.strip_prefix("refs/remotes/origin/") {
+                    let candidate = format!("origin/{}", suffix);
+                    if self.ref_exists(&candidate) {
+                        return Ok(candidate);
+                    }
+                }
+            }
+        }
+
+        for candidate in ["main", "origin/main", "master", "origin/master"] {
+            if self.ref_exists(candidate) {
+                return Ok(candidate.to_string());
+            }
+        }
+
+        self.get_current_branch()
+    }
+
+    pub fn ahead_behind(&self, base: &str, branch: &str) -> Result<(usize, usize)> {
+        let output = self.run_git_command(&[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{}...{}", base, branch),
+        ])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git rev-list failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let mut parts = s.split_whitespace();
+        let behind: usize = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        let ahead: usize = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        Ok((behind, ahead))
+    }
+
+    pub fn get_last_commit(&self, reference: &str) -> Result<CommitInfo> {
+        let mut commits = self.list_commits(reference, 1)?;
+        commits
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("No commits found for {}", reference))
+    }
+
+    pub fn list_commits(&self, reference: &str, limit: usize) -> Result<Vec<CommitInfo>> {
+        let output = self.run_git_command(&[
+            "log",
+            "-n",
+            &limit.to_string(),
+            "--format=%H%x00%ct%x00%s",
+            reference,
+        ])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git log failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let mut out = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut parts = line.split('\0');
+            let sha = parts.next().unwrap_or("").to_string();
+            let ts = parts.next().unwrap_or("0");
+            let summary = parts.next().unwrap_or("").to_string();
+            if sha.is_empty() {
+                continue;
+            }
+            let ts_i64: i64 = ts.parse().unwrap_or(0);
+            let timestamp = DateTime::from_timestamp(ts_i64, 0)
+                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
+            out.push(CommitInfo {
+                sha,
+                timestamp,
+                summary,
+            });
+        }
+        Ok(out)
+    }
+
+    fn ref_exists(&self, reference: &str) -> bool {
+        self.run_git_command(&["rev-parse", "--verify", reference])
+            .ok()
+            .is_some_and(|o| o.status.success())
     }
 
     /// Check if a branch exists (local or remote)

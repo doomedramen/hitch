@@ -2,6 +2,8 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
 mod commands;
+mod core;
+mod tui;
 mod types;
 mod utils;
 
@@ -25,7 +27,7 @@ pub struct Cli {
     no_push: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -78,8 +80,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
+    // No subcommand => launch the TUI.
+    if cli.command.is_none() {
+        return tui::app::run_tui(cli.verbose, cli.no_push).map_err(|e| e.into());
+    }
+
     // Configure logger for the specific command
-    let command_name = match &cli.command {
+    let command_name = match cli.command.as_ref().expect("checked above") {
         Commands::Init(_) => "init",
         Commands::Add(_) => "add",
         Commands::Remove(_) => "remove",
@@ -110,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = GlobalContext::new(cli.verbose, cli.no_push, logger)?;
 
     // Execute the appropriate command
-    match cli.command {
+    match cli.command.expect("checked above") {
         Commands::Init(args) => commands::init::run(args, &context).map_err(|e| e.into()),
         Commands::Add(args) => commands::add::run(args, &context).map_err(|e| e.into()),
         Commands::Remove(args) => commands::remove::run(args, &context).map_err(|e| e.into()),

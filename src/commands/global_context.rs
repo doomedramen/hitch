@@ -1,6 +1,7 @@
+use crate::utils::confirm::{Confirm, StdinConfirm};
 use crate::utils::git_operations::GitOperations;
 use crate::utils::logging::Logger;
-use colored::*;
+use crate::utils::output::{ConsoleOutputSink, OutputLevel, OutputSink};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -11,6 +12,8 @@ pub struct GlobalContext {
     pub no_push: bool,
     pub git_ops: Rc<GitOperations>,
     pub logger: Arc<Logger>,
+    pub output: Arc<dyn OutputSink>,
+    pub confirm: Arc<dyn Confirm>,
 }
 
 #[allow(dead_code)]
@@ -26,7 +29,36 @@ impl GlobalContext {
             no_push,
             git_ops,
             logger,
+            output: Arc::new(ConsoleOutputSink),
+            confirm: Arc::new(StdinConfirm),
         })
+    }
+
+    pub fn new_at_path(
+        repo_path: &str,
+        verbose: bool,
+        no_push: bool,
+        logger: Arc<Logger>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let git_ops = Rc::new(GitOperations::new_at_path(repo_path)?);
+        Ok(GlobalContext {
+            verbose,
+            no_push,
+            git_ops,
+            logger,
+            output: Arc::new(ConsoleOutputSink),
+            confirm: Arc::new(StdinConfirm),
+        })
+    }
+
+    pub fn with_output(mut self, output: Arc<dyn OutputSink>) -> Self {
+        self.output = output;
+        self
+    }
+
+    pub fn with_confirm(mut self, confirm: Arc<dyn Confirm>) -> Self {
+        self.confirm = confirm;
+        self
     }
 
     /// Create a new GlobalContext for testing
@@ -47,19 +79,19 @@ impl GlobalContext {
     }
 
     pub fn log_info(&self, message: &str) {
-        println!("{} {}", "ℹ️".blue(), message);
+        self.output.log(OutputLevel::Info, message);
     }
 
     pub fn log_success(&self, message: &str) {
-        println!("{} {}", "✅".green(), message);
+        self.output.log(OutputLevel::Success, message);
     }
 
     pub fn log_warning(&self, message: &str) {
-        println!("{} {}", "⚠️".yellow(), message);
+        self.output.log(OutputLevel::Warning, message);
     }
 
     pub fn log_error(&self, message: &str) {
-        eprintln!("{} {}", "❌".red(), message);
+        self.output.log(OutputLevel::Error, message);
     }
 
     pub fn should_push(&self) -> bool {
