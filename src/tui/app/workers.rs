@@ -559,6 +559,7 @@ impl App {
 
             let args = crate::commands::rebuild::RebuildCommand {
                 env_name,
+                reuse_resolutions: true,
                 force: false,
             };
             let res = crate::commands::rebuild::run(args, &context);
