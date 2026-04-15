@@ -33,6 +33,18 @@ pub struct ResolveState {
     pub remaining_branches: Vec<String>,
     /// The branch whose squash merge produced the conflict
     pub conflict_branch: String,
+
+    /// Whether the rebuild was started with `--reuse-resolutions`
+    #[serde(default)]
+    pub reuse_resolutions: bool,
+
+    /// Whether Hitch should restore `rerere.enabled` when resolving completes
+    #[serde(default)]
+    pub rerere_restore: bool,
+
+    /// Prior value of `rerere.enabled` (None means unset)
+    #[serde(default)]
+    pub rerere_original: Option<String>,
 }
 
 /// Return the path to `.git/hitch-resolve-state.json` for a given git dir

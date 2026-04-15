@@ -104,6 +104,20 @@ fn run_continue(
 
     crate::utils::prelude::continue_rebuild_after_resolve(context, state)?;
 
+    if state.reuse_resolutions {
+        if let Ok(summary) = crate::utils::rerere::export_rerere_cache_to_metadata(context, state) {
+            context.log_verbose(&format!(
+                "Exported {} rerere entr(y/ies) ({} files) to hitch-metadata{}.",
+                summary.exported_entries,
+                summary.exported_files,
+                if summary.committed { "" } else { " (noop)" }
+            ));
+        }
+    }
+    if state.rerere_restore {
+        restore_rerere_config(context, state.rerere_original.clone())?;
+    }
+
     context.log_success(&format!(
         "Environment '{}' rebuilt successfully!",
         state.env_name
@@ -120,9 +134,20 @@ fn run_abort(
 
     crate::utils::prelude::abort_rebuild_resolve(context, state)?;
 
+    if state.rerere_restore {
+        restore_rerere_config(context, state.rerere_original.clone())?;
+    }
+
     context.log_success(&format!(
         "Rebuild of '{}' aborted. Returned to branch '{}'.",
         state.env_name, state.original_branch
     ));
     Ok(())
+}
+
+fn restore_rerere_config(context: &GlobalContext, original: Option<String>) -> Result<()> {
+    match original {
+        Some(v) => context.git().set_git_config("rerere.enabled", &v),
+        None => context.git().unset_git_config("rerere.enabled"),
+    }
 }

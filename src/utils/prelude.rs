@@ -995,6 +995,9 @@ fn perform_squash_merges_for_rebuild(
                     merged_so_far: merged_so_far.clone(),
                     remaining_branches: remaining,
                     conflict_branch: branch.clone(),
+                    reuse_resolutions: false,
+                    rerere_restore: false,
+                    rerere_original: None,
                 };
                 if let Err(e) = write_resolve_state(&git_dir, &state) {
                     context.log_warning(&format!("Failed to save resolve state: {}", e));
@@ -1535,6 +1538,9 @@ pub fn continue_rebuild_after_resolve(
                     merged_so_far,
                     remaining_branches: new_remaining,
                     conflict_branch: branch.clone(),
+                    reuse_resolutions: state.reuse_resolutions,
+                    rerere_restore: state.rerere_restore,
+                    rerere_original: state.rerere_original.clone(),
                 };
                 // Do the actual squash merge (leaving markers) then save state
                 let _ = context

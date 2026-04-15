@@ -252,6 +252,96 @@ impl GitOperations {
         Ok(content)
     }
 
+    /// Read raw bytes for a file in a branch/ref. Works for binary data.
+    pub fn read_blob_from_branch(&self, branch: &str, file: &str) -> Result<Vec<u8>> {
+        let output = self.run_git_command(&["show", &format!("{}:{}", branch, file)])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "File '{}' not found in branch '{}'",
+                file,
+                branch
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    /// List files under a path prefix inside a branch/ref.
+    pub fn list_files_in_branch(&self, branch: &str, path_prefix: &str) -> Result<Vec<String>> {
+        let output =
+            self.run_git_command(&["ls-tree", "-r", "--name-only", branch, "--", path_prefix])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git ls-tree failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    /// Resolve a ref/commit-ish to a full SHA.
+    pub fn rev_parse(&self, reference: &str) -> Result<String> {
+        let output = self.run_git_command(&["rev-parse", reference])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git rev-parse {} failed: {}",
+                reference,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Resolve the first reference in `candidates` that exists.
+    pub fn rev_parse_fallback(&self, candidates: &[&str]) -> Result<String> {
+        for c in candidates {
+            if let Ok(sha) = self.rev_parse(c) {
+                return Ok(sha);
+            }
+        }
+        Err(anyhow::anyhow!("No candidate refs resolved"))
+    }
+
+    pub fn get_git_config(&self, key: &str) -> Result<Option<String>> {
+        let output = self.run_git_command(&["config", "--get", key])?;
+        if output.status.success() {
+            let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if v.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(v))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set_git_config(&self, key: &str, value: &str) -> Result<()> {
+        let output = self.run_git_command(&["config", key, value])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git config {} {} failed: {}",
+                key,
+                value,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn unset_git_config(&self, key: &str) -> Result<()> {
+        let output = self.run_git_command(&["config", "--unset-all", key])?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            // It's fine if it's not set.
+            Ok(())
+        }
+    }
+
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
         let file_path = std::path::Path::new(&self.repo_path).join(file);
         std::fs::write(file_path, content).context(format!("Failed to write file '{}'", file))?;

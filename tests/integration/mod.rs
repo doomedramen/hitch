@@ -11,6 +11,7 @@ pub mod lock_unlock_tests;
 pub mod promote_demote_tests;
 pub mod rebuild_tests;
 pub mod release_tests;
+pub mod rerere_shared_tests;
 pub mod resolve_tests;
 pub mod set_tests;
 pub mod status_tests;

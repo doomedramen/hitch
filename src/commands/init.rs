@@ -40,7 +40,7 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
 
         // Create .gitignore
         context.log_verbose("Creating .gitignore...");
-        let gitignore_content = "*\n!.gitignore\n!hitch.json\n";
+        let gitignore_content = "*\n!.gitignore\n!hitch.json\n!hitch/\n!hitch/**\n";
         context.git().write_file(".gitignore", gitignore_content)?;
 
         // Create or update hitch.json skeleton
