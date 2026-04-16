@@ -198,11 +198,8 @@ desktop-check:
 desktop-icons:
     @echo "🎨 Generating Hitch Desktop icons from hitch.svg..."
     mkdir -p crates/hitch-desktop/src-tauri/icons
-    magick -background none hitch.svg -resize 512x512 -alpha on -depth 8 -define png:bit-depth=8 -define png:color-type=6 crates/hitch-desktop/src-tauri/icons/icon.png
-    magick -background none hitch.svg -define icon:auto-resize=256,128,64,48,32,16 -depth 8 crates/hitch-desktop/src-tauri/icons/icon.ico
-    @command -v sips >/dev/null 2>&1 && \
-        sips -s format icns crates/hitch-desktop/src-tauri/icons/icon.png --out crates/hitch-desktop/src-tauri/icons/icon.icns >/dev/null || \
-        echo "sips not found; skipping .icns generation"
+    cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile --prefer-offline
+    cd crates/hitch-desktop && pnpm tauri icon --output src-tauri/icons ../../hitch.svg
 
 # Serve documentation locally
 docs-serve: docs
