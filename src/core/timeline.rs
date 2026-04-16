@@ -84,16 +84,18 @@ pub fn build_hitch_events(
     }
 
     let mut events = Vec::new();
-    // Iterate oldest -> newest so diffs make sense, but timestamp will be from the "new" commit.
-    for window in shas.windows(2).rev() {
-        let newer = &window[0];
-        let older = &window[1];
+    // `git log` returns newest -> oldest. Iterate oldest -> newest so diffs make sense, but
+    // timestamp will be from the "new" commit.
+    let mut shas = shas;
+    shas.reverse();
 
-        let new_cfg = read_config_at(context, newer)?;
-        let old_cfg = read_config_at(context, older)?;
-        let when = context.git().get_commit_timestamp(newer)?;
-
-        events.extend(diff_configs_to_events(&old_cfg, &new_cfg, when, &filter));
+    // Read/parse hitch.json once per commit (instead of twice per diff window).
+    let mut prev_cfg = read_config_at(context, &shas[0])?;
+    for sha in shas.iter().skip(1) {
+        let next_cfg = read_config_at(context, sha)?;
+        let when = context.git().get_commit_timestamp(sha)?;
+        events.extend(diff_configs_to_events(&prev_cfg, &next_cfg, when, &filter));
+        prev_cfg = next_cfg;
     }
 
     Ok(events)

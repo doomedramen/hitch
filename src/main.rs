@@ -1,13 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
-mod commands;
-mod core;
-mod tui;
-mod types;
-mod utils;
-
-use commands::global_context::GlobalContext;
+use hitch::commands;
+use hitch::commands::global_context::GlobalContext;
+use hitch::utils::logging::Logger;
 
 #[derive(Parser)]
 #[command(name = "hitch")]
@@ -74,11 +70,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize colored output
     colored::control::set_override(true);
 
+    // True no-args invocation should behave like `--help` and exit 0.
+    if std::env::args_os().len() == 1 {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    }
+
     let cli = Cli::parse();
 
-    // No subcommand => launch the TUI.
+    // No subcommand => print help (even if global flags are present).
     if cli.command.is_none() {
-        return tui::app::run_tui(cli.verbose, cli.no_push).map_err(|e| e.into());
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
     }
 
     // Configure logger for the specific command
@@ -104,7 +111,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create a new logger configured for this command
-    use crate::utils::logging::Logger;
     let logger = Arc::new(Logger::for_command(command_name, cli.verbose));
 
     // Create global context with flags

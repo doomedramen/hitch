@@ -3,24 +3,12 @@
 
 # Default recipe
 default:
-    @echo "Available commands:"
-    @echo "  build         - Build the project in release mode"
-    @echo "  format        - Format the code"
-    @echo "  lint          - Run linters"
-    @echo "  install       - Install the binary locally"
-    @echo "  test          - Run all tests"
-    @echo "  coverage      - Run tests with coverage (llvm-cov)"
-    @echo "  audit         - Run security audit"
-    @echo "  clean         - Clean build artifacts"
-    @echo "  dev           - Build in debug mode"
-    @echo "  run           - Run the hitch binary in debug mode"
-    @echo "  release       - Complete release process (bump version → test → build → tag → push → trigger CI/CD)"
-    @echo "  release-tag   - Create and push release tag for current version"
+    @just --list
 
 # Build the project in release mode
 build:
     @echo "🔨 Building Hitch in release mode..."
-    cargo build --release
+    cargo build --release -p hitch
     @echo "✅ Build complete. Binary available at: ./target/release/hitch"
 
 # Format the code using rustfmt
@@ -38,7 +26,7 @@ format-check:
 # Run linters (clippy)
 lint:
     @echo "🔍 Running linters..."
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy -p hitch --all-targets -- -D warnings
     @echo "✅ Linting completed (check output for warnings)"
 
 # Install the binary locally (release build)
@@ -56,13 +44,13 @@ install-release: build
 # Run all tests
 test:
     @echo "🧪 Running all tests..."
-    cargo test
+    cargo test -p hitch
     @echo "✅ All tests passed"
 
 # Run core tests only (for release when some integration tests are failing)
 test-core:
     @echo "🧪 Running core tests..."
-    cargo test --lib --bins
+    cargo test -p hitch --lib --bins
     @echo "✅ Core tests passed"
 
 # Run tests with verbose output
@@ -159,7 +147,7 @@ run-with args: dev
 # Check if the code compiles without building (faster than build)
 check:
     @echo "🔍 Checking if code compiles..."
-    cargo check
+    cargo check -p hitch
     @echo "✅ Code compiles successfully"
 
 # Update dependencies
@@ -178,14 +166,43 @@ outdated:
 # Generate documentation
 docs:
     @echo "📚 Generating documentation..."
-    cargo doc --no-deps --document-private-items
+    cargo doc -p hitch --no-deps --document-private-items
     @echo "✅ Documentation generated. Open with: cargo doc --open"
 
 # Generate documentation for CI (no-deps, all-features, private items)
 docs-ci:
     @echo "📚 Generating documentation for CI..."
-    cargo doc --no-deps --all-features --document-private-items
+    cargo doc -p hitch --no-deps --document-private-items
     @echo "✅ Documentation generated for CI"
+
+# -----------------------
+# Desktop GUI (Tauri)
+# -----------------------
+
+desktop-dev:
+    @echo "🖥️ Starting Hitch Desktop (dev)..."
+    cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
+    cd crates/hitch-desktop && pnpm tauri:dev
+
+desktop-build:
+    @echo "🖥️ Building Hitch Desktop..."
+    cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
+    cd crates/hitch-desktop && pnpm tauri:build
+
+desktop-check:
+    @echo "🖥️ Checking Hitch Desktop (frontend build + Rust compile)..."
+    cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile
+    cd crates/hitch-desktop && pnpm build
+    cargo check -p hitch-desktop
+
+desktop-icons:
+    @echo "🎨 Generating Hitch Desktop icons from hitch.svg..."
+    mkdir -p crates/hitch-desktop/src-tauri/icons
+    magick -background none hitch.svg -resize 512x512 -alpha on -depth 8 -define png:bit-depth=8 -define png:color-type=6 crates/hitch-desktop/src-tauri/icons/icon.png
+    magick -background none hitch.svg -define icon:auto-resize=256,128,64,48,32,16 -depth 8 crates/hitch-desktop/src-tauri/icons/icon.ico
+    @command -v sips >/dev/null 2>&1 && \
+        sips -s format icns crates/hitch-desktop/src-tauri/icons/icon.png --out crates/hitch-desktop/src-tauri/icons/icon.icns >/dev/null || \
+        echo "sips not found; skipping .icns generation"
 
 # Serve documentation locally
 docs-serve: docs

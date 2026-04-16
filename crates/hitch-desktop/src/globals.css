@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* GitHub Desktop–style dark neutrals */
+    --background: 220 8% 14%;
+    --foreground: 210 15% 92%;
+
+    --card: 220 8% 16%;
+    --card-foreground: 210 15% 92%;
+
+    --popover: 220 8% 16%;
+    --popover-foreground: 210 15% 92%;
+
+    /* Neutral-only primary (no brand accent) */
+    --primary: 220 7% 78%;
+    --primary-foreground: 220 10% 12%;
+
+    --secondary: 220 8% 18%;
+    --secondary-foreground: 210 15% 92%;
+
+    --muted: 220 7% 22%;
+    --muted-foreground: 215 10% 70%;
+
+    --accent: 220 7% 24%;
+    --accent-foreground: 210 15% 92%;
+
+    --destructive: 0 70% 52%;
+    --destructive-foreground: 210 15% 92%;
+
+    --border: 220 7% 28%;
+    --input: 220 7% 28%;
+    --ring: 220 7% 62%;
+
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    /* keep parity; we default to dark */
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    overflow: hidden;
+  }
+}

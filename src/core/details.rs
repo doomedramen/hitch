@@ -109,18 +109,13 @@ fn build_env_overview(env: &EnvironmentStatusModel) -> String {
             lines.push(format!("locked_at: {}", ts.format("%Y-%m-%d %H:%M UTC")));
         }
     }
-    lines.push(format!("promoted: {}", env.branches.len()));
-    if env.branches.is_empty() {
-        lines.push("branches: (none)".to_string());
-    } else {
-        lines.push("branches:".to_string());
-        let limit = 25usize;
-        for b in env.branches.iter().take(limit) {
-            lines.push(format!("  - {}", b));
-        }
-        if env.branches.len() > limit {
-            lines.push(format!("  … +{} more", env.branches.len() - limit));
-        }
+    lines.push(format!("branches ({}):", env.branches.len()));
+    let limit = 25usize;
+    for b in env.branches.iter().take(limit) {
+        lines.push(format!("  - {}", b));
+    }
+    if env.branches.len() > limit {
+        lines.push(format!("  … +{} more", env.branches.len() - limit));
     }
     match &env.rebuild_state {
         crate::core::status::RebuildState::UpToDate => {

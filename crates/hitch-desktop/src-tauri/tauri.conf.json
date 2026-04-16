@@ -1,0 +1,47 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "productName": "Hitch Desktop",
+  "version": "0.0.0",
+  "identifier": "com.doomedramen.hitchdesktop",
+  "app": {
+    "windows": [
+      {
+        "title": "Hitch Desktop",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 980,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "main",
+          "description": "Default permissions for the main window.",
+          "windows": ["*"],
+          "permissions": [
+            "core:default",
+            "dialog:allow-open",
+            "store:allow-load",
+            "store:allow-get-store",
+            "store:allow-get",
+            "store:allow-set",
+            "store:allow-save"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"]
+  }
+}

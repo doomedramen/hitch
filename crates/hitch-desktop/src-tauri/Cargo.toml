@@ -1,0 +1,31 @@
+[package]
+name = "hitch-desktop"
+version = "0.0.0"
+description = "Hitch Desktop GUI"
+authors = ["Martin Page"]
+license = "MIT"
+repository = "https://github.com/doomedramen/hitch"
+edition = "2021"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1.0"
+git2 = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+
+# Reuse Hitch's core/command implementation.
+hitch = { path = "../../.." }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

@@ -58,6 +58,50 @@ jobs:
     - name: Run tests
       run: just test-core
 
+  desktop-check:
+    name: Desktop Build Check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Enable corepack (pnpm)
+      run: corepack enable
+
+    - name: Install just
+      uses: taiki-e/install-action@just
+
+    - name: Install Tauri dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          build-essential \
+          curl \
+          wget \
+          file \
+          libssl-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev
+
+    - name: Build check
+      run: just desktop-check
+
   build-matrix:
     name: Build Matrix
     runs-on: ${{ matrix.os }}

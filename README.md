@@ -88,14 +88,29 @@ hitch set production --min-approvals 2
 hitch set production --add-approver alice@example.com
 ```
 
-## 🖥️ TUI (Default)
+## 🖥️ Desktop GUI (`hitch-desktop`)
 
-Running `hitch` with no subcommand launches an interactive terminal UI (mouse + keyboard).
+Hitch also ships with a desktop GUI as a separate tool: `hitch-desktop`.
+
+The CLI (`hitch`) is always available and prints help when run with no subcommand:
 
 ```bash
-hitch            # launches the TUI
-hitch status     # runs the CLI command directly
+hitch --help
+hitch status
 hitch rebuild dev
+```
+
+### Development (from source)
+
+```bash
+# From the repo root
+just desktop-dev
+```
+
+If you update `hitch.svg` and want the desktop app icon to match:
+
+```bash
+just desktop-icons
 ```
 
 ## 🛡️ Approval Workflow

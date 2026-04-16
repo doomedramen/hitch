@@ -31,6 +31,16 @@ impl HitchCommandRunner {
         HitchCommandBuilder::new(&self.binary_path).current_dir(&self.current_dir)
     }
 
+    /// Start building a hitch command without forcing `--no-push`
+    ///
+    /// Most tests should use `run()` (which defaults to `--no-push`), but this
+    /// is useful for asserting true "no-args" behavior.
+    pub fn run_raw(&self) -> HitchCommandBuilder<'_> {
+        HitchCommandBuilder::new(&self.binary_path)
+            .current_dir(&self.current_dir)
+            .with_no_push(false)
+    }
+
     /// Run hitch command with arguments directly (simpler API)
     pub fn exec(&self, args: &[&str]) -> Result<HitchCommandResult> {
         self.run().args(args).execute()
@@ -86,6 +96,12 @@ impl<'a> HitchCommandBuilder<'a> {
             self.args.push("--no-push".to_string());
         }
         self.no_push = true;
+        self
+    }
+
+    /// Control whether `--no-push` is injected at execution time.
+    pub fn with_no_push(mut self, no_push: bool) -> Self {
+        self.no_push = no_push;
         self
     }
 

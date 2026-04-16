@@ -7,3 +7,12 @@ lcov.info
 /htmlcov/
 .DS_Store
 coverage-report.txt
+
+# Desktop GUI
+.pnpm-store/
+/crates/hitch-desktop/node_modules/
+/crates/hitch-desktop/dist/*
+!/crates/hitch-desktop/dist/.keep
+/crates/hitch-desktop/src-tauri/target/
+/crates/hitch-desktop/src-tauri/gen/
+/crates/hitch-desktop/src-tauri/.tauri/

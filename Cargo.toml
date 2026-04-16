@@ -1,5 +1,5 @@
 [workspace]
-members = ["."]
+members = [".", "crates/hitch-desktop/src-tauri"]
 resolver = "2"
 
 [package]
@@ -57,17 +57,7 @@ parking_lot = "0.12"
 sha2 = "0.10"
 
 [features]
-# TUI is the default experience when running `hitch` with no subcommand.
-default = ["tui"]
-tui = ["dep:ratatui", "dep:crossterm"]
-
-[dependencies.ratatui]
-version = "0.29"
-optional = true
-
-[dependencies.crossterm]
-version = "0.29"
-optional = true
+default = []
 
 # The profile that 'dist' will build with
 [profile.dist]
