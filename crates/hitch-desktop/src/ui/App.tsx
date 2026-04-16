@@ -177,6 +177,39 @@ function looksCodey(value: string): boolean {
   return false;
 }
 
+function overviewKeyLabel(key: string): string {
+  switch (key.trim().toLowerCase()) {
+    case "diff_stat":
+      return "Diff";
+    default:
+      return key;
+  }
+}
+
+function DiffStatList({ items }: { items: string[] }) {
+  const summary = items.find((l) => l.includes("files changed"));
+  const rows = items.filter((l) => l !== summary);
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+        {rows.map((line, j) => {
+          const parts = line.split("|");
+          const file = (parts[0] ?? "").trim();
+          const stat = (parts[1] ?? "").trim();
+          return (
+            <React.Fragment key={j}>
+              <div className="min-w-0 truncate text-sm">{file.length > 0 ? file : line}</div>
+              <div className="text-xs font-mono text-muted-foreground">{stat.length > 0 ? stat : ""}</div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+      {summary ? <div className="text-xs text-muted-foreground">{summary.trim()}</div> : null}
+    </div>
+  );
+}
+
 function OverviewPanel({ text }: { text: string }) {
   const rows = useMemo(() => parseOverview(text), [text]);
   if (rows.length === 0) return <div className="text-sm text-muted-foreground">No overview.</div>;
@@ -194,15 +227,18 @@ function OverviewPanel({ text }: { text: string }) {
         }
 
         if (row.kind === "list") {
+          const isDiffStat = row.key.trim().toLowerCase() === "diff_stat";
           return (
             <div key={idx} className={cn("py-2", showDivider ? "border-b border-border" : "")}>
               <div className="grid grid-cols-[140px_1fr] gap-3">
                 <div className="pt-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {row.key}
+                  {overviewKeyLabel(row.key)}
                 </div>
                 <div className="min-w-0">
                   {row.items.length === 0 ? (
                     <div className="text-sm text-muted-foreground">None</div>
+                  ) : isDiffStat ? (
+                    <DiffStatList items={row.items} />
                   ) : (
                     <ul className="space-y-1">
                       {row.items.map((it, j) => (
@@ -236,7 +272,9 @@ function OverviewPanel({ text }: { text: string }) {
         return (
           <div key={idx} className={cn("py-2", showDivider ? "border-b border-border" : "")}>
             <div className="grid grid-cols-[140px_1fr] gap-3">
-              <div className="pt-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">{row.key}</div>
+              <div className="pt-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {overviewKeyLabel(row.key)}
+              </div>
               <div className="min-w-0 text-sm">
                 {badge ?? (
                   <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-xs" : "")}>
