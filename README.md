@@ -107,6 +107,13 @@ hitch rebuild dev
 just desktop-dev
 ```
 
+### Build (macOS)
+
+```bash
+# Builds a .dmg in crates/hitch-desktop/src-tauri/target/release/bundle/
+just desktop-build-dmg
+```
+
 If you update `hitch.svg` and want the desktop app icon to match:
 
 ```bash

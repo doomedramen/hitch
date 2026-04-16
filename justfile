@@ -189,6 +189,11 @@ desktop-build:
     cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
     cd crates/hitch-desktop && pnpm tauri:build
 
+desktop-build-dmg:
+    @echo "🖥️ Building Hitch Desktop (macOS DMG)..."
+    cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
+    cd crates/hitch-desktop && pnpm tauri build --bundles dmg
+
 desktop-check:
     @echo "🖥️ Checking Hitch Desktop (frontend build + Rust compile)..."
     cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile

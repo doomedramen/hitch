@@ -58,7 +58,11 @@ jobs:
       - name: Build desktop bundles
         run: |
           cd crates/hitch-desktop
-          pnpm tauri:build
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            pnpm tauri build --bundles dmg
+          else
+            pnpm tauri:build
+          fi
 
       - name: Wait for cargo-dist release to exist
         shell: bash
