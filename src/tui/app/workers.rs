@@ -609,6 +609,9 @@ impl App {
                 env_name,
                 target_branch: None,
                 force: true,
+                no_prune: false,
+                no_rebuild_dependents: false,
+                squash: false,
             };
             let res = crate::commands::release::run(args, &context);
             let _ = tx.send(WorkerMsg::Done {

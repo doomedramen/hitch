@@ -976,6 +976,34 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Merge a branch into the current branch with a merge commit.
+    ///
+    /// This preserves Git ancestry (unlike squash merges), which is important for stacked branches:
+    /// downstream branches based on the merged branch won't need rebasing to avoid duplicated diffs.
+    ///
+    /// Uses `--no-ff` to always record a merge commit when a merge is performed.
+    pub fn merge_no_ff_with_message(&self, source_branch: &str, message: &str) -> Result<()> {
+        let output = self.run_git_command(&[
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "--no-verify",
+            "-m",
+            message,
+            source_branch,
+        ])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to merge branch '{}' with a merge commit: {}",
+                source_branch,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Check if a merge would result in conflicts and return detailed conflict info
     pub fn check_merge_conflicts_detailed(
         &self,

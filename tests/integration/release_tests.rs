@@ -54,6 +54,185 @@ mod tests {
     }
 
     #[test]
+    fn test_hitch_release_preserves_ancestry_for_stacked_branches() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Create a stacked branch setup:
+            // feature-2 is based on feature-1. Only feature-1 is promoted/released.
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+
+            env.git.run(&["checkout", "-b", "feature-2"])?;
+            env.fs.write_file("f2.txt", "feature 2")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 2"])?;
+
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            // feature-1 should now be an ancestor of main (merge commit preserves ancestry)
+            env.git
+                .run(&["merge-base", "--is-ancestor", "feature-1", "main"])?
+                .assert_success();
+
+            // feature-2 should only be ahead of main by its own commit; feature-1 shouldn't show up.
+            let log = env
+                .git
+                .run(&["log", "--oneline", "main..feature-2"])?
+                .stdout();
+            assert!(
+                log.contains("Add feature 2"),
+                "expected stacked branch to contain its own commit; got:\n{}",
+                log
+            );
+            assert!(
+                !log.contains("Add feature 1"),
+                "expected released base commit to be part of main ancestry; got:\n{}",
+                log
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_release_prunes_promoted_branches_in_other_envs() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_success();
+
+            // Create a feature branch and promote it to multiple environments.
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "qa"])
+                .execute()?
+                .assert_success();
+
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            let cfg = env.read_hitch_config()?;
+            let dev = cfg
+                .environments
+                .get("dev")
+                .expect("dev environment missing");
+            let qa = cfg.environments.get("qa").expect("qa environment missing");
+
+            assert!(
+                !dev.branches.contains(&"feature-1".to_string()),
+                "expected release to prune feature-1 from dev promotions"
+            );
+            assert!(
+                !qa.branches.contains(&"feature-1".to_string()),
+                "expected release to prune feature-1 from qa promotions"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_release_rebuilds_dependent_environments_in_order() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // qa is based on dev (transitive dependency). This requires the base branch to exist,
+            // so we add it after dev has been created by the promote/rebuild.
+            env.hitch
+                .run()
+                .args(&["add", "qa", "--base", "dev"])
+                .execute()?
+                .assert_success();
+
+            // qa branch should not exist yet (no promotions, no rebuild).
+            env.git
+                .run(&["show-ref", "--verify", "--quiet", "refs/heads/qa"])?
+                .assert_failure();
+
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            // Dependent rebuild should create/update qa environment branch.
+            env.git
+                .run(&["show-ref", "--verify", "--quiet", "refs/heads/qa"])?
+                .assert_success();
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
     fn test_hitch_release_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
