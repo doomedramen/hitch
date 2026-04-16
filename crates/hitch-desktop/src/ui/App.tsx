@@ -1066,22 +1066,27 @@ export function App() {
                       <TabsContent value="timeline" className="m-0 mt-0">
                         {detailsTimeline.length === 0 ? (
                           <div className="text-sm text-muted-foreground">No timeline entries.</div>
-                        ) : (
-                          <div className="space-y-3">
-                            {detailsTimeline.map((t, i) => (
-                                <div key={i} className="space-y-1">
-                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                  <span className="whitespace-nowrap">{dateFmt.format(new Date(t.when))}</span>
-                                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                                    <TimelineKindIcon kind={t.kind} className="h-3.5 w-3.5" />
-                                    <span>{t.kind}</span>
-                                  </span>
-                                </div>
-                                <div className="text-sm">{t.summary}</div>
-                                {t.detail ? (
-                                  <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
-                                    {t.detail}
-                                  </pre>
+	                        ) : (
+	                          <div className="space-y-3">
+	                            {detailsTimeline.map((t, i) => (
+	                              <div key={i} className="space-y-1">
+	                                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+	                                  <span className="min-w-0 truncate">
+	                                    {dateFmt.format(new Date(t.when))}
+	                                  </span>
+	                                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+	                                    <TimelineKindIcon
+	                                      kind={t.kind}
+	                                      className="h-3.5 w-3.5 text-muted-foreground"
+	                                    />
+	                                    <span>{t.kind}</span>
+	                                  </span>
+	                                </div>
+	                                <div className="text-sm">{t.summary}</div>
+	                                {t.detail ? (
+	                                  <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
+	                                    {t.detail}
+	                                  </pre>
                                 ) : null}
                                 <Separator className="mt-3" />
                               </div>
