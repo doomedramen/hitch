@@ -1069,11 +1069,10 @@ export function App() {
                         ) : (
                           <div className="space-y-3">
                             {detailsTimeline.map((t, i) => (
-                              <div key={i} className="space-y-1">
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                  <span>{dateFmt.format(new Date(t.when))}</span>
-                                  <span aria-hidden="true">•</span>
-                                  <span className="inline-flex items-center gap-1">
+                                <div key={i} className="space-y-1">
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                  <span className="whitespace-nowrap">{dateFmt.format(new Date(t.when))}</span>
+                                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
                                     <TimelineKindIcon kind={t.kind} className="h-3.5 w-3.5" />
                                     <span>{t.kind}</span>
                                   </span>
