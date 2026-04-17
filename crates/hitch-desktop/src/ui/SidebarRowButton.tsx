@@ -24,10 +24,12 @@ export function SidebarRowButton({
     <button
       type={type ?? "button"}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-md pl-2 pr-3 text-left transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
-        hasSubtitle ? "items-start py-2" : "h-10 items-center",
-        selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-none border-2 border-transparent pl-2 pr-3 text-left transition-all",
+        "focus-visible:outline-none focus-visible:translate-x-[2px] focus-visible:border-black",
+        hasSubtitle ? "items-start py-2" : "h-11 items-center",
+        selected
+          ? "border-black bg-primary text-primary-foreground shadow-neo-sm"
+          : "hover:border-black hover:bg-primary/80",
         className
       )}
       {...props}
@@ -36,7 +38,7 @@ export function SidebarRowButton({
         <span
           className={cn(
             "shrink-0",
-            selected ? "text-accent-foreground/80" : "text-muted-foreground",
+            selected ? "text-inherit" : "text-black/60",
             hasSubtitle ? "mt-0.5" : ""
           )}
           aria-hidden="true"
@@ -45,8 +47,8 @@ export function SidebarRowButton({
         </span>
       ) : null}
       <span className="min-w-0 overflow-hidden">
-        <span className="block truncate text-sm">{label}</span>
-        {hasSubtitle ? <span className="mt-0.5 block truncate text-xs text-muted-foreground">{subtitle}</span> : null}
+        <span className="block truncate text-sm font-black uppercase tracking-tight">{label}</span>
+        {hasSubtitle ? <span className="mt-0.5 block truncate text-[10px] font-bold uppercase text-black/60">{subtitle}</span> : null}
       </span>
       {trailing ? (
         <span

@@ -5,10 +5,14 @@ import { cn } from "@/lib/utils";
 
 const ScrollArea = React.forwardRef<
   React.ElementRef<typeof ScrollAreaPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & { viewportClassName?: string }
->(({ className, viewportClassName, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
+    viewportClassName?: string;
+    scrollbarClassName?: string;
+  }
+>(({ className, viewportClassName, scrollbarClassName, children, ...props }, ref) => (
   <ScrollAreaPrimitive.Root
     ref={ref}
+    type="hover"
     className={cn("relative overflow-hidden", className)}
     {...props}
   >
@@ -17,7 +21,7 @@ const ScrollArea = React.forwardRef<
     >
       {children}
     </ScrollAreaPrimitive.Viewport>
-    <ScrollBar />
+    <ScrollBar className={scrollbarClassName} />
     <ScrollAreaPrimitive.Corner />
   </ScrollAreaPrimitive.Root>
 ));
@@ -31,16 +35,16 @@ const ScrollBar = React.forwardRef<
     ref={ref}
     orientation={orientation}
     className={cn(
-      "flex touch-none select-none transition-colors",
+      "flex touch-none select-none transition-colors z-20",
       orientation === "vertical" &&
-        "h-full w-2 border-l border-l-transparent p-[1px]",
+        "h-full w-3 border-l-2 border-black p-[2px]",
       orientation === "horizontal" &&
-        "h-2 flex-col border-t border-t-transparent p-[1px]",
+        "h-3 flex-col border-t-2 border-black p-[2px]",
       className
     )}
     {...props}
   >
-    <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-border" />
+    <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-none bg-black" />
   </ScrollAreaPrimitive.Scrollbar>
 ));
 ScrollBar.displayName = ScrollAreaPrimitive.Scrollbar.displayName;

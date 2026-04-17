@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -28,13 +29,16 @@ import {
   Layers,
   LoaderCircle,
   LockKeyhole,
+  Maximize2,
+  Minimize2,
   Monitor,
   RefreshCw,
   Rocket,
   Search,
   ShieldCheck,
   Trash2,
-  TriangleAlert
+  TriangleAlert,
+  X
 } from "lucide-react";
 import { loadRepos, saveRepos } from "./storage";
 import type {
@@ -48,6 +52,47 @@ import type {
 import { branchDetails, envDetails, promote, rebuild, release, repoProbe, workspaceIndex } from "./tauri";
 import { OutputLevelIcon, RepoIdentityIcon, TimelineKindIcon } from "./icons";
 import { SidebarRowButton } from "./SidebarRowButton";
+
+const appWindow = getCurrentWindow();
+
+function TitleBar() {
+  return (
+    <div
+      data-tauri-drag-region
+      className="flex h-11 w-full items-center justify-between border-b-4 border-black bg-primary pl-3 select-none"
+    >
+      <div data-tauri-drag-region className="flex items-center gap-2">
+        <div className="h-6 w-6 border-2 border-black bg-white flex items-center justify-center shadow-neo-sm">
+          <span className="text-[10px] font-black italic">H</span>
+        </div>
+        <span className="text-xs font-black uppercase tracking-widest text-black">Hitch Desktop</span>
+      </div>
+      <div className="flex h-full items-center">
+        <button
+          onClick={() => void appWindow.minimize()}
+          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-black/10 transition-colors"
+          title="Minimize"
+        >
+          <Minimize2 className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => void appWindow.toggleMaximize()}
+          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-black/10 transition-colors"
+          title="Maximize"
+        >
+          <Maximize2 className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => void appWindow.close()}
+          className="flex h-full w-12 items-center justify-center border-l-2 border-black hover:bg-destructive hover:text-white transition-colors"
+          title="Close"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 type Selection =
   | { kind: "none" }
@@ -115,7 +160,7 @@ function SidebarSectionHeading({
   return (
     <div
       className={cn(
-        "px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+        "px-2 py-1 mb-1 text-[11px] font-black uppercase tracking-widest text-white bg-black",
         className
       )}
       {...props}
@@ -199,20 +244,20 @@ function DiffStatList({ items }: { items: string[] }) {
           const stat = (parts[1] ?? "").trim();
           return (
             <React.Fragment key={j}>
-              <div className="min-w-0 truncate text-sm">{file.length > 0 ? file : line}</div>
-              <div className="text-xs font-mono text-muted-foreground">{stat.length > 0 ? stat : ""}</div>
+              <div className="min-w-0 truncate text-sm font-bold">{file.length > 0 ? file : line}</div>
+              <div className="text-xs font-black font-mono text-black bg-accent px-1 shadow-neo-sm border border-black">{stat.length > 0 ? stat : ""}</div>
             </React.Fragment>
           );
         })}
       </div>
-      {summary ? <div className="text-xs text-muted-foreground">{summary.trim()}</div> : null}
+      {summary ? <div className="text-xs font-black uppercase text-black bg-primary px-2 py-0.5 border border-black shadow-neo-sm inline-block">{summary.trim()}</div> : null}
     </div>
   );
 }
 
 function OverviewPanel({ text }: { text: string }) {
   const rows = useMemo(() => parseOverview(text), [text]);
-  if (rows.length === 0) return <div className="text-sm text-muted-foreground">No overview.</div>;
+  if (rows.length === 0) return <div className="py-12 text-sm font-black uppercase text-black/20 text-center italic">No overview</div>;
 
   return (
     <div className="space-y-1">
@@ -261,8 +306,8 @@ function OverviewPanel({ text }: { text: string }) {
           row.key === "locked" && (isYes || isNo) ? (
             <span
               className={cn(
-                "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                isYes ? "bg-destructive/15 text-destructive" : "bg-secondary text-secondary-foreground"
+                "inline-flex items-center rounded-none border-2 border-black px-2 py-0.5 text-xs font-bold",
+                isYes ? "bg-destructive text-destructive-foreground shadow-neo-sm" : "bg-secondary text-secondary-foreground shadow-neo-sm"
               )}
             >
               {row.value}
@@ -270,14 +315,14 @@ function OverviewPanel({ text }: { text: string }) {
           ) : null;
 
         return (
-          <div key={idx} className={cn("py-2", showDivider ? "border-b border-border" : "")}>
+          <div key={idx} className={cn("py-3", showDivider ? "border-b-2 border-black" : "")}>
             <div className="grid grid-cols-[140px_1fr] gap-3">
-              <div className="pt-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="pt-0.5 text-xs font-black uppercase tracking-wider text-black">
                 {overviewKeyLabel(row.key)}
               </div>
-              <div className="min-w-0 text-sm">
+              <div className="min-w-0 text-sm font-medium">
                 {badge ?? (
-                  <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-xs" : "")}>
+                  <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-xs bg-muted/30 px-1 py-0.5 border border-black shadow-neo-sm" : "")}>
                     {row.value.length === 0 ? <span className="text-muted-foreground">—</span> : row.value}
                   </span>
                 )}
@@ -663,32 +708,34 @@ export function App() {
         : [];
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
-      <aside className="flex w-[420px] min-w-[340px] shrink-0 flex-col border-r border-border bg-secondary">
-        <div className="border-b border-border/70 bg-gradient-to-b from-black/10 to-secondary px-3 pb-3 pt-3">
+    <div className="flex flex-col h-full w-full bg-background">
+      <TitleBar />
+      <div className="flex flex-1 w-full overflow-hidden">
+        <aside className="flex w-[420px] min-w-[340px] shrink-0 flex-col border-r-4 border-black bg-white">
+        <div className="flex h-16 items-center border-b-4 border-black bg-primary px-3">
           <button
             type="button"
             onClick={toggleRepoList}
             className={cn(
-              "flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left transition-colors",
-              "hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
+              "flex h-10 w-full items-center justify-between gap-3 rounded-[var(--border-radius,0px)] border-2 border-black bg-white px-2 text-left transition-all shadow-neo-sm",
+              "hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo hover:bg-accent-hover/20 focus-visible:outline-none"
             )}
           >
             <div className="flex min-w-0 items-center gap-3">
-              <Monitor className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Current Repository
-              </div>
+              <Monitor className="h-6 w-6 shrink-0 text-black" aria-hidden="true" />
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold tracking-tight">
+                <div className="text-[10px] font-black uppercase tracking-widest text-black/60">
+                  Current Repository
+                </div>
+                <div className="truncate text-sm font-black uppercase tracking-tight text-black">
                   {selectedRepo ? selectedRepo.display_name : "Select a repository"}
                 </div>
               </div>
             </div>
             {repoListOpen ? (
-              <ChevronUp className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <ChevronUp className="h-5 w-5 shrink-0 text-black" aria-hidden="true" />
             ) : (
-              <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <ChevronDown className="h-5 w-5 shrink-0 text-black" aria-hidden="true" />
             )}
           </button>
         </div>
@@ -719,15 +766,15 @@ export function App() {
               </Button>
             </div>
             <Separator />
-            <ScrollArea className="flex-1" viewportClassName="pr-3">
+            <ScrollArea className="flex-1" scrollbarClassName="bg-white">
               <div className="space-y-6 p-2">
                 {repos.length === 0 ? (
-                  <div className="px-2 py-1 text-sm text-muted-foreground">No repositories yet.</div>
+                  <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No repositories yet</div>
                 ) : repoListModel.mode === "filtered" ? (
                   <div className="space-y-1">
                     <SidebarSectionHeading>Results</SidebarSectionHeading>
                     {repoListModel.results.length === 0 ? (
-                      <div className="px-2 py-1 text-sm text-muted-foreground">No matches.</div>
+                      <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No matches</div>
                     ) : (
                       <div className="space-y-1">
                         {repoListModel.results.map((r) => (
@@ -749,7 +796,7 @@ export function App() {
                     <div className="space-y-1">
                       <SidebarSectionHeading>Recent</SidebarSectionHeading>
                       {repoListModel.recent.length === 0 ? (
-                        <div className="px-2 py-1 text-sm text-muted-foreground">No recent repositories.</div>
+                        <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No recent repositories</div>
                       ) : (
                         <div className="space-y-1">
                           {repoListModel.recent.map((r) => (
@@ -807,22 +854,33 @@ export function App() {
                 />
               </div>
 
-              {indexLoading ? <div className="text-xs text-muted-foreground">Loading…</div> : null}
-              {indexError ? <div className="text-xs text-destructive">{indexError}</div> : null}
               {!filteredIndex && !indexLoading && !indexError && !selectedRepo ? (
-                <div className="text-xs text-muted-foreground">No workspace loaded.</div>
+                <div className="text-[10px] font-black uppercase text-black/40 px-3">No workspace loaded.</div>
               ) : null}
             </div>
             <Separator />
 
-            <ScrollArea className="flex-1" viewportClassName="pr-3">
+            <ScrollArea className="flex-1" scrollbarClassName="bg-white">
               <div className="space-y-6 p-2">
+                {indexLoading ? (
+                  <div className="flex items-center gap-2 px-2 py-4 text-xs font-black uppercase animate-pulse text-black">
+                    <LoaderCircle className="h-5 w-5 animate-spin" />
+                    Loading workspace…
+                  </div>
+                ) : null}
+                {indexError ? (
+                  <div className="px-2 py-4 border-2 border-black bg-destructive text-white shadow-neo-sm">
+                    <div className="text-[10px] font-black uppercase mb-1">Error</div>
+                    <div className="text-sm font-black uppercase leading-tight">{indexError}</div>
+                  </div>
+                ) : null}
+
                 {filteredIndex ? (
                   <>
                     <div className="space-y-1">
                       <SidebarSectionHeading>Environments</SidebarSectionHeading>
                       {filteredIndex.environments.length === 0 ? (
-                        <div className="px-2 py-1 text-sm text-muted-foreground">None</div>
+                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
                       {filteredIndex.environments.map((e) => (
                         <SidebarRowButton
@@ -844,10 +902,10 @@ export function App() {
                             </span>
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
                               {e.requires_approval ? (
                                 <>
-                                  <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  <ShieldCheck className="h-3.5 w-3.5 text-black" aria-hidden="true" />
                                   approvals {e.min_approvals}+
                                 </>
                               ) : (
@@ -864,7 +922,7 @@ export function App() {
                     <div className="space-y-1">
                       <SidebarSectionHeading>Promoted branches</SidebarSectionHeading>
                       {filteredIndex.promoted_branches.length === 0 ? (
-                        <div className="px-2 py-1 text-sm text-muted-foreground">None</div>
+                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
                       {filteredIndex.promoted_branches.map((b) => (
                         <SidebarRowButton
@@ -879,15 +937,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-black" aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-black" aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -906,7 +964,7 @@ export function App() {
                     <div className="space-y-1">
                       <SidebarSectionHeading>Branches</SidebarSectionHeading>
                       {filteredIndex.branches.length === 0 ? (
-                        <div className="px-2 py-1 text-sm text-muted-foreground">None</div>
+                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
                       {filteredIndex.branches.map((b) => (
                         <SidebarRowButton
@@ -921,15 +979,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-black" aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-black" aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -971,30 +1029,30 @@ export function App() {
             onValueChange={(v) => setTab(v === "timeline" ? "timeline" : "overview")}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <div className="flex items-center justify-between gap-3 px-3 py-3">
-              <TabsList>
+            <div className="flex h-16 items-center justify-between gap-3 border-b-4 border-black px-3">
+              <TabsList className="h-10">
                 <TabsTrigger value="overview" className="group">
-                  <FileText className="mr-2 h-4 w-4 text-muted-foreground group-data-[state=active]:text-foreground/80" aria-hidden="true" />
+                  <FileText className="mr-2 h-4 w-4 text-black group-data-[state=active]:text-black" aria-hidden="true" />
                   Overview
                 </TabsTrigger>
                 <TabsTrigger value="timeline" className="group">
-                  <History className="mr-2 h-4 w-4 text-muted-foreground group-data-[state=active]:text-foreground/80" aria-hidden="true" />
+                  <History className="mr-2 h-4 w-4 text-black group-data-[state=active]:text-black" aria-hidden="true" />
                   Timeline
                 </TabsTrigger>
               </TabsList>
 
               <div className="flex items-center gap-3">
                 {status !== "Ready" ? (
-                  <div className="hidden text-xs text-muted-foreground sm:block">{status}</div>
+                  <div className="hidden text-[10px] font-black uppercase text-black/60 sm:block">{status}</div>
                 ) : null}
                 {selectedRepo && selection.kind === "branch" && !selection.isEnvironment ? (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="min-w-24 justify-center"
+                    className="h-10 min-w-24 justify-center"
                     onClick={() => setPromotePicker({ branch: selection.name })}
                   >
-                    <ArrowUpRight className="mr-2 h-4 w-4 opacity-90" aria-hidden="true" />
+                    <ArrowUpRight className="mr-2 h-4 w-4 text-black" aria-hidden="true" />
                     Promote…
                   </Button>
                 ) : null}
@@ -1003,7 +1061,7 @@ export function App() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="min-w-24 justify-center"
+                      className="h-10 min-w-24 justify-center"
                       onClick={() =>
                         setConfirm({
                           title: `Rebuild ${selection.name}`,
@@ -1017,13 +1075,13 @@ export function App() {
                         })
                       }
                     >
-                      <RefreshCw className="mr-2 h-4 w-4 opacity-90" aria-hidden="true" />
+                      <RefreshCw className="mr-2 h-4 w-4 text-black" aria-hidden="true" />
                       Rebuild
                     </Button>
                     <Button
                       variant="destructive"
                       size="sm"
-                      className="min-w-24 justify-center"
+                      className="h-10 min-w-24 justify-center"
                       onClick={() =>
                         setConfirm({
                           title: `Release ${selection.name}`,
@@ -1035,22 +1093,28 @@ export function App() {
                         })
                       }
                     >
-                      <Rocket className="mr-2 h-4 w-4 opacity-90" aria-hidden="true" />
+                      <Rocket className="mr-2 h-4 w-4 text-white" aria-hidden="true" />
                       Release
                     </Button>
                   </>
                 ) : null}
               </div>
             </div>
-            <Separator />
 
             <div className="relative min-h-0 flex-1">
-              <ScrollArea className="h-full">
+              <ScrollArea className="h-full" scrollbarClassName="bg-background">
                 <div className="space-y-3 px-4 py-4">
-                  {detailsError ? <div className="text-sm text-destructive">{detailsError}</div> : null}
+                  {detailsError ? (
+                    <div className="p-4 border-2 border-black bg-destructive text-destructive-foreground font-black uppercase shadow-neo-sm">
+                      {detailsError}
+                    </div>
+                  ) : null}
+                  
                   {renderedSelection.kind === "none" ? (
-                    <div className="text-sm text-muted-foreground">
-                      Select a branch or environment to see details.
+                    <div className="flex flex-col items-center justify-center py-24 px-6 border-4 border-dashed border-black/10">
+                      <div className="text-lg font-black uppercase tracking-tighter text-black/20 text-center leading-none">
+                        Select a branch or environment<br />to see details
+                      </div>
                     </div>
                   ) : null}
 
@@ -1065,31 +1129,34 @@ export function App() {
                       </TabsContent>
                       <TabsContent value="timeline" className="m-0 mt-0">
                         {detailsTimeline.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">No timeline entries.</div>
+                          <div className="py-24 flex items-center justify-center border-4 border-dashed border-black/10">
+                            <div className="text-sm font-black uppercase text-black/20">No timeline entries</div>
+                          </div>
 	                        ) : (
 	                          <div className="space-y-3">
 	                            {detailsTimeline.map((t, i) => (
-	                              <div key={i} className="space-y-1">
-	                                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-	                                  <span className="min-w-0 truncate">
-	                                    {dateFmt.format(new Date(t.when))}
-	                                  </span>
-	                                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">
-	                                    <TimelineKindIcon
-	                                      kind={t.kind}
-	                                      className="h-3.5 w-3.5 text-muted-foreground"
-	                                    />
-	                                    <span>{t.kind}</span>
-	                                  </span>
-	                                </div>
-	                                <div className="text-sm">{t.summary}</div>
-	                                {t.detail ? (
-	                                  <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
-	                                    {t.detail}
-	                                  </pre>
-                                ) : null}
-                                <Separator className="mt-3" />
-                              </div>
+	                              <div key={i} className="space-y-1 mb-4 border-b-2 border-black pb-4">
+	                                  <div className="flex items-center justify-between gap-3 text-xs text-black font-black uppercase">
+	                                    <span className="min-w-0 truncate">
+	                                      {dateFmt.format(new Date(t.when))}
+	                                    </span>
+	                                    <span className="inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm">
+	                                      <TimelineKindIcon
+	                                        kind={t.kind}
+	                                        className="h-3.5 w-3.5 text-white"
+	                                      />
+	                                      <span>{t.kind}</span>
+	                                    </span>
+
+	                                  </div>
+	                                  <div className="text-sm font-bold uppercase tracking-tight">{t.summary}</div>
+	                                  {t.detail ? (
+	                                    <pre className="whitespace-pre-wrap break-words border-2 border-black bg-muted/20 p-4 text-xs font-bold leading-5 text-black shadow-neo">
+	                                      {t.detail}
+	                                    </pre>
+	                              ) : null}
+	                              </div>
+
                             ))}
                           </div>
                         )}
@@ -1119,6 +1186,7 @@ export function App() {
           </Tabs>
         </section>
       </main>
+    </div>
 
       {/* Repository missing */}
       <Dialog open={repoMissing != null} onOpenChange={(v) => (!v ? setRepoMissing(null) : null)}>

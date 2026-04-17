@@ -4,41 +4,40 @@
 
 @layer base {
   :root {
-    /* GitHub Desktop–style dark neutrals */
-    --background: 220 8% 14%;
-    --foreground: 210 15% 92%;
+    --border-radius: 0px;
+    --box-shadow-x: 4px;
+    --box-shadow-y: 4px;
+    
+    --heading-font-weight: 800;
+    --base-font-weight: 500;
 
-    --card: 220 8% 16%;
-    --card-foreground: 210 15% 92%;
+    /* Neobrutalist Palette */
+    --background: 255 100% 97%; /* Pale Lavender Background (#F3F0FF) */
+    --foreground: 0 0% 0%;
+    
+    --primary: 48 96% 53%; /* Bright Yellow */
+    --primary-foreground: 0 0% 0%;
 
-    --popover: 220 8% 16%;
-    --popover-foreground: 210 15% 92%;
+    --accent-hover: 255 100% 90%; /* Deeper Lavender for hover */
 
-    /* Neutral-only primary (no brand accent) */
-    --primary: 220 7% 78%;
-    --primary-foreground: 220 10% 12%;
+    --secondary: 271 91% 65%; /* Purple */
+    --secondary-foreground: 0 0% 100%;
 
-    --secondary: 220 8% 18%;
-    --secondary-foreground: 210 15% 92%;
+    --accent: 142 71% 45%; /* Green */
+    --accent-foreground: 0 0% 0%;
 
-    --muted: 220 7% 22%;
-    --muted-foreground: 215 10% 70%;
+    --muted: 0 0% 90%;
+    --muted-foreground: 0 0% 40%;
 
-    --accent: 220 7% 24%;
-    --accent-foreground: 210 15% 92%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
 
-    --destructive: 0 70% 52%;
-    --destructive-foreground: 210 15% 92%;
+    --border: 0 0% 0%;
+    --input: 0 0% 0%;
+    --ring: 0 0% 0%;
 
-    --border: 220 7% 28%;
-    --input: 220 7% 28%;
-    --ring: 220 7% 62%;
-
-    --radius: 0.75rem;
-  }
-
-  .dark {
-    /* keep parity; we default to dark */
+    --radius: var(--border-radius);
+    --shadow: var(--box-shadow-x) var(--box-shadow-y) 0px 0px hsl(var(--border));
   }
 
   * {
@@ -52,7 +51,43 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased font-medium;
     overflow: hidden;
   }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-black uppercase tracking-tight;
+  }
+}
+
+@layer utilities {
+  .shadow-neo {
+    box-shadow: var(--box-shadow-x) var(--box-shadow-y) 0px 0px rgba(0, 0, 0, 1);
+  }
+  .shadow-neo-sm {
+    box-shadow: 2px 2px 0px 0px rgba(0, 0, 0, 1);
+  }
+  .shadow-neo-lg {
+    box-shadow: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: white;
+  border-left: 2px solid black;
+}
+
+::-webkit-scrollbar-thumb {
+  background: black;
+  border: 2px solid black;
+}
+
+::-webkit-scrollbar-corner {
+  background: white;
 }
