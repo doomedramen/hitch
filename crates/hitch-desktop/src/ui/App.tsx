@@ -708,7 +708,7 @@ export function App() {
         : [];
 
   return (
-    <div className="flex flex-col h-full w-full bg-background">
+    <div className="flex flex-col h-full w-full bg-background border-4 border-black overflow-hidden">
       <TitleBar />
       <div className="flex flex-1 w-full overflow-hidden">
         <aside className="flex w-[420px] min-w-[340px] shrink-0 flex-col border-r-4 border-black bg-white">
@@ -902,10 +902,10 @@ export function App() {
                             </span>
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
                               {e.requires_approval ? (
                                 <>
-                                  <ShieldCheck className="h-3.5 w-3.5 text-black" aria-hidden="true" />
+                                  <ShieldCheck className="h-3.5 w-3.5 text-white" aria-hidden="true" />
                                   approvals {e.min_approvals}+
                                 </>
                               ) : (
@@ -937,15 +937,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-black" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-white" aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-black" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-white" aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -979,15 +979,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-white px-2 py-0.5 text-xs font-bold text-black shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-black" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-white" aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-black" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-white" aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -1168,8 +1168,8 @@ export function App() {
 
               {detailsLoading ? (
                 <div className="pointer-events-none absolute inset-0 flex items-start justify-end p-3">
-                  <div className="flex items-center gap-2 rounded-md border border-border bg-background/80 px-2 py-1 text-xs text-muted-foreground backdrop-blur">
-                    <LoaderCircle className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
+                  <div className="flex items-center gap-2 rounded-none border-2 border-black bg-white px-3 py-2 text-[10px] font-black uppercase text-black shadow-neo-sm">
+                    <LoaderCircle className="h-4 w-4 animate-spin text-black" aria-hidden="true" />
                     <div className="max-w-[28ch] truncate">
                       Loading{" "}
                       {selection.kind === "env"
@@ -1177,7 +1177,6 @@ export function App() {
                         : selection.kind === "branch"
                           ? selection.name
                           : "details"}
-                      …
                     </div>
                   </div>
                 </div>
