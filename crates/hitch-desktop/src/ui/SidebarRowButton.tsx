@@ -24,12 +24,12 @@ export function SidebarRowButton({
     <button
       type={type ?? "button"}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-none border-2 border-transparent pl-2 pr-3 text-left transition-all",
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-none border-2 border-black pl-2 pr-3 text-left transition-all",
         "focus-visible:outline-none focus-visible:translate-x-[2px] focus-visible:border-black",
         hasSubtitle ? "items-start py-2" : "h-11 items-center",
         selected
-          ? "border-black bg-primary text-primary-foreground shadow-neo-sm"
-          : "hover:border-black hover:bg-primary/80",
+          ? "bg-primary text-primary-foreground shadow-neo-sm translate-x-[-1px] translate-y-[-1px]"
+          : "bg-white hover:border-black hover:bg-accent-hover/40 hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-sm",
         className
       )}
       {...props}

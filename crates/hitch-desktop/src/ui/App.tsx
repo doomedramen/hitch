@@ -1,3 +1,4 @@
+import { getName, getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +27,7 @@ import {
   GitBranch,
   History,
   HardDrive,
+  Info,
   Layers,
   LoaderCircle,
   LockKeyhole,
@@ -55,42 +57,95 @@ import { SidebarRowButton } from "./SidebarRowButton";
 
 const appWindow = getCurrentWindow();
 
-function TitleBar() {
+function TitleBar({ onAboutClick }: { onAboutClick: () => void }) {
   return (
     <div
       data-tauri-drag-region
       className="flex h-11 w-full items-center justify-between border-b-4 border-black bg-primary pl-3 select-none"
     >
       <div data-tauri-drag-region className="flex items-center gap-2">
-        <div className="h-6 w-6 border-2 border-black bg-white flex items-center justify-center shadow-neo-sm">
-          <span className="text-[10px] font-black italic">H</span>
-        </div>
+        <button
+          onClick={onAboutClick}
+          className="h-6 w-6 border-2 border-black bg-white flex items-center justify-center shadow-neo-sm hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-neo transition-all active:translate-x-[0px] active:translate-y-[0px] active:shadow-none"
+        >
+          <span className="text-[10px] font-black italic text-black">H</span>
+        </button>
         <span className="text-xs font-black uppercase tracking-widest text-black">Hitch Desktop</span>
       </div>
       <div className="flex h-full items-center">
+        <button
+          onClick={onAboutClick}
+          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-white hover:text-black transition-colors"
+          title="About"
+        >
+          <Info className="h-4 w-4" strokeWidth={3} />
+        </button>
         <button
           onClick={() => void appWindow.minimize()}
           className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-[#FFB000] hover:text-black transition-colors"
           title="Minimize"
         >
-          <MinusIcon className="h-4 w-4" />
+          <MinusIcon className="h-4 w-4" strokeWidth={3} />
         </button>
         <button
           onClick={() => void appWindow.toggleMaximize()}
           className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-accent hover:text-black transition-colors"
           title="Maximize"
         >
-          <Maximize2 className="h-4 w-4" />
+          <Maximize2 className="h-4 w-4" strokeWidth={3} />
         </button>
         <button
           onClick={() => void appWindow.close()}
           className="flex h-full w-12 items-center justify-center border-l-2 border-black hover:bg-destructive hover:text-white transition-colors"
           title="Close"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" strokeWidth={3} />
         </button>
       </div>
     </div>
+  );
+}
+
+function AboutDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (v: boolean) => void }) {
+  const [info, setInfo] = useState<{ name: string, version: string } | null>(null);
+
+  useEffect(() => {
+    if (open && !info) {
+      void (async () => {
+        try {
+          const [n, v] = await Promise.all([getName(), getVersion()]);
+          setInfo({ name: n, version: v });
+        } catch {
+          setInfo({ name: "HITCH DESKTOP", version: "0.0.0" });
+        }
+      })();
+    }
+  }, [open, info]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm text-center">
+        <div className="flex flex-col items-center gap-6 py-6">
+          <div className="h-20 w-20 border-4 border-black bg-primary flex items-center justify-center shadow-neo transform rotate-6">
+             <span className="text-4xl font-black italic text-black">H</span>
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black uppercase tracking-tight">{info?.name ?? "HITCH DESKTOP"}</h2>
+            <div className="inline-block border-2 border-black bg-secondary px-3 py-1 text-xs font-black text-white shadow-neo-sm transform -rotate-2">
+              VERSION {info?.version ?? "0.0.0"}
+            </div>
+          </div>
+          <div className="text-[10px] font-black uppercase tracking-widest text-black/40">
+            © 2026 HITCH CONTRIBUTORS
+          </div>
+        </div>
+        <DialogFooter className="sm:justify-center">
+          <Button variant="default" onClick={() => onOpenChange(false)} className="min-w-32">
+            STAY NEUTRAL
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -353,6 +408,7 @@ export function App() {
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [repoListOpen, setRepoListOpen] = useState<boolean>(false);
   const [repoFilter, setRepoFilter] = useState<string>("");
+  const [aboutOpen, setAboutOpen] = useState<boolean>(false);
 
   const selectedRepo = useMemo(() => repos.find((r) => r.id === selectedRepoId) ?? null, [repos, selectedRepoId]);
   const selectedRepoPath = selectedRepo?.path ?? null;
@@ -709,7 +765,8 @@ export function App() {
 
   return (
     <div className="flex flex-col h-full w-full bg-background border-4 border-black overflow-hidden">
-      <TitleBar />
+      <TitleBar onAboutClick={() => setAboutOpen(true)} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <div className="flex flex-1 w-full overflow-hidden">
         <aside className="flex w-[420px] min-w-[340px] shrink-0 flex-col border-r-4 border-black bg-white">
         <div className="flex h-16 items-center border-b-4 border-black bg-primary px-3">
@@ -902,10 +959,10 @@ export function App() {
                             </span>
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform -rotate-1">
                               {e.requires_approval ? (
                                 <>
-                                  <ShieldCheck className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+                                  <ShieldCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   approvals {e.min_approvals}+
                                 </>
                               ) : (
@@ -937,15 +994,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform rotate-1">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -979,15 +1036,15 @@ export function App() {
                                 : "local"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform rotate-1">
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+                                  <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-white" aria-hidden="true" />
+                                  <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   local
                                 </>
                               ) : (
@@ -1032,11 +1089,11 @@ export function App() {
             <div className="flex h-16 items-center justify-between gap-3 border-b-4 border-black px-3">
               <TabsList className="h-10">
                 <TabsTrigger value="overview" className="group">
-                  <FileText className="mr-2 h-4 w-4 text-black group-data-[state=active]:text-black" aria-hidden="true" />
+                  <FileText className="mr-2 h-4 w-4 text-black" strokeWidth={3} aria-hidden="true" />
                   Overview
                 </TabsTrigger>
                 <TabsTrigger value="timeline" className="group">
-                  <History className="mr-2 h-4 w-4 text-black group-data-[state=active]:text-black" aria-hidden="true" />
+                  <History className="mr-2 h-4 w-4 text-black" strokeWidth={3} aria-hidden="true" />
                   Timeline
                 </TabsTrigger>
               </TabsList>
@@ -1140,10 +1197,11 @@ export function App() {
 	                                    <span className="min-w-0 truncate">
 	                                      {dateFmt.format(new Date(t.when))}
 	                                    </span>
-	                                    <span className="inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm">
+	                                    <span className="inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm transform -rotate-1">
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
 	                                        className="h-3.5 w-3.5 text-white"
+                                          strokeWidth={3}
 	                                      />
 	                                      <span>{t.kind}</span>
 	                                    </span>
