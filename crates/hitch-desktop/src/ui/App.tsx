@@ -227,7 +227,7 @@ function OverviewPanel({ text }: { text: string }) {
         const showDivider = idx !== rows.length - 1;
         if (row.kind === "text") {
           return (
-            <div key={idx} className={cn("py-2 text-sm", showDivider ? "border-b border-border" : "")}>
+            <div key={idx} className={cn("py-2 text-sm", showDivider ? "border-b-2 border-black" : "")}>
               {row.value}
             </div>
           );
@@ -236,7 +236,7 @@ function OverviewPanel({ text }: { text: string }) {
         if (row.kind === "list") {
           const isDiffStat = row.key.trim().toLowerCase() === "diff_stat";
           return (
-            <div key={idx} className={cn("py-2", showDivider ? "border-b border-border" : "")}>
+            <div key={idx} className={cn("py-2", showDivider ? "border-b-2 border-black" : "")}>
               <div className="grid grid-cols-[140px_1fr] gap-3">
                 <div className="pt-0.5 text-[10px] font-black uppercase tracking-widest text-black">
                   {overviewKeyLabel(row.key)}
