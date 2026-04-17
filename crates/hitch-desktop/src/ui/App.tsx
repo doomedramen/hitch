@@ -238,7 +238,7 @@ function OverviewPanel({ text }: { text: string }) {
           return (
             <div key={idx} className={cn("py-2", showDivider ? "border-b border-border" : "")}>
               <div className="grid grid-cols-[140px_1fr] gap-3">
-                <div className="pt-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <div className="pt-0.5 text-[10px] font-black uppercase tracking-widest text-black">
                   {overviewKeyLabel(row.key)}
                 </div>
                 <div className="min-w-0">
