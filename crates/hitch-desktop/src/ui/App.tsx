@@ -306,24 +306,12 @@ function repoOwnerGroup(repo: RepoEntry): string {
 }
 
 function repoSortStamp(repo: RepoEntry): number {
-  const ts = repo.last_opened_at ?? repo.added_at;
-  const ms = Date.parse(ts);
-  return Number.isFinite(ms) ? ms : 0;
+ const ts = repo.last_opened_at ?? repo.added_at;
+ const ms = Date.parse(ts);
+ return Number.isFinite(ms) ? ms : 0;
 }
 
-const stickerRotations = [
-  "transform -rotate-1 will-change-transform",
-  "transform rotate-0.5 will-change-transform",
-  "transform -rotate-0.5 will-change-transform",
-  "transform rotate-1 will-change-transform"
-];
-
-function getRandomRotation() {
-  return stickerRotations[Math.floor(Math.random() * stickerRotations.length)];
-}
-
-export function App() {
-  const [repos, setRepos] = useState<RepoEntry[]>([]);
+export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [repoListOpen, setRepoListOpen] = useState<boolean>(false);
   const [repoFilter, setRepoFilter] = useState<string>("");
@@ -1116,16 +1104,14 @@ export function App() {
 	                                    <span className="min-w-0 truncate">
 	                                      {dateFmt.format(new Date(t.when))}
 	                                    </span>
-	                                    <span className={cn("inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm", getRandomRotation())}>
+	                                    <Sticker className="text-xs">
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
 	                                        className="h-3.5 w-3.5 text-white"
-                                          strokeWidth={3}
+	                                        strokeWidth={3}
 	                                      />
 	                                      <span>{t.kind}</span>
-	                                    </span>
-
-	                                  </div>
+	                                    </Sticker>	                                  </div>
 	                                  <div className="text-sm font-bold uppercase tracking-tight select-text">{t.summary}</div>
 	                                  {t.detail ? (
 	                                    <pre className="whitespace-pre-wrap break-words border-2 border-black bg-muted/20 p-4 text-xs font-bold leading-5 text-black shadow-neo select-text">
