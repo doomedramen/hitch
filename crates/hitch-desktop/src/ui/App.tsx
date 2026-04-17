@@ -53,99 +53,9 @@ import type {
 } from "./types";
 import { branchDetails, envDetails, promote, rebuild, release, repoProbe, workspaceIndex } from "./tauri";
 import { OutputLevelIcon, RepoIdentityIcon, TimelineKindIcon } from "./icons";
-import { SidebarRowButton } from "./SidebarRowButton";
+import { HitchIcon, SidebarRowButton, Sticker, TitleBar, AboutDialog } from "./index";
 
 const appWindow = getCurrentWindow();
-
-function TitleBar({ onAboutClick }: { onAboutClick: () => void }) {
-  return (
-    <div
-      data-tauri-drag-region
-      className="flex h-11 w-full items-center justify-between border-b-4 border-black bg-primary pl-3 select-none"
-    >
-      <div data-tauri-drag-region className="flex items-center gap-2">
-        <button
-          onClick={onAboutClick}
-          className="h-6 w-6 border-2 border-black bg-white flex items-center justify-center shadow-neo-sm hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-neo transition-all active:translate-x-[0px] active:translate-y-[0px] active:shadow-none"
-        >
-          <span className="text-[10px] font-black italic text-black">H</span>
-        </button>
-        <span className="text-xs font-black uppercase tracking-widest text-black">Hitch Desktop</span>
-      </div>
-      <div className="flex h-full items-center">
-        <button
-          onClick={onAboutClick}
-          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-white hover:text-black transition-colors"
-          title="About"
-        >
-          <Info className="h-4 w-4" strokeWidth={3} />
-        </button>
-        <button
-          onClick={() => void appWindow.minimize()}
-          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-[#FFB000] hover:text-black transition-colors"
-          title="Minimize"
-        >
-          <MinusIcon className="h-4 w-4" strokeWidth={3} />
-        </button>
-        <button
-          onClick={() => void appWindow.toggleMaximize()}
-          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-accent hover:text-black transition-colors"
-          title="Maximize"
-        >
-          <Maximize2 className="h-4 w-4" strokeWidth={3} />
-        </button>
-        <button
-          onClick={() => void appWindow.close()}
-          className="flex h-full w-12 items-center justify-center border-l-2 border-black hover:bg-destructive hover:text-white transition-colors"
-          title="Close"
-        >
-          <X className="h-4 w-4" strokeWidth={3} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function AboutDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (v: boolean) => void }) {
-  const [info, setInfo] = useState<{ name: string, version: string } | null>(null);
-
-  useEffect(() => {
-    if (open && !info) {
-      void (async () => {
-        try {
-          const [n, v] = await Promise.all([getName(), getVersion()]);
-          setInfo({ name: n, version: v });
-        } catch {
-          setInfo({ name: "HITCH DESKTOP", version: "0.0.0" });
-        }
-      })();
-    }
-  }, [open, info]);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm text-center">
-        <div className="flex flex-col items-center gap-6 py-6">
-          <HitchIcon size="lg" className="transform rotate-6" />
-          <div className="space-y-2">
-            <h2 className="text-2xl font-black uppercase tracking-tight">{info?.name ?? "HITCH DESKTOP"}</h2>
-            <div className="inline-block border-2 border-black bg-secondary px-3 py-1 text-xs font-black text-white shadow-neo-sm transform -rotate-2">
-              VERSION {info?.version ?? "0.0.0"}
-            </div>
-          </div>
-          <div className="text-[10px] font-black uppercase tracking-widest text-black/40">
-            © 2026 DOOMEDRAMEN
-          </div>
-        </div>
-        <DialogFooter className="sm:justify-center">
-          <Button variant="default" onClick={() => onOpenChange(false)} className="min-w-32">
-            STAY NEUTRAL
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 type Selection =
   | { kind: "none" }
@@ -399,6 +309,17 @@ function repoSortStamp(repo: RepoEntry): number {
   const ts = repo.last_opened_at ?? repo.added_at;
   const ms = Date.parse(ts);
   return Number.isFinite(ms) ? ms : 0;
+}
+
+const stickerRotations = [
+  "transform -rotate-1 will-change-transform",
+  "transform rotate-0.5 will-change-transform",
+  "transform -rotate-0.5 will-change-transform",
+  "transform rotate-1 will-change-transform"
+];
+
+function getRandomRotation() {
+  return stickerRotations[Math.floor(Math.random() * stickerRotations.length)];
 }
 
 export function App() {
@@ -799,7 +720,7 @@ export function App() {
           <>
             <div className="flex items-center gap-2 px-3 py-3">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black z-10" strokeWidth={3} aria-hidden="true" />
                 <Input
                   placeholder="Filter"
                   className="pl-9"
@@ -900,7 +821,7 @@ export function App() {
           <>
             <div className="space-y-2 px-3 py-3">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black z-10" strokeWidth={3} aria-hidden="true" />
                 <Input
                   placeholder="Filter"
                   className="pl-9"
@@ -957,7 +878,7 @@ export function App() {
                             </span>
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform -rotate-1">
+                            <Sticker>
                               {e.requires_approval ? (
                                 <>
                                   <ShieldCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
@@ -966,7 +887,7 @@ export function App() {
                               ) : (
                                 "OPEN"
                               )}
-                            </span>
+                            </Sticker>
                           }
                           selected={selection.kind === "env" && selection.name === e.name}
                           onClick={() => requestDetails({ kind: "env", name: e.name })}
@@ -992,7 +913,7 @@ export function App() {
                                 : "LOCAL"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform rotate-1">
+                            <Sticker>
                               {b.remote ? (
                                 <>
                                   <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
@@ -1006,7 +927,7 @@ export function App() {
                               ) : (
                                 "-"
                               )}
-                            </span>
+                            </Sticker>
                           }
                           selected={selection.kind === "branch" && selection.name === b.name}
                           onClick={() =>
@@ -1034,7 +955,7 @@ export function App() {
                                 : "LOCAL"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform rotate-1">
+                            <Sticker>
                               {b.remote ? (
                                 <>
                                   <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
@@ -1048,7 +969,7 @@ export function App() {
                               ) : (
                                 "-"
                               )}
-                            </span>
+                            </Sticker>
                           }
                           selected={selection.kind === "branch" && selection.name === b.name}
                           onClick={() =>
@@ -1195,7 +1116,7 @@ export function App() {
 	                                    <span className="min-w-0 truncate">
 	                                      {dateFmt.format(new Date(t.when))}
 	                                    </span>
-	                                    <span className="inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm transform -rotate-1">
+	                                    <span className={cn("inline-flex shrink-0 items-center gap-1 border-2 border-black bg-secondary px-2 py-0.5 text-xs text-white font-bold shadow-neo-sm", getRandomRotation())}>
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
 	                                        className="h-3.5 w-3.5 text-white"
