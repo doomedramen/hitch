@@ -30,7 +30,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   Maximize2,
-  Minimize2,
+  Minus as MinusIcon,
   Monitor,
   RefreshCw,
   Rocket,
@@ -70,14 +70,14 @@ function TitleBar() {
       <div className="flex h-full items-center">
         <button
           onClick={() => void appWindow.minimize()}
-          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-black/10 transition-colors"
+          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-[#FFB000] hover:text-black transition-colors"
           title="Minimize"
         >
-          <Minimize2 className="h-4 w-4" />
+          <MinusIcon className="h-4 w-4" />
         </button>
         <button
           onClick={() => void appWindow.toggleMaximize()}
-          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-black/10 transition-colors"
+          className="flex h-full w-11 items-center justify-center border-l-2 border-black hover:bg-accent hover:text-black transition-colors"
           title="Maximize"
         >
           <Maximize2 className="h-4 w-4" />
@@ -260,7 +260,7 @@ function OverviewPanel({ text }: { text: string }) {
   if (rows.length === 0) return <div className="py-12 text-sm font-black uppercase text-black/20 text-center italic">No overview</div>;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 select-text">
       {rows.map((row, idx) => {
         const showDivider = idx !== rows.length - 1;
         if (row.kind === "text") {
@@ -1149,12 +1149,13 @@ export function App() {
 	                                    </span>
 
 	                                  </div>
-	                                  <div className="text-sm font-bold uppercase tracking-tight">{t.summary}</div>
+	                                  <div className="text-sm font-bold uppercase tracking-tight select-text">{t.summary}</div>
 	                                  {t.detail ? (
-	                                    <pre className="whitespace-pre-wrap break-words border-2 border-black bg-muted/20 p-4 text-xs font-bold leading-5 text-black shadow-neo">
+	                                    <pre className="whitespace-pre-wrap break-words border-2 border-black bg-muted/20 p-4 text-xs font-bold leading-5 text-black shadow-neo select-text">
 	                                      {t.detail}
 	                                    </pre>
-	                              ) : null}
+	                                  ) : null}
+
 	                              </div>
 
                             ))}
@@ -1375,7 +1376,7 @@ export function App() {
                           <OutputLevelIcon level={l.level} className={cn("h-3.5 w-3.5", levelClass)} />
                           <span>{l.level}</span>
                         </div>
-                        <div className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
+                        <div className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground select-text">
                           {l.message}
                         </div>
                       </div>
