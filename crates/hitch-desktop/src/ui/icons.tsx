@@ -13,32 +13,38 @@ import type { OutputLevel, RepoIdentity, TimelineKind } from "./types";
 
 export function RepoIdentityIcon({
   identity,
-  className
+  className,
+  strokeWidth = 3
 }: {
   identity: RepoIdentity;
   className?: string;
+  strokeWidth?: number;
 }) {
   const Icon = identity.kind === "origin" ? Cloud : HardDrive;
-  return <Icon className={className} aria-hidden="true" />;
+  return <Icon className={className} strokeWidth={strokeWidth} aria-hidden="true" />;
 }
 
 export function TimelineKindIcon({
   kind,
-  className
+  className,
+  strokeWidth = 3
 }: {
   kind: TimelineKind;
   className?: string;
+  strokeWidth?: number;
 }) {
   const Icon = kind === "GitCommit" ? GitCommit : Wrench;
-  return <Icon className={className} aria-hidden="true" />;
+  return <Icon className={className} strokeWidth={strokeWidth} aria-hidden="true" />;
 }
 
 export function OutputLevelIcon({
   level,
-  className
+  className,
+  strokeWidth = 3
 }: {
   level: OutputLevel;
   className?: string;
+  strokeWidth?: number;
 }) {
   const Icon =
     level === "Info"
@@ -48,6 +54,6 @@ export function OutputLevelIcon({
         : level === "Warning"
           ? TriangleAlert
           : CircleX;
-  return <Icon className={className} aria-hidden="true" />;
+  return <Icon className={className} strokeWidth={strokeWidth} aria-hidden="true" />;
 }
 

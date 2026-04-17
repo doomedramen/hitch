@@ -1,4 +1,3 @@
-import { getName, getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -849,7 +848,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       {filteredIndex.environments.map((e) => (
                         <SidebarRowButton
                           key={e.name}
-                          icon={<Layers className="h-4 w-4" aria-hidden="true" />}
+                          icon={<Layers className="h-4 w-4" strokeWidth={3} aria-hidden="true" />}
                           label={e.name}
                           subtitle={
                             <span className="inline-flex min-w-0 items-center gap-1 font-black uppercase text-[10px]">
@@ -859,7 +858,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                               {e.locked ? (
                                 <span className="inline-flex items-center gap-1">
                                   <span aria-hidden="true">•</span>
-                                  <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+                                  <LockKeyhole className="h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" />
                                   <span>LOCKED</span>
                                 </span>
                               ) : null}
@@ -891,7 +890,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       {filteredIndex.promoted_branches.map((b) => (
                         <SidebarRowButton
                           key={b.name}
-                          icon={<ArrowUpRight className="h-4 w-4" aria-hidden="true" />}
+                          icon={<ArrowUpRight className="h-4 w-4" strokeWidth={3} aria-hidden="true" />}
                           label={b.name}
                           subtitle={
                             b.promoted_to.length > 0
@@ -1108,9 +1107,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
 	                                        className="h-3.5 w-3.5 text-white"
-	                                        strokeWidth={3}
-	                                      />
-	                                      <span>{t.kind}</span>
+	                                      />	                                      <span>{t.kind}</span>
 	                                    </Sticker>	                                  </div>
 	                                  <div className="text-sm font-bold uppercase tracking-tight select-text">{t.summary}</div>
 	                                  {t.detail ? (
