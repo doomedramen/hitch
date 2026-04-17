@@ -126,9 +126,7 @@ function AboutDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (v: 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm text-center">
         <div className="flex flex-col items-center gap-6 py-6">
-          <div className="h-20 w-20 border-4 border-black bg-primary flex items-center justify-center shadow-neo transform rotate-6">
-             <span className="text-4xl font-black italic text-black">H</span>
-          </div>
+          <HitchIcon size="lg" className="transform rotate-6" />
           <div className="space-y-2">
             <h2 className="text-2xl font-black uppercase tracking-tight">{info?.name ?? "HITCH DESKTOP"}</h2>
             <div className="inline-block border-2 border-black bg-secondary px-3 py-1 text-xs font-black text-white shadow-neo-sm transform -rotate-2">
@@ -136,7 +134,7 @@ function AboutDialog({ open, onOpenChange }: { open: boolean, onOpenChange: (v: 
             </div>
           </div>
           <div className="text-[10px] font-black uppercase tracking-widest text-black/40">
-            © 2026 HITCH CONTRIBUTORS
+            © 2026 DOOMEDRAMEN
           </div>
         </div>
         <DialogFooter className="sm:justify-center">
@@ -215,7 +213,7 @@ function SidebarSectionHeading({
   return (
     <div
       className={cn(
-        "px-2 py-1 mb-1 text-[11px] font-black uppercase tracking-widest text-white bg-black",
+        "px-2 py-1 mb-1 text-[10px] font-black uppercase tracking-widest text-white bg-black",
         className
       )}
       {...props}
@@ -372,7 +370,7 @@ function OverviewPanel({ text }: { text: string }) {
         return (
           <div key={idx} className={cn("py-3", showDivider ? "border-b-2 border-black" : "")}>
             <div className="grid grid-cols-[140px_1fr] gap-3">
-              <div className="pt-0.5 text-xs font-black uppercase tracking-wider text-black">
+              <div className="pt-0.5 text-[10px] font-black uppercase tracking-widest text-black">
                 {overviewKeyLabel(row.key)}
               </div>
               <div className="min-w-0 text-sm font-medium">
@@ -935,7 +933,7 @@ export function App() {
                 {filteredIndex ? (
                   <>
                     <div className="space-y-1">
-                      <SidebarSectionHeading>Environments</SidebarSectionHeading>
+                      <SidebarSectionHeading>ENVIRONMENTS</SidebarSectionHeading>
                       {filteredIndex.environments.length === 0 ? (
                         <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
@@ -945,7 +943,7 @@ export function App() {
                           icon={<Layers className="h-4 w-4" aria-hidden="true" />}
                           label={e.name}
                           subtitle={
-                            <span className="inline-flex min-w-0 items-center gap-1">
+                            <span className="inline-flex min-w-0 items-center gap-1 font-black uppercase text-[10px]">
                               <span className="truncate">
                                 base: {e.base} • promoted: {e.promoted_count}
                               </span>
@@ -953,20 +951,20 @@ export function App() {
                                 <span className="inline-flex items-center gap-1">
                                   <span aria-hidden="true">•</span>
                                   <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
-                                  <span>locked</span>
+                                  <span>LOCKED</span>
                                 </span>
                               ) : null}
                             </span>
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform -rotate-1">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform -rotate-1">
                               {e.requires_approval ? (
                                 <>
                                   <ShieldCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
                                   approvals {e.min_approvals}+
                                 </>
                               ) : (
-                                "open"
+                                "OPEN"
                               )}
                             </span>
                           }
@@ -977,7 +975,7 @@ export function App() {
                     </div>
 
                     <div className="space-y-1">
-                      <SidebarSectionHeading>Promoted branches</SidebarSectionHeading>
+                      <SidebarSectionHeading>PROMOTED BRANCHES</SidebarSectionHeading>
                       {filteredIndex.promoted_branches.length === 0 ? (
                         <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
@@ -988,22 +986,22 @@ export function App() {
                           label={b.name}
                           subtitle={
                             b.promoted_to.length > 0
-                              ? `promoted to: ${b.promoted_to.join(", ")}`
+                              ? `PROMOTED TO: ${b.promoted_to.join(", ")}`
                               : b.remote
-                                ? "remote"
-                                : "local"
+                                ? "REMOTE"
+                                : "LOCAL"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform rotate-1">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform rotate-1">
                               {b.remote ? (
                                 <>
                                   <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  remote
+                                  REMOTE
                                 </>
                               ) : b.local ? (
                                 <>
                                   <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  local
+                                  LOCAL
                                 </>
                               ) : (
                                 "-"
@@ -1019,7 +1017,7 @@ export function App() {
                     </div>
 
                     <div className="space-y-1">
-                      <SidebarSectionHeading>Branches</SidebarSectionHeading>
+                      <SidebarSectionHeading>BRANCHES</SidebarSectionHeading>
                       {filteredIndex.branches.length === 0 ? (
                         <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
                       ) : null}
@@ -1030,22 +1028,22 @@ export function App() {
                           label={b.name}
                           subtitle={
                             b.base_for.length > 0
-                              ? `base for: ${b.base_for.join(", ")}`
+                              ? `BASE FOR: ${b.base_for.join(", ")}`
                               : b.remote
-                                ? "remote"
-                                : "local"
+                                ? "REMOTE"
+                                : "LOCAL"
                           }
                           trailing={
-                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-xs font-bold text-white shadow-neo-sm transform rotate-1">
+                            <span className="inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transform rotate-1">
                               {b.remote ? (
                                 <>
                                   <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  remote
+                                  REMOTE
                                 </>
                               ) : b.local ? (
                                 <>
                                   <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  local
+                                  LOCAL
                                 </>
                               ) : (
                                 "-"
