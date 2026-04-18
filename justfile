@@ -206,6 +206,35 @@ desktop-icons:
     cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile --prefer-offline
     cd crates/hitch-desktop && pnpm tauri icon --output src-tauri/icons ../../hitch.svg
 
+# Create a new desktop release (push tag to trigger CI build + Homebrew cask)
+release-desktop:
+    #!/usr/bin/env bash
+    set -e
+
+    current_branch=$(git branch --show-current)
+    if [ "$current_branch" != "main" ]; then
+        echo "❌ Error: Releases must be created from the 'main' branch"
+        exit 1
+    fi
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "❌ Error: Working directory has uncommitted changes"
+        git status --short
+        exit 1
+    fi
+
+    current_version=$(grep '"version"' crates/hitch-desktop/package.json | sed 's/.*"\([^"]*\)".*/\1/')
+    read -p "Current version: ${current_version}. Enter new version: " new_version
+    if [ -z "$new_version" ]; then
+        echo "❌ Error: Version cannot be empty"
+        exit 1
+    fi
+
+    echo "🚀 Creating desktop release v${new_version}..."
+    git tag "v${new_version}"
+    git push origin "v${new_version}"
+    echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
+
 # Serve documentation locally
 docs-serve: docs
     @echo "🌐 Serving documentation locally..."
