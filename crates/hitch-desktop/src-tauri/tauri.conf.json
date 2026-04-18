@@ -7,7 +7,7 @@
     "frontendDist": "../dist"
   },
   "productName": "Hitch Desktop",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "identifier": "com.doomedramen.hitchdesktop",
   "app": {
     "windows": [
