@@ -206,33 +206,61 @@ desktop-icons:
     cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile --prefer-offline
     cd crates/hitch-desktop && pnpm tauri icon --output src-tauri/icons ../../hitch.svg
 
-# Create a new desktop release (push tag to trigger CI build + Homebrew cask)
+# Create a new desktop release (auto-bump version like CLI)
 release-desktop:
     #!/usr/bin/env bash
     set -e
 
+    echo "🚀 Creating new desktop release with automatic version bump..."
+
+    # Safety checks
     current_branch=$(git branch --show-current)
     if [ "$current_branch" != "main" ]; then
         echo "❌ Error: Releases must be created from the 'main' branch"
+        echo "   Current branch: $current_branch"
+        echo "   Please checkout main and try again: git checkout main"
         exit 1
     fi
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo "❌ Error: Working directory has uncommitted changes"
+        echo "   Please commit or stash your changes before releasing"
         git status --short
         exit 1
     fi
 
     current_version=$(grep '"version"' crates/hitch-desktop/package.json | sed 's/.*"\([^"]*\)".*/\1/')
-    read -p "Current version: ${current_version}. Enter new version: " new_version
-    if [ -z "$new_version" ]; then
-        echo "❌ Error: Version cannot be empty"
-        exit 1
-    fi
+    echo "Current version: v${current_version}"
 
-    echo "🚀 Creating desktop release v${new_version}..."
+    major=$(echo ${current_version} | cut -d. -f1)
+    minor=$(echo ${current_version} | cut -d. -f2)
+    patch=$(echo ${current_version} | cut -d. -f3)
+    new_patch=$((patch + 1))
+    new_version="${major}.${minor}.${new_patch}"
+    echo "New version: v${new_version}"
+
+    echo "🔍 Running pre-flight checks..."
+    cd crates/hitch-desktop
+    pnpm build
+    cargo check -p hitch-desktop
+    cd ../..
+
+    echo "📝 Updating version..."
+    sed -i '' "s/\"version\": \"${current_version}\"/\"version\": \"${new_version}\"/" crates/hitch-desktop/package.json
+    sed -i '' "s/version = \"${current_version}\"/version = \"${new_version}\"/" crates/hitch-desktop/src-tauri/Cargo.toml
+    jq ".version = \"${new_version}\"" crates/hitch-desktop/src-tauri/tauri.conf.json > tmp.json && mv tmp.json crates/hitch-desktop/src-tauri/tauri.conf.json
+
+    echo "📦 Committing version bump..."
+    git add crates/hitch-desktop/package.json crates/hitch-desktop/src-tauri/Cargo.toml crates/hitch-desktop/src-tauri/tauri.conf.json
+    git commit -m "chore: bump desktop version to v${new_version}"
+
+    echo "🏷️ Creating tag..."
     git tag "v${new_version}"
+
+    echo "🚀 Pushing to trigger release workflow..."
+    git push origin main
     git push origin "v${new_version}"
+
     echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
 
 # Serve documentation locally

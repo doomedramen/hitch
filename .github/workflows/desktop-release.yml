@@ -20,18 +20,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Bump version from tag
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
-
-          sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" crates/hitch-desktop/package.json
-          sed -i '' "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/hitch-desktop/src-tauri/Cargo.toml
-
-          jq ".version = \"${VERSION}\"" crates/hitch-desktop/src-tauri/tauri.conf.json > tmp.json && mv tmp.json crates/hitch-desktop/src-tauri/tauri.conf.json
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -118,13 +106,4 @@ jobs:
           git config --global user.email "actions@github.com"
           git add Casks/hitch-desktop.rb
           git diff --staged --quiet || git commit -m "hitch-desktop ${VERSION}"
-          git push
-
-      - name: Commit version bump
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add crates/hitch-desktop/package.json crates/hitch-desktop/src-tauri/Cargo.toml crates/hitch-desktop/src-tauri/tauri.conf.json
-          git diff --staged --quiet || git commit -m "release: bump desktop version ${TAG}"
           git push
