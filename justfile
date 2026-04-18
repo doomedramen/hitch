@@ -261,11 +261,11 @@ release-desktop:
     git commit -m "chore: bump desktop version to v${new_version}"
 
     echo "🏷️ Creating tag..."
-    git tag "v${new_version}"
+    git tag "desktop-v${new_version}"
 
     echo "🚀 Pushing to trigger release workflow..."
     git push origin main
-    git push origin "v${new_version}"
+    git push origin "desktop-v${new_version}"
 
     echo "✅ Release v${new_version} triggered! Check GitHub Actions for progress."
 
