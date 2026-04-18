@@ -7,7 +7,7 @@
     "frontendDist": "../dist"
   },
   "productName": "Hitch Desktop",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "identifier": "com.doomedramen.hitchdesktop",
   "app": {
     "windows": [
@@ -27,7 +27,9 @@
         {
           "identifier": "main",
           "description": "Default permissions for the main window.",
-          "windows": ["*"],
+          "windows": [
+            "*"
+          ],
           "permissions": [
             "core:default",
             "dialog:allow-open",
