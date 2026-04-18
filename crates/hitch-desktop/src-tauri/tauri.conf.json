@@ -51,6 +51,19 @@
   },
   "bundle": {
     "active": true,
+    "ios": {
+      "minimumOSVersion": "10.15"
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
