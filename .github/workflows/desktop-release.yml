@@ -86,36 +86,32 @@ jobs:
           path: homebrew-tap
 
       - name: Write cask file
+        env:
+          TAG: ${{ github.ref_name }}
+          DMG_NAME: ${{ steps.find-dmg.outputs.dmg_name }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          DMG_NAME="${{ steps.find-dmg.outputs.dmg_name }}"
-          SHA256="${{ steps.hash.outputs.sha256 }}"
           DATE=$(date -u +"%Y-%m-%d")
 
-          cat > homebrew-tap/Casks/hitch-desktop.rb <<RUBY
-#汽=====汽
-# Cask published with-desktop release workflow
-# Created on ${DATE}
-#汽=====汽
-cask "hitch-desktop" do
-  version "${VERSION}"
-  sha256 "${SHA256}"
-
-  url "https://github.com/doomedramen/hitch/releases/download/${TAG}/${DMG_NAME}"
-  name "Hitch Desktop"
-  desc "Git branch management for environment-based deployments"
-  homepage "https://github.com/doomedramen/hitch"
-
-  artifact :app, target: "Hitch Desktop.app"
-
-  uninstall quit: "com.doomedramen.hitchdesktop"
-end
-RUBY
+          printf '# Cask published with desktop release workflow\n' > homebrew-tap/Casks/hitch-desktop.rb
+          printf '# Created on %s\n\n' "$DATE" >> homebrew-tap/Casks/hitch-desktop.rb
+          printf 'cask "hitch-desktop" do\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  version "%s"\n' "$VERSION" >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  sha256 "%s"\n\n' "$SHA256" >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  url "https://github.com/doomedramen/hitch/releases/download/%s/%s"\n' "$TAG" "$DMG_NAME" >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  name "Hitch Desktop"\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  desc "Git branch management for environment-based deployments"\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  homepage "https://github.com/doomedramen/hitch"\n\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  artifact :app, target: "Hitch Desktop.app"\n\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf '  uninstall quit: "com.doomedramen.hitchdesktop"\n' >> homebrew-tap/Casks/hitch-desktop.rb
+          printf 'end\n' >> homebrew-tap/Casks/hitch-desktop.rb
 
       - name: Commit cask
         run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
           cd homebrew-tap
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
