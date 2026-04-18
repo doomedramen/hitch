@@ -60,6 +60,13 @@ jobs:
           set -euo pipefail
           echo "sha256=$(shasum -a 256 "${{ steps.find-dmg.outputs.dmg_path }}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
+      - name: Create GitHub Release if not exists
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" --title "Hitch Desktop ${TAG#desktop-}" --generate-notes
+          fi
+
       - name: Upload DMG to GitHub Release
         run: |
           TAG="${GITHUB_REF_NAME}"
