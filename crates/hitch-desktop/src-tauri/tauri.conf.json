@@ -51,9 +51,6 @@
   },
   "bundle": {
     "active": true,
-    "ios": {
-      "minimumSystemVersion": "10.15"
-    },
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.15",
