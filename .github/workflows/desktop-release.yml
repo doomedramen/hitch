@@ -45,7 +45,7 @@ jobs:
         id: find-dmg
         run: |
           set -euo pipefail
-          BUNDLE_DIR="crates/hitch-desktop/src-tauri/target/release/bundle"
+          BUNDLE_DIR="target/release/bundle"
           DMG=$(find "${BUNDLE_DIR}" -name "*.dmg" -type f | head -1)
           if [ -z "${DMG}" ]; then
             echo "No DMG found under ${BUNDLE_DIR}"
