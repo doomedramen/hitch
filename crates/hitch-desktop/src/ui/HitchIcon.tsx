@@ -1,7 +1,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 
-export function HitchIcon({ className, size = "md" }: { className?: string; size?: "sm" | "md" | "lg" }) {
+export function HitchIcon({ className, size = "md", variant = "default", noShadow = false }: { className?: string; size?: "sm" | "md" | "lg"; variant?: "default" | "inverted"; noShadow?: boolean }) {
   const sizes = {
     sm: "h-5 w-5",
     md: "h-6 w-6",
@@ -13,9 +13,14 @@ export function HitchIcon({ className, size = "md" }: { className?: string; size
     lg: "text-4xl",
   };
 
+  const variants = {
+    default: "bg-primary text-black",
+    inverted: "bg-white text-black",
+  };
+
   return (
-    <div className={cn("border-2 border-black bg-primary flex items-center justify-center shadow-neo-sm", sizes[size], className)}>
-      <span className={cn("font-black italic text-black select-none", fontSizes[size])}>H</span>
+    <div className={cn(!noShadow && "shadow-neo-sm", "border-2 border-black flex items-center justify-center", variants[variant], sizes[size], className)}>
+      <span className={cn("font-black italic select-none", fontSizes[size])}>H</span>
     </div>
   );
 }

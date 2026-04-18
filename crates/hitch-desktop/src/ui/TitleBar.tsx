@@ -16,7 +16,7 @@ export function TitleBar({ onAboutClick }: { onAboutClick: () => void }) {
           onClick={onAboutClick}
           className="hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-neo transition-all active:translate-x-[0px] active:translate-y-[0px] active:shadow-none"
         >
-          <HitchIcon size="sm" />
+          <HitchIcon size="sm" variant="inverted" noShadow />
         </button>
         <span className="text-xs font-black uppercase tracking-widest text-black">Hitch Desktop</span>
       </div>
