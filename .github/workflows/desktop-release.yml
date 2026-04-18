@@ -13,12 +13,8 @@ env:
 
 jobs:
   build-and-upload:
-    name: Build & Upload (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Build & Upload
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
@@ -35,83 +31,82 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - name: Install Tauri dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libssl-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
       - name: Install frontend dependencies
         run: |
           cd crates/hitch-desktop
           pnpm install
 
-      - name: Build desktop bundles
+      - name: Build desktop bundle
         run: |
           cd crates/hitch-desktop
-          if [ "${RUNNER_OS}" = "macOS" ]; then
-            pnpm tauri build --bundles dmg
-          else
-            pnpm tauri:build
-          fi
+          pnpm tauri build --bundles dmg
 
-      - name: Wait for cargo-dist release to exist
-        shell: bash
+      - name: Find the DMG
+        id: find-dmg
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          REPO="${GITHUB_REPOSITORY}"
-          echo "Waiting for GitHub Release to exist for tag: ${TAG}"
-          for i in {1..60}; do
-            if gh api "repos/${REPO}/releases/tags/${TAG}" >/dev/null 2>&1; then
-              echo "Release found."
-              exit 0
-            fi
-            echo "Release not found yet (attempt ${i}/60); sleeping 10s..."
-            sleep 10
-          done
-          echo "Timed out waiting for release for tag ${TAG}"
-          exit 1
-
-      - name: Upload bundles to GitHub Release
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          ARCH="$(uname -m)"
           BUNDLE_DIR="crates/hitch-desktop/src-tauri/target/release/bundle"
-          OUT_DIR="desktop-release-assets"
-          mkdir -p "${OUT_DIR}"
-
-          if [ ! -d "${BUNDLE_DIR}" ]; then
-            echo "Bundle dir not found: ${BUNDLE_DIR}"
+          DMG=$(find "${BUNDLE_DIR}" -name "*.dmg" -type f | head -1)
+          if [ -z "${DMG}" ]; then
+            echo "No DMG found under ${BUNDLE_DIR}"
             exit 1
           fi
+          echo "dmg_path=${DMG}" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$(basename "${DMG}")" >> "$GITHUB_OUTPUT"
 
-          # Collect common bundle outputs.
-          # Tauri outputs differ by OS and config; upload whatever is produced.
-          mapfile -t FILES < <(find "${BUNDLE_DIR}" -type f \( -name "*.AppImage" -o -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.msi" -o -name "*.deb" -o -name "*.rpm" \))
+      - name: Compute SHA256
+        id: hash
+        run: |
+          set -euo pipefail
+          echo "sha256=$(shasum -a 256 "${{ steps.find-dmg.outputs.dmg_path }}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "No bundle files found under ${BUNDLE_DIR}"
-            exit 1
-          fi
+      - name: Upload DMG to GitHub Release
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release upload "${TAG}" "${{ steps.find-dmg.outputs.dmg_path }}" --clobber
 
-          for f in "${FILES[@]}"; do
-            base="$(basename "$f")"
-            ext="${base#*.}"
-            name="hitch-desktop-${TAG}-${RUNNER_OS,,}-${ARCH}.${ext}"
-            cp "$f" "${OUT_DIR}/${name}"
-          done
+      - name: Publish to Homebrew Tap
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          repository: doomedramen/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
 
-          ls -la "${OUT_DIR}"
-          gh release upload "${TAG}" "${OUT_DIR}"/* --clobber
+      - name: Write cask file
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          DMG_NAME="${{ steps.find-dmg.outputs.dmg_name }}"
+          SHA256="${{ steps.hash.outputs.sha256 }}"
+          DATE=$(date -u +"%Y-%m-%d")
+
+          cat > homebrew-tap/Casks/hitch-desktop.rb <<RUBY
+#汽=====汽
+# Cask published with-desktop release workflow
+# Created on ${DATE}
+#汽=====汽
+cask "hitch-desktop" do
+  version "${VERSION}"
+  sha256 "${SHA256}"
+
+  url "https://github.com/doomedramen/hitch/releases/download/${TAG}/${DMG_NAME}"
+  name "Hitch Desktop"
+  desc "Git branch management for environment-based deployments"
+  homepage "https://github.com/doomedramen/hitch"
+
+  artifact :app, target: "Hitch Desktop.app"
+
+  uninstall quit: "com.doomedramen.hitchdesktop"
+end
+RUBY
+
+      - name: Commit cask
+        run: |
+          cd homebrew-tap
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add Casks/hitch-desktop.rb
+          git diff --staged --quiet || git commit -m "hitch-desktop ${VERSION}"
+          git push
