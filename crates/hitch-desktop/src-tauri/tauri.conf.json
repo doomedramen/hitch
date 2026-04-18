@@ -52,7 +52,7 @@
   "bundle": {
     "active": true,
     "ios": {
-      "minimumOSVersion": "10.15"
+      "minimumSystemVersion": "10.15"
     },
     "macOS": {
       "frameworks": [],
