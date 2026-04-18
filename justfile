@@ -252,6 +252,12 @@ release-desktop:
 
     echo "📦 Committing version bump..."
     git add crates/hitch-desktop/package.json crates/hitch-desktop/src-tauri/Cargo.toml crates/hitch-desktop/src-tauri/tauri.conf.json
+
+    if [ -n "$(git status --porcelain Cargo.lock)" ]; then
+        echo "📦 Cargo.lock updated, including in commit..."
+        git add Cargo.lock
+    fi
+
     git commit -m "chore: bump desktop version to v${new_version}"
 
     echo "🏷️ Creating tag..."
