@@ -87,8 +87,9 @@ jobs:
           SHA256: ${{ steps.hash.outputs.sha256 }}
         run: |
           set -euo pipefail
-          VERSION="${TAG#v}"
+          VERSION="${TAG#desktop-}"
           DATE=$(date -u +"%Y-%m-%d")
+          DMG_URLENCODED="${DMG_NAME// /%20}"
 
           mkdir -p homebrew-hitch/Casks
           printf '# Cask published with desktop release workflow\n' > homebrew-hitch/Casks/hitch-desktop.rb
@@ -96,7 +97,7 @@ jobs:
           printf 'cask "hitch-desktop" do\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  version "%s"\n' "$VERSION" >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  sha256 "%s"\n\n' "$SHA256" >> homebrew-hitch/Casks/hitch-desktop.rb
-          printf '  url "https://github.com/doomedramen/hitch/releases/download/%s/%s"\n' "$TAG" "$DMG_NAME" >> homebrew-hitch/Casks/hitch-desktop.rb
+          printf '  url "https://github.com/doomedramen/hitch/releases/download/%s/%s"\n' "$TAG" "$DMG_URLENCODED" >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  name "Hitch Desktop"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  desc "Git branch management for environment-based deployments"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  homepage "https://github.com/doomedramen/hitch"\n\n' >> homebrew-hitch/Casks/hitch-desktop.rb
@@ -107,7 +108,7 @@ jobs:
       - name: Commit cask
         run: |
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          VERSION="${TAG#desktop-}"
           cd homebrew-hitch
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
