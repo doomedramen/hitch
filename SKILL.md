@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Hitch** is a Git branch management CLI tool for environment-based deployments. It treats environment branches as composable layers — promote feature branches to environments, and Hitch rebuilds the environment branch by squashing them together.
+**Hitch** is a Git branch management CLI tool for environment-based branch composition. It treats environment branches as generated outputs: promote feature or bug branches into an environment's list, then rebuild that environment branch from the base plus the promoted list. It is different from using Git directly because environment branches are regenerated from metadata instead of manually accumulating merges.
 
 ## When to Use Hitch
 
@@ -26,12 +26,26 @@ qa         = main + feature/auth + feature/payments
 dev        = main + feature/auth + feature/payments + feature/ui
 ```
 
+### Environment Branches as Generated Outputs
+Hitch's core model is a base branch plus an ordered list of promoted branches. The environment branch is rebuilt from that list, so users can add and remove individual branches from an environment without treating the environment branch as hand-maintained merge history.
+
+One possible workflow is:
+1. Create a normal feature or bug branch from `main`.
+2. Promote that branch to `dev`; the rebuilt `dev` branch triggers dev CI/CD.
+3. If dev testing passes, promote the same feature branch to `qa`; the rebuilt `qa` branch triggers QA CI/CD.
+4. If QA passes, release to `main` or production; main CI/CD deploys it.
+
+Other teams may not use `release` this way. The important model is explicit branch stacking, not a prescribed deployment process.
+
 ### Key Principles
 - Environment branches are **regenerated**, not manually merged
 - Promoting adds a branch to an environment's list
 - Demoting removes a branch from an environment's list
 - `rebuild` reconstructs the environment branch from all promoted branches
+- `release` merges the promoted branches from an environment into a target branch, for teams that want that workflow
 - Configuration is stored in `hitch.json` on a `hitch-metadata` branch
+- Hitch is not just a wrapper around normal merges: it stores the desired environment contents, then regenerates the branch
+- Merge fixes remain real Git work: when branches do not compose cleanly, users may need to carry fixes back into the feature branch or repeat equivalent fixes elsewhere
 
 ## Common Commands
 
@@ -153,6 +167,7 @@ Hitch stores configuration in `hitch.json` on the `hitch-metadata` branch:
 - `hitch rebuild` is all-or-nothing: it preflights compatibility first and refuses (cleanly) if a promoted branch can’t be assembled
 - Fix guidance: `git checkout <branch> && git rebase <base>`
 - `hitch rebuild` requires a clean working tree (commit or stash first)
+- Document Hitch as explicit branch stacking, not as a required release process or as a replacement for conflict management. The main downside is repeated merge fixes across environments unless resolved changes are carried back into the feature branch.
 
 ## Installation
 

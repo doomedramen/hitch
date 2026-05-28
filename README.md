@@ -6,7 +6,7 @@
 
 > Git branch management for environment-based deployments
 
-Hitch treats environment branches as composable layers. Promote feature branches to environments, and Hitch rebuilds the environment branch by squashing them together. Demote to remove. Lock to freeze. Require approvals for production.
+Hitch treats environment branches as composable layers, not ordinary Git merge targets. You keep working on normal feature or bug branches, promote those branches into an environment's list, and Hitch rebuilds the environment branch from that list. Demote a branch to remove it from the environment. Release commands are available, but the core idea is explicit branch composition rather than manual environment merges.
 
 ## 🚀 Quick Start
 
@@ -32,10 +32,42 @@ hitch status
 
 - **"What branches are actually in `dev` right now?"** – Full audit trail of promotions
 - **"How do I rebuild `qa` with the latest from all promoted features?"** – `hitch rebuild` regenerates environment branches
+- **"Can I test one feature in `dev`, then the same feature in `qa`, then ship it to `main`?"** – One possible workflow is to promote the feature branch through each environment
+- **"Can I add or remove individual features from a test environment?"** – Each promoted branch is an entry in the environment's branch list
+- **"How is this different from normal Git merging?"** – Environments are rebuilt from a declared list of branches instead of accumulating hand-made merge commits
 - **"Can we freeze production during critical periods?"** – `hitch lock production`
 - **"How do we require team approval before production deployments?"** – Approval workflow with configurable thresholds
 
 ## 🔧 Core Concepts
+
+### Environment Branches Are Rebuilt From a List
+
+Hitch's main difference from plain Git merging is that an environment is defined by metadata: a base branch plus an ordered list of promoted branches. The environment branch is output that Hitch can regenerate.
+
+<p align="center">
+  <img src="docs/hitch-composition.png" alt="Hitch rebuilds an environment branch from a base branch plus an ordered list of promoted branches.">
+</p>
+
+One common workflow is to let a feature branch move through deployment environments:
+
+```bash
+# Work on a feature or bug branch as usual
+git checkout -b feature/user-auth main
+
+# Put that feature onto the dev environment branch
+hitch promote feature/user-auth dev
+# CI/CD for dev can now deploy the dev branch
+
+# When dev testing passes, put the same branch onto qa
+hitch promote feature/user-auth qa
+# CI/CD for qa can now deploy the qa branch
+
+# When qa passes, release it to main or production
+hitch release qa main
+# CI/CD for main can now deploy the production site
+```
+
+This gives you a visible list of single features layered on top of the source branch (`main`). You can add a branch to an environment with `promote`, remove it with `demote`, and rebuild the environment branch from the current list at any time.
 
 ### Environments as Composable Layers
 
@@ -49,7 +81,17 @@ dev        = main + feature/auth + feature/payments + feature/ui + feature/api
 
 When you promote or demote, Hitch rebuilds the environment by squashing all promoted branches together. Environment branches are **regenerated**, not manually merged.
 
+<p align="center">
+  <img src="docs/hitch-vs-git-merge.png" alt="Ordinary Git environment branches accumulate merge history, while Hitch stores desired contents and regenerates the branch.">
+</p>
+
 Rebuild is a read-only assembly check first: if any promoted branch can't be composed cleanly (in order) on top of the base, `hitch rebuild` refuses and tells you exactly which branch and files to fix.
+
+### Release and Merge Fixes
+
+`hitch release <environment> <target>` merges the environment's promoted branches into a target branch and lets your existing CI/CD take over from there. Some teams use this to move tested changes from `dev` to `qa` to `main`; others may use Hitch only to assemble and rebuild test environments.
+
+The tradeoff is merge fixes. Because Hitch repeatedly composes branches against a base and against each other, conflicts are still real Git conflicts. If a branch needs a compatibility fix in one environment, you may need to carry that fix back into the branch or repeat equivalent fixes when composing it elsewhere. Hitch makes the environment contents explicit and rebuildable; it does not erase the underlying Git cost of resolving conflicting changes.
 
 ## 📋 Key Commands
 
