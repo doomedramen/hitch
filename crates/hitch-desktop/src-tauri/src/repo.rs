@@ -54,7 +54,7 @@ pub fn probe_repo(path: &str) -> RepoProbeResultDto {
     let p = Path::new(path);
     let path = p.to_string_lossy().to_string();
 
-    let repo = match git2::Repository::open(&p) {
+    let repo = match git2::Repository::open(p) {
         Ok(r) => r,
         Err(e) => {
             return RepoProbeResultDto::err(path, format!("Not a git repository: {}", e));
