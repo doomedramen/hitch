@@ -176,23 +176,6 @@ impl GitOperations {
         })
     }
 
-    /// Run multiple git commands sequentially, returning early on first failure
-    #[allow(dead_code)]
-    fn run_git_commands(&self, commands: &[&[&str]]) -> Result<()> {
-        for args in commands {
-            let output = self.run_git_command(args)?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow::anyhow!(
-                    "Git command failed: git {} - {}",
-                    args.join(" "),
-                    stderr.trim()
-                ));
-            }
-        }
-        Ok(())
-    }
-
     /// Get the current branch name, handling special cases properly
     ///
     /// This function handles:
@@ -331,38 +314,6 @@ impl GitOperations {
         ))?;
 
         Ok(content)
-    }
-
-    /// Read raw bytes for a file in a branch/ref. Works for binary data.
-    #[allow(dead_code)]
-    pub fn read_blob_from_branch(&self, branch: &str, file: &str) -> Result<Vec<u8>> {
-        let output = self.run_git_command(&["show", &format!("{}:{}", branch, file)])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "File '{}' not found in branch '{}'",
-                file,
-                branch
-            ));
-        }
-        Ok(output.stdout)
-    }
-
-    /// List files under a path prefix inside a branch/ref.
-    #[allow(dead_code)]
-    pub fn list_files_in_branch(&self, branch: &str, path_prefix: &str) -> Result<Vec<String>> {
-        let output =
-            self.run_git_command(&["ls-tree", "-r", "--name-only", branch, "--", path_prefix])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "git ls-tree failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect())
     }
 
     /// Resolve a ref/commit-ish to a full SHA.
