@@ -114,6 +114,9 @@ mod tests {
         std::fs::write(&path, stale).unwrap();
 
         let lock = RepoLock::acquire(git_dir, "promote");
-        assert!(lock.is_ok(), "a stale lock from a dead process should be overwritten");
+        assert!(
+            lock.is_ok(),
+            "a stale lock from a dead process should be overwritten"
+        );
     }
 }

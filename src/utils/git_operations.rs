@@ -329,57 +329,6 @@ impl GitOperations {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// Resolve the first reference in `candidates` that exists.
-    #[allow(dead_code)]
-    pub fn rev_parse_fallback(&self, candidates: &[&str]) -> Result<String> {
-        for c in candidates {
-            if let Ok(sha) = self.rev_parse(c) {
-                return Ok(sha);
-            }
-        }
-        Err(anyhow::anyhow!("No candidate refs resolved"))
-    }
-
-    #[allow(dead_code)]
-    pub fn get_git_config(&self, key: &str) -> Result<Option<String>> {
-        let output = self.run_git_command(&["config", "--get", key])?;
-        if output.status.success() {
-            let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if v.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(v))
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn set_git_config(&self, key: &str, value: &str) -> Result<()> {
-        let output = self.run_git_command(&["config", key, value])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "git config {} {} failed: {}",
-                key,
-                value,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn unset_git_config(&self, key: &str) -> Result<()> {
-        let output = self.run_git_command(&["config", "--unset-all", key])?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            // It's fine if it's not set.
-            Ok(())
-        }
-    }
-
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
         let file_path = std::path::Path::new(&self.repo_path).join(file);
         std::fs::write(file_path, content).context(format!("Failed to write file '{}'", file))?;
@@ -1172,25 +1121,6 @@ impl GitOperations {
             return Err(anyhow::anyhow!("git stash pop failed: {}", stderr));
         }
         Ok(())
-    }
-
-    /// Return the message of the most recent stash entry, or `None` if there
-    /// is no stash.
-    #[allow(dead_code)]
-    pub fn stash_top_message(&self) -> Option<String> {
-        let out = self
-            .run_git_command(&["stash", "list", "--format=%s", "-n", "1"])
-            .ok()?;
-        if out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if msg.is_empty() {
-                None
-            } else {
-                Some(msg)
-            }
-        } else {
-            None
-        }
     }
 
     pub fn abort_merge_and_clean(&self) -> Result<()> {

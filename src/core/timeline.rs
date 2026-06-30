@@ -68,7 +68,7 @@ pub fn build_combined_timeline(
     // Hitch events from hitch-metadata history
     items.extend(build_hitch_events(context, hitch_limit, hitch_filter)?);
 
-    items.sort_by(|a, b| b.when.cmp(&a.when));
+    items.sort_by_key(|item| std::cmp::Reverse(item.when));
     Ok(items)
 }
 
