@@ -8,6 +8,21 @@ pub struct ApprovalsCommand {
     pub subcommand: ApprovalsSubcommand,
 }
 
+impl ApprovalsCommand {
+    /// Whether this subcommand mutates repository state (and therefore needs the
+    /// repository-wide lock). `list` and `status` are read-only.
+    pub fn is_mutating(&self) -> bool {
+        match self.subcommand {
+            ApprovalsSubcommand::List(_) | ApprovalsSubcommand::Status(_) => false,
+            ApprovalsSubcommand::Approve(_)
+            | ApprovalsSubcommand::Reject(_)
+            | ApprovalsSubcommand::Cancel(_)
+            | ApprovalsSubcommand::Cleanup(_)
+            | ApprovalsSubcommand::Refresh(_) => true,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum ApprovalsSubcommand {
     /// List approval requests

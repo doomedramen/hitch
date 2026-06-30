@@ -89,6 +89,75 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test: promoting to an approval-required environment must
+    /// create an approval request WITHOUT applying the promotion. The branch
+    /// must not appear in the environment's promoted-branches list until the
+    /// request is approved and executed.
+    #[test]
+    fn test_promote_with_approval_does_not_apply_until_approved() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+
+            // Create feature branch with changes
+            env.git.run(&["checkout", "-b", "feature/gated"])?;
+            env.fs.write_file("gated.js", "// gated feature")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add gated feature"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Promote should create an approval request and succeed...
+            env.hitch
+                .run()
+                .args(&["promote", "feature/gated", "production"])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("requires approval before promotion")
+                .assert_stdout_contains("Approval request created");
+
+            // ...but the branch must NOT be promoted yet.
+            let config = env.read_hitch_config()?;
+            let production = config
+                .environments
+                .get("production")
+                .expect("production environment should exist");
+            assert!(
+                !production.branches.contains(&"feature/gated".to_string()),
+                "Branch must NOT be promoted while approval is pending; got branches: {:?}",
+                production.branches
+            );
+
+            // A pending request should exist for the branch.
+            assert!(
+                config
+                    .approval_requests
+                    .iter()
+                    .any(|r| r.branch == "feature/gated"
+                        && r.status == hitch::types::ApprovalStatus::Pending),
+                "A pending approval request should exist for feature/gated"
+            );
+
+            // The production environment branch must not have been built from the
+            // gated branch (gated.js must not be reachable from production).
+            let show = env.git.run(&["cat-file", "-e", "production:gated.js"]);
+            // `git cat-file -e` exits non-zero when the path does not exist.
+            assert!(
+                show.is_err() || !show.unwrap().success(),
+                "gated.js must not be present on the production branch before approval"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn test_approval_authorization() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;

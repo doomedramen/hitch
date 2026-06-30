@@ -21,6 +21,16 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
         ));
     }
 
+    // Cannot start with '-': git forbids this for ref names, and more importantly
+    // such a value could be mis-parsed as a command-line option when passed to git.
+    if name.starts_with('-') {
+        return Err(anyhow::anyhow!(
+            "{} name cannot start with '-': '{}'",
+            name_type,
+            name
+        ));
+    }
+
     // Check for invalid characters that would cause issues in git
     let invalid_chars = ["..", "@{", ":", "[", "]", "\\", "^", "~", "?", "*"];
     for invalid in &invalid_chars {

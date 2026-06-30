@@ -151,8 +151,6 @@ pub struct RollbackInfo {
     pub branch: String,
     /// The environment state before the operation
     pub previous_state: Option<Environment>,
-    /// The commit SHA before metadata modification
-    pub metadata_commit_before: Option<String>,
     /// When the operation was started
     #[allow(dead_code)]
     pub timestamp: DateTime<Utc>,
@@ -165,7 +163,6 @@ impl RollbackInfo {
             env_name,
             branch,
             previous_state: None,
-            metadata_commit_before: None,
             timestamp: Utc::now(),
         }
     }

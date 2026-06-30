@@ -189,6 +189,14 @@ hitch approvals approve <request-id> "Ready for production"
 hitch approvals list --status pending
 ```
 
+> **Note:** The approval workflow is an advisory/audit aid, not a security
+> boundary. Approver identity comes from local `git config user.email`, and the
+> approval state lives in the `hitch-metadata` branch that anyone with write
+> access can edit. For real enforcement, use server-side branch protection and
+> required reviews. See [SECURITY.md](SECURITY.md) for details. Note also that
+> `hitch release` is **not** approval-gated — releasing an approval-required
+> environment requires `--force`.
+
 See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed approval workflow documentation.
 
 ## 📦 Installation

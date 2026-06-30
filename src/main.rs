@@ -88,8 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let command = cli.command.expect("checked above");
+
     // Configure logger for the specific command
-    let command_name = match cli.command.as_ref().expect("checked above") {
+    let command_name = match &command {
         Commands::Init(_) => "init",
         Commands::Add(_) => "add",
         Commands::Remove(_) => "remove",
@@ -116,8 +118,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create global context with flags
     let context = GlobalContext::new(cli.verbose, cli.no_push, logger)?;
 
+    // Acquire a repository-wide lock for mutating commands so two concurrent
+    // Hitch operations on the same repo can't clobber each other's branch
+    // switches and hitch-metadata rewrites. Read-only commands skip the lock.
+    // The guard is held until `main` returns, which releases the lock.
+    let _repo_lock = if command_is_mutating(&command) {
+        Some(
+            hitch::utils::repo_lock::RepoLock::acquire(
+                std::path::Path::new(&context.git().get_git_dir()),
+                command_name,
+            )
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
+        )
+    } else {
+        None
+    };
+
     // Execute the appropriate command
-    match cli.command.expect("checked above") {
+    match command {
         Commands::Init(args) => commands::init::run(args, &context).map_err(|e| e.into()),
         Commands::Add(args) => commands::add::run(args, &context).map_err(|e| e.into()),
         Commands::Remove(args) => commands::remove::run(args, &context).map_err(|e| e.into()),
@@ -138,5 +156,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
         Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),
         Commands::Branch(args) => commands::branch::run(args, &context).map_err(|e| e.into()),
+    }
+}
+
+/// Whether a command mutates repository state and therefore needs the
+/// repository-wide lock. Read-only commands (status, tree, diff, completion, and
+/// the read-only approvals subcommands) skip it so they remain usable while a
+/// mutating operation is in progress.
+fn command_is_mutating(command: &Commands) -> bool {
+    match command {
+        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Completion(_) => {
+            false
+        }
+        Commands::Approvals(args) => args.is_mutating(),
+        _ => true,
     }
 }

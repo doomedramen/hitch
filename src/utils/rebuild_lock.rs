@@ -66,7 +66,7 @@ impl Drop for RebuildLock {
 ///
 /// Uses `kill -0 <pid>` which sends no signal but succeeds if the process
 /// exists. Works on macOS and Linux.
-fn is_process_alive(pid: u32) -> bool {
+pub(crate) fn is_process_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .output()

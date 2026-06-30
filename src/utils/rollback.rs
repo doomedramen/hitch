@@ -1,20 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{HitchConfig, RollbackInfo, RollbackOperation};
-use anyhow::{Context, Result};
-
-/// Capture the current commit SHA for rollback purposes
-pub fn capture_current_commit_sha(context: &GlobalContext) -> Result<String> {
-    context.log_verbose("Capturing current commit SHA for rollback...");
-
-    let commit_sha = context
-        .git()
-        .run_git_command(&["rev-parse", "HEAD"])
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .context("Failed to capture current commit SHA")?;
-
-    context.log_verbose(&format!("Captured commit SHA: {}", commit_sha));
-    Ok(commit_sha)
-}
+use anyhow::Result;
 
 /// Main rollback function that dispatches to operation-specific rollback
 pub fn rollback_metadata_changes(
@@ -148,7 +134,6 @@ mod tests {
         assert_eq!(rollback_info.env_name, "dev");
         assert_eq!(rollback_info.branch, "feature-branch");
         assert!(rollback_info.previous_state.is_none());
-        assert!(rollback_info.metadata_commit_before.is_none());
     }
 
     #[test]
@@ -161,12 +146,10 @@ mod tests {
         );
 
         rollback_info.previous_state = Some(env.clone());
-        rollback_info.metadata_commit_before = Some("abc123".to_string());
 
         assert!(matches!(rollback_info.operation, RollbackOperation::Demote));
         assert_eq!(rollback_info.env_name, "staging");
         assert_eq!(rollback_info.branch, "old-feature");
         assert!(rollback_info.previous_state.is_some());
-        assert!(rollback_info.metadata_commit_before.as_ref().unwrap() == "abc123");
     }
 }

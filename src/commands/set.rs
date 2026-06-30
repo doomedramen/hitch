@@ -55,8 +55,9 @@ pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
     }
 
     // Step 4: Show what will change and confirm
-    if !args.force {
-        show_changes(context, &args.env_name, &args)?;
+    if !args.force && !show_changes(context, &args.env_name, &args)? {
+        context.log_info("Update cancelled by user.");
+        return Ok(());
     }
 
     // Step 5: Apply the changes
@@ -128,8 +129,10 @@ fn validate_preconditions(
     Ok(())
 }
 
-/// Show what changes will be made and confirm with user
-fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> Result<()> {
+/// Show what changes will be made and confirm with user.
+///
+/// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
+fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> Result<bool> {
     use std::io::{self, Write};
 
     let config =
@@ -214,12 +217,11 @@ fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> R
 
     let input = input.trim().to_lowercase();
     if input != "y" && input != "yes" {
-        context.log_info("Update cancelled by user.");
-        std::process::exit(0);
+        return Ok(false);
     }
 
     context.log_info("User confirmed update - proceeding...");
-    Ok(())
+    Ok(true)
 }
 
 /// Apply the changes to the environment

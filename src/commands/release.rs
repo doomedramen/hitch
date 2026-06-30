@@ -19,7 +19,7 @@ pub struct ReleaseCommand {
     #[arg()]
     pub target_branch: Option<String>,
 
-    /// Force release even if environment is locked
+    /// Force release even if the environment is locked or requires approval
     #[arg(long)]
     pub force: bool,
 
@@ -46,8 +46,9 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
     let target_branch = resolve_target_branch(context, &args.env_name, args.target_branch)?;
 
     // Step 3: User confirmation (skip with --force)
-    if !args.force {
-        confirm_release(context, &args.env_name, &target_branch)?;
+    if !args.force && !confirm_release(context, &args.env_name, &target_branch)? {
+        context.log_info("Release cancelled by user.");
+        return Ok(());
     }
 
     // Step 4-7: Execute release with automatic locking and unlocking
@@ -106,6 +107,19 @@ fn validate_preconditions(context: &GlobalContext, env_name: &str, force: bool) 
             "Environment '{}' is locked by {}. Use --force to override.",
             env_name,
             get_locked_by_user(context, env_name)?
+        ));
+    }
+
+    // Releasing an approval-gated environment merges its promoted branches into a
+    // real target/deploy branch. The per-promote approval workflow does not cover
+    // release, so require an explicit --force to acknowledge that the release is
+    // not itself approval-gated.
+    if environment.requires_approval && !force {
+        return Err(anyhow::anyhow!(
+            "Environment '{}' requires approval. Releasing it merges its promoted branches \
+             into the target branch and is NOT covered by the per-promote approval workflow.\n\
+             Re-run with --force to release anyway.",
+            env_name
         ));
     }
 
@@ -656,8 +670,10 @@ fn topological_environment_order(config: &crate::types::HitchConfig) -> Vec<Stri
     out
 }
 
-/// Confirm release operation with user
-fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str) -> Result<()> {
+/// Confirm release operation with user.
+///
+/// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
+fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str) -> Result<bool> {
     use std::io::{self, Write};
 
     // Get environment details to show user what will be released
@@ -705,10 +721,9 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
 
     let input = input.trim().to_lowercase();
     if input != "y" && input != "yes" {
-        context.log_info("Release cancelled by user.");
-        std::process::exit(0);
+        return Ok(false);
     }
 
     context.log_info("User confirmed release - proceeding...");
-    Ok(())
+    Ok(true)
 }

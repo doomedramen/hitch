@@ -41,6 +41,23 @@ This project uses [lefthook](https://github.com/evilmartians/lefthook) for pre-c
 - No execution of arbitrary shell commands from user input
 - Proper error handling without information leakage
 
+### Approval Workflow Is Advisory, Not an Enforcement Boundary
+
+The approval workflow (`requires_approval`, `approvers`, `min_approvals`) is a
+**coordination and audit aid, not a security control**. Be aware that:
+
+- Approver identity is taken from local `git config user.email`, which any user
+  can set to any value.
+- Approval state is stored in the `hitch-metadata` branch. Anyone with write
+  access to the repository can edit and push that branch directly, bypassing the
+  workflow entirely.
+
+For real enforcement of "no deploy without N approvals", rely on server-side
+controls such as branch protection rules, required reviews, and CI checks on the
+remote. Treat Hitch's approval workflow as a way to make intent explicit and
+auditable among cooperating teammates, not as a barrier against a malicious or
+careless actor with repository write access.
+
 ## Dependency Security
 
 We monitor dependencies for vulnerabilities using:

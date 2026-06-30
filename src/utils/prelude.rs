@@ -259,9 +259,9 @@ where
     }
 
     // Handle detached HEAD case specially
-    let checkout_result = if original_branch.starts_with("detached-HEAD-") {
+    let checkout_result = if let Some(commit_hash) = original_branch.strip_prefix("detached-HEAD-")
+    {
         // Extract commit hash from detached-HEAD-abcdef1 format
-        let commit_hash = &original_branch[13..]; // Remove "detached-HEAD-" prefix
         context.git().checkout_branch(commit_hash)
     } else {
         context.git().checkout_branch(&original_branch)
@@ -310,23 +310,29 @@ where
         context.log_warning("Continuing with local metadata...");
     }
 
-    // Read hitch.json using git show (no branch switching needed)
-    // Try remote first (for fresh clones), then fallback to local
+    // Read hitch.json using git show (no branch switching needed).
+    //
+    // Read from the LOCAL hitch-metadata branch first so this is consistent with
+    // `modify_metadata` (which always reads/writes local). `check_metadata_health`
+    // guarantees the local branch exists and is not behind the remote, so local is
+    // the source of truth. Reading `origin/` first would surface stale data after a
+    // `--no-push` mutation (local ahead of origin). `origin/` remains a fallback for
+    // edge cases where the local read fails.
     context.log_verbose("Reading hitch.json from hitch-metadata branch...");
     let config_json = match context
         .git()
-        .read_file_from_branch("origin/hitch-metadata", "hitch.json")
+        .read_file_from_branch("hitch-metadata", "hitch.json")
     {
         Ok(content) => {
-            context.log_verbose("✓ Read from origin/hitch-metadata");
+            context.log_verbose("✓ Read from local hitch-metadata");
             content
         }
         Err(_) => {
             context
-                .log_verbose("origin/hitch-metadata not available, trying local hitch-metadata...");
+                .log_verbose("local hitch-metadata not readable, trying origin/hitch-metadata...");
             context.git()
-                .read_file_from_branch("hitch-metadata", "hitch.json")
-                .context("Failed to read hitch.json from either origin/hitch-metadata or local hitch-metadata branch")?
+                .read_file_from_branch("origin/hitch-metadata", "hitch.json")
+                .context("Failed to read hitch.json from either local hitch-metadata or origin/hitch-metadata branch")?
         }
     };
 
@@ -455,42 +461,6 @@ where
         modification_closure()
     } else {
         switch_to(context, "hitch-metadata", modification_closure)
-    }
-}
-
-/// Modify metadata with rollback tracking
-///
-/// This function extends modify_metadata by capturing the pre-operation state
-/// for potential rollback purposes. It works the same as modify_metadata
-/// but also captures rollback information.
-pub fn modify_metadata_with_rollback<F>(
-    context: &GlobalContext,
-    rollback_info: &mut crate::types::RollbackInfo,
-    closure: F,
-) -> Result<()>
-where
-    F: FnOnce(&mut HitchConfig) -> Result<()>,
-{
-    context.log_verbose("Accessing hitch metadata with rollback tracking...");
-
-    // Capture current commit SHA before making any changes
-    let commit_before = crate::utils::rollback::capture_current_commit_sha(context)?;
-    rollback_info.metadata_commit_before = Some(commit_before);
-
-    // Execute the normal modify_metadata function
-    let result = modify_metadata(context, closure);
-
-    match &result {
-        Ok(()) => {
-            context.log_verbose("✓ Metadata modified successfully, rollback info captured");
-            Ok(())
-        }
-        Err(e) => {
-            context.log_verbose(&format!("Metadata modification failed: {}", e));
-            // Clear rollback info since modification didn't succeed
-            rollback_info.metadata_commit_before = None;
-            result
-        }
     }
 }
 
@@ -762,13 +732,13 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             }
 
             // Handle detached HEAD case specially
-            let checkout_result = if user_original_branch.starts_with("detached-HEAD-") {
-                // Extract commit hash from detached-HEAD-abcdef1 format
-                let commit_hash = &user_original_branch[13..]; // Remove "detached-HEAD-" prefix
-                context.git().checkout_branch(commit_hash)
-            } else {
-                context.git().checkout_branch(&user_original_branch)
-            };
+            let checkout_result =
+                if let Some(commit_hash) = user_original_branch.strip_prefix("detached-HEAD-") {
+                    // Extract commit hash from detached-HEAD-abcdef1 format
+                    context.git().checkout_branch(commit_hash)
+                } else {
+                    context.git().checkout_branch(&user_original_branch)
+                };
 
             if let Err(e) = checkout_result {
                 context.log_error(&format!(
@@ -819,13 +789,13 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         ));
 
         // Handle detached HEAD case specially
-        let checkout_result = if user_original_branch.starts_with("detached-HEAD-") {
-            // Extract commit hash from detached-HEAD-abcdef1 format
-            let commit_hash = &user_original_branch[13..]; // Remove "detached-HEAD-" prefix
-            context.git().checkout_branch(commit_hash)
-        } else {
-            context.git().checkout_branch(&user_original_branch)
-        };
+        let checkout_result =
+            if let Some(commit_hash) = user_original_branch.strip_prefix("detached-HEAD-") {
+                // Extract commit hash from detached-HEAD-abcdef1 format
+                context.git().checkout_branch(commit_hash)
+            } else {
+                context.git().checkout_branch(&user_original_branch)
+            };
 
         if let Err(e) = checkout_result {
             context.log_warning(&format!(

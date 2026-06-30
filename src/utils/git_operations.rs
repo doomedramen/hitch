@@ -104,6 +104,11 @@ impl GitOperations {
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
+        // Force a stable, English locale so that the stdout/stderr substring checks
+        // used throughout this module (e.g. "nothing to commit", "No local changes
+        // to save", fetch "no remote" messages) are not broken by a user's locale.
+        cmd.env("LC_ALL", "C");
+        cmd.env("LANG", "C");
         cmd.output().context(format!(
             "Failed to execute git command: git {} in repository at {}",
             args.join(" "),
@@ -510,6 +515,15 @@ impl GitOperations {
 
     pub fn is_working_directory_clean(&self) -> Result<bool> {
         let output = self.run_git_command(&["status", "--porcelain"])?;
+
+        // Treat a failed `git status` as an error rather than silently reporting
+        // "clean" (empty stdout) when the command itself did not succeed.
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to check working directory status: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
 
         Ok(output.stdout.is_empty())
     }

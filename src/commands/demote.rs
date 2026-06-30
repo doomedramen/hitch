@@ -30,8 +30,13 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 1: Ensure we are in a Git repository
     crate::utils::prelude::pre_check_repo_only(context)?;
 
-    // Step 2: Additional validation specific to demotion
-    validate_preconditions(context, &args.branch, &args.env_name)?;
+    // Step 2: Additional validation specific to demotion.
+    // When the environment requires approval, this creates an approval request
+    // and returns `true` to signal that the demotion must NOT be applied now —
+    // it is applied later by `hitch approvals approve` once the threshold is met.
+    if validate_preconditions(context, &args.branch, &args.env_name)? {
+        return Ok(());
+    }
 
     // Create rollback info for this operation
     let mut rollback_info = RollbackInfo::new(
@@ -80,12 +85,17 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     }
 }
 
-/// Validate that branch and environment are ready for demotion
+/// Validate that branch and environment are ready for demotion.
+///
+/// Returns `Ok(true)` when the environment requires approval and an approval
+/// request was created instead of applying the demotion — the caller must stop
+/// and NOT apply the demotion. Returns `Ok(false)` when validation passed and
+/// the caller should proceed to apply the demotion.
 fn validate_preconditions(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     context.log_verbose("Validating demotion preconditions...");
 
     // Validate input names
@@ -135,8 +145,9 @@ fn validate_preconditions(
         // Display approval request information
         crate::utils::prelude::display_approval_request_created(context, &request_id)?;
 
-        // Return success without executing demotion
-        return Ok(());
+        // Signal the caller to stop: the demotion must wait for approval and
+        // will be applied by `hitch approvals approve` once the threshold is met.
+        return Ok(true);
     }
 
     validation_success(
@@ -144,7 +155,7 @@ fn validate_preconditions(
         &format!("'{}' from '{}'", branch, env_name),
         "Demotion validation",
     );
-    Ok(())
+    Ok(false)
 }
 
 /// Remove branch from environment and trigger rebuild
@@ -164,8 +175,9 @@ fn demote_branch_from_environment(
     rollback_info.previous_state =
         crate::utils::rollback::capture_environment_state(context, env_name)?;
 
-    // Modify metadata to remove the branch with rollback tracking
-    crate::utils::prelude::modify_metadata_with_rollback(context, rollback_info, |config| {
+    // Modify metadata to remove the branch. The pre-operation state for rollback was
+    // already captured above via `capture_environment_state`.
+    crate::utils::prelude::modify_metadata(context, |config| {
         let available_envs = config.get_environment_names().join(", ");
         let environment = config.get_environment_mut(env_name).ok_or_else(|| {
             anyhow::anyhow!(

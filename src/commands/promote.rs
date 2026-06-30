@@ -33,8 +33,13 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 1: Ensure we are in a Git repository
     crate::utils::prelude::pre_check_repo_only(context)?;
 
-    // Step 2: Additional validation specific to promotion
-    validate_preconditions(context, &args.branch, &args.env_name)?;
+    // Step 2: Additional validation specific to promotion.
+    // When the environment requires approval, this creates an approval request
+    // and returns `true` to signal that the promotion must NOT be applied now —
+    // it is applied later by `hitch approvals approve` once the threshold is met.
+    if validate_preconditions(context, &args.branch, &args.env_name)? {
+        return Ok(());
+    }
 
     // Create rollback info for this operation
     let mut rollback_info = RollbackInfo::new(
@@ -83,12 +88,17 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     }
 }
 
-/// Validate that branch and environment are ready for promotion
+/// Validate that branch and environment are ready for promotion.
+///
+/// Returns `Ok(true)` when the environment requires approval and an approval
+/// request was created instead of applying the promotion — the caller must
+/// stop and NOT apply the promotion. Returns `Ok(false)` when validation passed
+/// and the caller should proceed to apply the promotion.
 fn validate_preconditions(
     context: &GlobalContext,
     branch: &str,
     env_name: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     context.log_verbose("Validating promotion preconditions...");
 
     // Validate input names
@@ -153,8 +163,9 @@ fn validate_preconditions(
         // Display approval request information
         crate::utils::prelude::display_approval_request_created(context, &request_id)?;
 
-        // Return success without executing promotion
-        return Ok(());
+        // Signal the caller to stop: the promotion must wait for approval and
+        // will be applied by `hitch approvals approve` once the threshold is met.
+        return Ok(true);
     }
 
     validation_success(
@@ -162,7 +173,7 @@ fn validate_preconditions(
         &format!("'{}' to '{}'", branch, env_name),
         "Promotion validation",
     );
-    Ok(())
+    Ok(false)
 }
 
 /// Add branch to environment and trigger rebuild
@@ -182,8 +193,9 @@ fn promote_branch_to_environment(
     rollback_info.previous_state =
         crate::utils::rollback::capture_environment_state(context, env_name)?;
 
-    // Modify metadata to add the branch with rollback tracking
-    crate::utils::prelude::modify_metadata_with_rollback(context, rollback_info, |config| {
+    // Modify metadata to add the branch. The pre-operation state for rollback was
+    // already captured above via `capture_environment_state`.
+    crate::utils::prelude::modify_metadata(context, |config| {
         let available_envs = config.get_environment_names().join(", ");
         let environment = config.get_environment_mut(env_name).ok_or_else(|| {
             anyhow::anyhow!(

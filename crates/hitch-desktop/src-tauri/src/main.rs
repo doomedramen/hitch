@@ -111,6 +111,15 @@ async fn promote(repo_path: String, branch_name: String, env_name: String) -> Op
             Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
         };
 
+        // Serialize against any other Hitch operation on the same repo (CLI or app).
+        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
+            std::path::Path::new(&ctx.git().get_git_dir()),
+            "promote",
+        ) {
+            Ok(lock) => lock,
+            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
+        };
+
         let args = hitch::commands::promote::PromoteCommand {
             branch: branch_name,
             env_name,
@@ -132,6 +141,15 @@ async fn rebuild(repo_path: String, env_name: String, force: bool) -> OperationR
             Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
         };
 
+        // Serialize against any other Hitch operation on the same repo (CLI or app).
+        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
+            std::path::Path::new(&ctx.git().get_git_dir()),
+            "rebuild",
+        ) {
+            Ok(lock) => lock,
+            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
+        };
+
         let args = hitch::commands::rebuild::RebuildCommand { env_name, force };
         let res = hitch::commands::rebuild::run(args, &ctx);
         OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
@@ -146,6 +164,15 @@ async fn release(repo_path: String, env_name: String) -> OperationResultDto {
         let (ctx, sink) = match op_context_with_sink(&repo_path) {
             Ok(v) => v,
             Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
+        };
+
+        // Serialize against any other Hitch operation on the same repo (CLI or app).
+        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
+            std::path::Path::new(&ctx.git().get_git_dir()),
+            "release",
+        ) {
+            Ok(lock) => lock,
+            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
         };
 
         // The desktop app provides confirmation via UI, so always run with force=true.

@@ -1,5 +1,8 @@
 /target
 
+# Editor / backup files
+*.bak
+
 # Test coverage reports
 lcov.info
 *.profraw
