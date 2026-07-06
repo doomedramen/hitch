@@ -65,6 +65,11 @@ jobs:
   test-cross-platform:
     name: Test Suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The integration harness spawns hitch (which itself shells out to git) for
+    # every test; on the slower Windows runner this is far more expensive than on
+    # macOS (~3 min). Bound it so a genuine hang fails fast with retained logs
+    # instead of burning the 6h default.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +88,11 @@ jobs:
         git config --global user.name "Hitch CI"
         git config --global init.defaultBranch main
         git config --global core.autocrlf false
+        # Disable background auto-gc. On Windows the detached `git gc --auto`
+        # process inherits the stdout pipe of the git command that triggered it,
+        # so the test harness's `Command::output()` never sees EOF and the run
+        # hangs. Keeping gc synchronous/off avoids that deadlock.
+        git config --global gc.auto 0
 
     - name: Cache dependencies
       uses: actions/cache@v5
