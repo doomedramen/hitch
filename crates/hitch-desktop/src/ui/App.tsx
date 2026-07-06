@@ -11,22 +11,21 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import {
   ArrowUpRight,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Cloud,
+  Clock,
   FileText,
   FolderSearch,
   GitBranch,
   History,
-  HardDrive,
   Info,
   Layers,
   LoaderCircle,
@@ -44,6 +43,7 @@ import {
 } from "lucide-react";
 import { loadRepos, saveRepos } from "./storage";
 import type {
+  ApprovalRequest,
   ApprovalsList,
   BranchDetailsModel,
   BufferedLine,
@@ -144,6 +144,34 @@ function SidebarSectionHeading({
       )}
       {...props}
     />
+  );
+}
+
+function SidebarSearch({
+  value,
+  onChange,
+  className
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2 rounded-[7px] bg-[var(--fill-soft)] px-2.5 py-[6px] text-label-tertiary",
+        className
+      )}
+    >
+      <Search className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
+      <input
+        placeholder="Filter"
+        aria-label="Filter"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[13px] text-label outline-none placeholder:text-label-tertiary"
+      />
+    </div>
   );
 }
 
@@ -263,85 +291,247 @@ function DiffStatList({ items }: { items: string[] }) {
   );
 }
 
+function Pill({
+  tone,
+  children
+}: {
+  tone: "lock" | "approval" | "neutral";
+  children: React.ReactNode;
+}) {
+  const toneCls =
+    tone === "lock"
+      ? "bg-[var(--warn-soft)] text-warn"
+      : tone === "approval"
+        ? "bg-[rgba(0,122,255,0.12)] text-primary"
+        : "bg-[var(--fill-soft)] text-label-secondary";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
+        toneCls
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ContentHeader({
+  title,
+  locked,
+  requiresApproval,
+  minApprovals,
+  subtitle
+}: {
+  title: string;
+  locked?: boolean;
+  requiresApproval?: boolean;
+  minApprovals?: number;
+  subtitle?: string | null;
+}) {
+  return (
+    <div className="mb-5 select-text">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <h1 className="m-0 text-[20px] font-semibold tracking-[-0.01em] text-label">{title}</h1>
+        {locked ? (
+          <Pill tone="lock">
+            <LockKeyhole className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+            Locked
+          </Pill>
+        ) : null}
+        {requiresApproval ? (
+          <Pill tone="approval">
+            Requires {minApprovals ?? 1} approval{(minApprovals ?? 1) === 1 ? "" : "s"}
+          </Pill>
+        ) : null}
+      </div>
+      {subtitle ? <p className="mb-0 mt-1.5 text-[13px] text-label-secondary">{subtitle}</p> : null}
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <div className="mb-2 mt-6 text-[12px] font-semibold text-label-secondary">{children}</div>;
+}
+
+function ApprovalCard({
+  request,
+  dateFmt,
+  onApprove,
+  onReject
+}: {
+  request: ApprovalRequest;
+  dateFmt: Intl.DateTimeFormat;
+  onApprove: (r: ApprovalRequest) => void;
+  onReject: (r: ApprovalRequest) => void;
+}) {
+  const approvedBy = new Set(request.approvals.map((a) => a.approved_by));
+  const pct =
+    request.min_approvals > 0
+      ? Math.min(100, Math.round((request.approval_count / request.min_approvals) * 100))
+      : 0;
+
+  return (
+    <div className="rounded-[10px] hairline-strong bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[14px] font-semibold text-label">
+            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-label-secondary" strokeWidth={2} aria-hidden="true" />
+            <span className="min-w-0 truncate">
+              {request.branch} → {request.environment}
+            </span>
+          </div>
+          <div className="mt-1 text-[12px] text-label-secondary">
+            {request.operation} · requested by {request.requested_by} · {formatWhen(request.requested_at, dateFmt)}
+          </div>
+        </div>
+        <Pill tone="lock">
+          <Clock className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+          Pending
+        </Pill>
+      </div>
+
+      <div className="my-3.5 flex items-center gap-2.5">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--fill-soft)]">
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="shrink-0 text-[12px] font-semibold tabular-nums text-label-secondary">
+          {request.approval_count} / {request.min_approvals}
+        </span>
+      </div>
+
+      {request.approvers.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {request.approvers.map((email) => {
+            const done = approvedBy.has(email);
+            const isRequester = email === request.requested_by;
+            return (
+              <span
+                key={email}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-2 py-[3px] text-[11px]",
+                  done ? "bg-[var(--success-soft)] text-success" : "hairline-strong text-label-secondary"
+                )}
+              >
+                {done ? (
+                  <Check className="h-3 w-3" strokeWidth={2.4} aria-hidden="true" />
+                ) : (
+                  <Clock className="h-3 w-3" strokeWidth={1.8} aria-hidden="true" />
+                )}
+                {email}
+                {isRequester ? " · requester" : ""}
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {request.viewer_can_approve || request.viewer_can_reject ? (
+        <div className="mt-4 flex gap-2">
+          {request.viewer_can_approve ? (
+            <Button size="sm" className="h-6 justify-center px-2.5 text-[12px]" onClick={() => onApprove(request)}>
+              <ShieldCheck className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              Approve
+            </Button>
+          ) : null}
+          {request.viewer_can_reject ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-6 justify-center px-2.5 text-[12px] text-destructive"
+              onClick={() => onReject(request)}
+            >
+              Reject
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function OverviewPanel({ text, dateFmt }: { text: string; dateFmt: Intl.DateTimeFormat }) {
   const rows = useMemo(() => parseOverview(text), [text]);
-  if (rows.length === 0) return <div className="py-12 text-[13px] text-label-tertiary text-center">No overview</div>;
+  if (rows.length === 0) return <div className="py-12 text-center text-[13px] text-label-tertiary">No overview</div>;
+
+  // `locked` is surfaced as a header pill, so drop it from the table.
+  const visible = rows.filter((r) => !(r.kind === "kv" && r.key.trim().toLowerCase() === "locked"));
+  const textRows = visible.filter((r): r is Extract<OverviewRow, { kind: "text" }> => r.kind === "text");
+  const kvRows = visible.filter((r) => r.kind !== "text");
 
   return (
     <div className="select-text">
-      {rows.map((row, idx) => {
-        const showDivider = idx !== rows.length - 1;
-        if (row.kind === "text") {
-          return (
-            <div key={idx} className={cn("py-2.5 text-[13px] text-label", showDivider ? "hairline-b" : "")}>
-              {row.value}
-            </div>
-          );
-        }
+      {textRows.map((row, i) => (
+        <p key={`t${i}`} className="mb-3 text-[13px] text-label">
+          {row.value}
+        </p>
+      ))}
 
-        if (row.kind === "list") {
-          const isDiffStat = row.key.trim().toLowerCase() === "diff_stat";
-          return (
-            <div key={idx} className={cn("py-2.5", showDivider ? "hairline-b" : "")}>
-              <div className="grid grid-cols-[140px_1fr] gap-3">
-                <div className="pt-0.5 text-[12px] text-label-secondary">
-                  {overviewKeyLabel(row.key)}
-                </div>
-                <div className="min-w-0">
-                  {row.items.length === 0 ? (
-                    <div className="text-[13px] text-label-tertiary">None</div>
-                  ) : isDiffStat ? (
-                    <DiffStatList items={row.items} />
-                  ) : (
-                    <ul className="space-y-1">
-                      {row.items.map((it, j) => (
-                        <li key={j} className="flex gap-2 text-[13px] text-label">
-                          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-label-tertiary" />
-                          <span className={cn("min-w-0 break-words", looksCodey(it) ? "font-mono text-[12px] text-label-secondary" : "")}>{it}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        const isYes = row.value.toLowerCase() === "yes";
-        const isNo = row.value.toLowerCase() === "no";
-        const badge =
-          row.key === "locked" && (isYes || isNo) ? (
-            <span
-              className={cn(
-                "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
-                isYes ? "bg-[var(--warn-soft)] text-warn" : "bg-[var(--fill-soft)] text-label-secondary"
-              )}
-            >
-              {row.value}
-            </span>
-          ) : null;
-
-        const isTime = TIME_KEYS.has(row.key.trim().toLowerCase());
-        const shownValue = isTime ? formatWhen(row.value, dateFmt) : row.value;
-
-        return (
-          <div key={idx} className={cn("py-2.5", showDivider ? "hairline-b" : "")}>
-            <div className="grid grid-cols-[140px_1fr] gap-3">
-              <div className="pt-0.5 text-[12px] text-label-secondary">
-                {overviewKeyLabel(row.key)}
-              </div>
-              <div className="min-w-0 text-[13px] text-label">
-                {badge ?? (
-                  <span className={cn("break-words", !isTime && looksCodey(shownValue) ? "font-mono text-[12px] text-label-secondary" : "")}>
-                    {shownValue.length === 0 ? <span className="text-label-tertiary">—</span> : shownValue}
-                  </span>
+      {kvRows.length > 0 ? (
+        <>
+          <SectionTitle>Overview</SectionTitle>
+          <div className="overflow-hidden rounded-[8px] hairline-strong">
+            {kvRows.map((row, idx) => (
+              <div
+                key={idx}
+                className={cn(
+                  "grid grid-cols-[150px_minmax(0,1fr)] gap-3.5 px-3.5 py-2.5 text-[13px]",
+                  idx > 0 ? "hairline-t" : ""
+                )}
+              >
+                {row.kind === "list" ? (
+                  <>
+                    <div className="text-label-secondary">{overviewKeyLabel(row.key)}</div>
+                    <div className="min-w-0">
+                      {row.items.length === 0 ? (
+                        <span className="text-label-tertiary">None</span>
+                      ) : row.key.trim().toLowerCase() === "diff_stat" ? (
+                        <DiffStatList items={row.items} />
+                      ) : (
+                        <ul className="space-y-1">
+                          {row.items.map((it, j) => (
+                            <li key={j} className="flex gap-2 text-label">
+                              <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-label-tertiary" />
+                              <span
+                                className={cn(
+                                  "min-w-0 break-words",
+                                  looksCodey(it) ? "font-mono text-[12px] text-label-secondary" : ""
+                                )}
+                              >
+                                {it}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="self-center text-label-secondary">{overviewKeyLabel(row.key)}</div>
+                    <div className="min-w-0 self-center text-label">
+                      {(() => {
+                        const isTime = TIME_KEYS.has(row.key.trim().toLowerCase());
+                        const shownValue = isTime ? formatWhen(row.value, dateFmt) : row.value;
+                        return (
+                          <span
+                            className={cn(
+                              "break-words",
+                              !isTime && looksCodey(shownValue) ? "font-mono text-[12px] text-label-secondary" : ""
+                            )}
+                          >
+                            {shownValue.length === 0 ? <span className="text-label-tertiary">—</span> : shownValue}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </>
                 )}
               </div>
-            </div>
+            ))}
           </div>
-        );
-      })}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -778,6 +968,29 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
         ? branchModel?.timeline ?? []
         : [];
 
+  const selectedEnvMin =
+    renderedSelection.kind === "env"
+      ? index?.environments.find((e) => e.name === renderedSelection.name) ?? null
+      : null;
+
+  const envPending = useMemo(
+    () =>
+      renderedSelection.kind === "env"
+        ? (approvals?.requests ?? []).filter(
+            (r) => r.environment === renderedSelection.name && r.status === "Pending"
+          )
+        : [],
+    [approvals, renderedSelection]
+  );
+
+  const headerTitle = renderedSelection.kind === "none" ? "" : renderedSelection.name;
+  const headerSubtitle = selectedEnvMin
+    ? `Environment branch built from ${selectedEnvMin.base}` +
+      (selectedEnvMin.promoted_count > 0
+        ? ` plus ${selectedEnvMin.promoted_count} promoted branch${selectedEnvMin.promoted_count === 1 ? "" : "es"}.`
+        : ".")
+    : null;
+
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-label">
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
@@ -934,16 +1147,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 
         {repoListOpen ? (
           <>
-            <div className="flex items-center gap-2 px-3 py-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-label-tertiary z-10" strokeWidth={2} aria-hidden="true" />
-                <Input
-                  placeholder="Filter"
-                  className="pl-9"
-                  value={repoFilter}
-                  onChange={(e) => setRepoFilter(e.target.value)}
-                />
-              </div>
+            <div className="flex items-center gap-2 px-2.5 py-2.5">
+              <SidebarSearch value={repoFilter} onChange={setRepoFilter} className="flex-1" />
               <Button
                 variant="outline"
                 size="default"
@@ -1035,16 +1240,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           </>
         ) : (
           <>
-            <div className="space-y-2 px-3 py-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-label-tertiary z-10" strokeWidth={2} aria-hidden="true" />
-                <Input
-                  placeholder="Filter"
-                  className="pl-9"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                />
-              </div>
+            <div className="space-y-2 px-2.5 py-2.5">
+              <SidebarSearch value={filter} onChange={setFilter} />
 
               {!filteredIndex && !indexLoading && !indexError && !selectedRepo ? (
                 <div className="text-[12px] text-label-tertiary px-3">No workspace loaded.</div>
@@ -1074,37 +1271,31 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       {filteredIndex.environments.length === 0 ? (
                         <div className="px-2 py-1 text-[12px] text-label-tertiary">None</div>
                       ) : null}
-                      {filteredIndex.environments.map((e) => (
-                        <SidebarRowButton
-                          key={e.name}
-                          icon={<Layers className="h-4 w-4" strokeWidth={3} aria-hidden="true" />}
-                          label={e.name}
-                          subtitle={
-                            <span className="inline-flex min-w-0 items-center gap-1 text-[11px]">
-                              <span className="truncate">
-                                base: {e.base} · promoted: {e.promoted_count}
-                              </span>
-                              {e.locked ? (
-                                <span className="inline-flex items-center gap-1">
-                                  <span aria-hidden="true">·</span>
-                                  <LockKeyhole className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                                  <span>Locked</span>
-                                </span>
-                              ) : null}
-                            </span>
-                          }
-                          trailing={
-                            e.requires_approval ? (
-                              <Sticker className="bg-[rgba(0,122,255,0.12)] text-primary">
-                                <ShieldCheck className="h-3 w-3" strokeWidth={2.2} aria-hidden="true" />
-                                {e.min_approvals}+
-                              </Sticker>
-                            ) : null
-                          }
-                          selected={selection.kind === "env" && selection.name === e.name}
-                          onClick={() => requestDetails({ kind: "env", name: e.name })}
-                        />
-                      ))}
+                      {filteredIndex.environments.map((e) => {
+                        const isSelected = selection.kind === "env" && selection.name === e.name;
+                        return (
+                          <SidebarRowButton
+                            key={e.name}
+                            icon={<Layers className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
+                            label={e.name}
+                            meta={!e.locked && e.promoted_count > 0 ? e.promoted_count : null}
+                            trailing={
+                              e.locked ? (
+                                <LockKeyhole
+                                  className={cn(
+                                    "h-3.5 w-3.5",
+                                    isSelected ? "text-primary-foreground/90" : "text-warn"
+                                  )}
+                                  strokeWidth={2}
+                                  aria-hidden="true"
+                                />
+                              ) : null
+                            }
+                            selected={isSelected}
+                            onClick={() => requestDetails({ kind: "env", name: e.name })}
+                          />
+                        );
+                      })}
                     </div>
 
                     <div className="space-y-1">
@@ -1115,32 +1306,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       {filteredIndex.promoted_branches.map((b) => (
                         <SidebarRowButton
                           key={b.name}
-                          icon={<ArrowUpRight className="h-4 w-4" strokeWidth={3} aria-hidden="true" />}
+                          icon={<ArrowUpRight className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
                           label={b.name}
-                          subtitle={
-                            b.promoted_to.length > 0
-                              ? `Promoted to: ${b.promoted_to.join(", ")}`
-                              : b.remote
-                                ? "Remote"
-                                : "Local"
-                          }
-                          trailing={
-                            <Sticker>
-                              {b.remote ? (
-                                <>
-                                  <Cloud className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                                  Remote
-                                </>
-                              ) : b.local ? (
-                                <>
-                                  <HardDrive className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                                  Local
-                                </>
-                              ) : (
-                                "-"
-                              )}
-                            </Sticker>
-                          }
                           selected={selection.kind === "branch" && selection.name === b.name}
                           onClick={() =>
                             requestDetails({ kind: "branch", name: b.name, isEnvironment: b.is_environment })
@@ -1157,31 +1324,22 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       {filteredIndex.branches.map((b) => (
                         <SidebarRowButton
                           key={b.name}
-                          icon={<GitBranch className="h-4 w-4" aria-hidden="true" />}
+                          icon={<GitBranch className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
                           label={b.name}
-                          subtitle={
-                            b.base_for.length > 0
-                              ? `Base for: ${b.base_for.join(", ")}`
-                              : b.remote
-                                ? "Remote"
-                                : "Local"
-                          }
                           trailing={
-                            <Sticker>
-                              {b.remote ? (
-                                <>
-                                  <Cloud className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                                  Remote
-                                </>
-                              ) : b.local ? (
-                                <>
-                                  <HardDrive className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
-                                  Local
-                                </>
-                              ) : (
-                                "-"
-                              )}
-                            </Sticker>
+                            b.base_for.length > 0 ? (
+                              <span
+                                className={cn(
+                                  "text-[10px] font-medium uppercase tracking-wide",
+                                  selection.kind === "branch" && selection.name === b.name
+                                    ? "text-primary-foreground/70"
+                                    : "text-label-tertiary"
+                                )}
+                                title={`Base for: ${b.base_for.join(", ")}`}
+                              >
+                                base
+                              </span>
+                            ) : null
                           }
                           selected={selection.kind === "branch" && selection.name === b.name}
                           onClick={() =>
@@ -1229,13 +1387,42 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                   ) : null}
 
                   {renderedSelection.kind !== "none" ? (
-                    <div
-                      key={detailsKey}
-                      className="data-[state=open]:animate-in data-[state=open]:fade-in-0"
-                      data-state="open"
-                    >
+                    <>
+                      <ContentHeader
+                        title={headerTitle}
+                        locked={selectedEnvMin?.locked}
+                        requiresApproval={selectedEnvMin?.requires_approval}
+                        minApprovals={selectedEnvMin?.min_approvals}
+                        subtitle={headerSubtitle}
+                      />
+                      <div
+                        key={detailsKey}
+                        className="data-[state=open]:animate-in data-[state=open]:fade-in-0"
+                        data-state="open"
+                      >
                       <TabsContent value="overview" className="m-0 mt-0">
                         <OverviewPanel text={detailsOverview} dateFmt={dateFmt} />
+                        {envPending.length > 0 ? (
+                          <>
+                            <SectionTitle>
+                              Pending approval{envPending.length === 1 ? "" : "s"}
+                            </SectionTitle>
+                            <div className="space-y-3">
+                              {envPending.map((r) => (
+                                <ApprovalCard
+                                  key={r.id}
+                                  request={r}
+                                  dateFmt={dateFmt}
+                                  onApprove={(req) => handleApprovalAction({ kind: "approve", request: req })}
+                                  onReject={() => {
+                                    if (selectedRepo) void refreshApprovals(selectedRepo.path);
+                                    setApprovalsOpen(true);
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
                       </TabsContent>
                       <TabsContent value="timeline" className="m-0 mt-0">
                         {detailsTimeline.length === 0 ? (
@@ -1269,7 +1456,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                           </div>
                         )}
                       </TabsContent>
-                    </div>
+                      </div>
+                    </>
                   ) : null}
                 </div>
               </ScrollArea>

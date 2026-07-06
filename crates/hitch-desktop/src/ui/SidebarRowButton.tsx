@@ -4,7 +4,9 @@ import { cn } from "@/lib/utils";
 type Props = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
   icon?: React.ReactNode;
   label: React.ReactNode;
-  subtitle?: React.ReactNode;
+  /** Small right-aligned count/text (e.g. promoted count). */
+  meta?: React.ReactNode;
+  /** Right-aligned node (lock icon, selection dot). */
   trailing?: React.ReactNode;
   selected?: boolean;
 };
@@ -12,21 +14,19 @@ type Props = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
 export function SidebarRowButton({
   icon,
   label,
-  subtitle,
+  meta,
   trailing,
   selected,
   className,
   type,
   ...props
 }: Props) {
-  const hasSubtitle = subtitle != null;
   return (
     <button
       type={type ?? "button"}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-2.5 rounded-[6px] px-2 text-left transition-colors",
+        "flex w-full items-center gap-2.5 rounded-[6px] px-2 py-[5px] text-left transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        hasSubtitle ? "items-start py-1.5" : "h-8 items-center",
         selected
           ? "bg-primary text-primary-foreground"
           : "text-label hover:bg-[var(--fill-soft)]",
@@ -37,31 +37,29 @@ export function SidebarRowButton({
       {icon ? (
         <span
           className={cn(
-            "shrink-0 self-center",
-            selected ? "text-primary-foreground/85" : "text-label-secondary"
+            "flex h-4 w-4 shrink-0 items-center justify-center",
+            selected ? "text-primary-foreground/90" : "text-label-secondary"
           )}
           aria-hidden="true"
         >
           {icon}
         </span>
       ) : null}
-      <span className="min-w-0 overflow-hidden">
-        <span className="block truncate text-[13px] font-normal tracking-tight">{label}</span>
-        {hasSubtitle ? (
-          <span
-            className={cn(
-              "mt-0.5 block truncate text-[11px]",
-              selected ? "text-primary-foreground/75" : "text-label-tertiary"
-            )}
-          >
-            {subtitle}
-          </span>
-        ) : null}
+      <span className="min-w-0 flex-1 truncate text-[13px] leading-tight tracking-tight">
+        {label}
       </span>
-      {trailing ? (
-        <span className="shrink-0 justify-self-end self-center">
-          {trailing}
+      {meta != null ? (
+        <span
+          className={cn(
+            "shrink-0 text-[11px] tabular-nums",
+            selected ? "text-primary-foreground/80" : "text-label-tertiary"
+          )}
+        >
+          {meta}
         </span>
+      ) : null}
+      {trailing ? (
+        <span className="flex shrink-0 items-center self-center">{trailing}</span>
       ) : null}
     </button>
   );
