@@ -6,11 +6,11 @@ mod types;
 use anyhow::Result;
 use hitch::commands::global_context::GlobalContext;
 use hitch::utils::logging::Logger;
-use hitch::utils::output::{BufferedOutputSink, OutputSink};
+use hitch::utils::output::{BufferedOutputSink, OutputLevel, OutputSink};
 use std::sync::Arc;
 
 use crate::types::{
-    ApprovalRequestDto, ApprovalsListDto, BranchDetailsDto, EnvironmentDetailsDto,
+    ApprovalRequestDto, ApprovalsListDto, BranchDetailsDto, BufferedLineDto, EnvironmentDetailsDto,
     OperationResultDto, RepoProbeResultDto, WorkspaceIndexDto,
 };
 
@@ -97,96 +97,123 @@ async fn env_details(repo_path: String, env_name: String) -> Result<EnvironmentD
     .map_err(|e| e.to_string())?
 }
 
-fn op_context_with_sink(repo_path: &str) -> Result<(GlobalContext, Arc<BufferedOutputSink>)> {
-    let sink = BufferedOutputSink::new();
-    let ctx = context_at(repo_path)?.with_output(sink.clone() as Arc<dyn OutputSink>);
-    Ok((ctx, sink))
+/// Output sink that buffers every line (for the final result) and simultaneously
+/// streams each line to the frontend over an IPC channel, giving a live feed.
+struct StreamingSink {
+    buffer: Arc<BufferedOutputSink>,
+    channel: tauri::ipc::Channel<BufferedLineDto>,
+}
+
+impl OutputSink for StreamingSink {
+    fn log(&self, level: OutputLevel, message: &str) {
+        self.buffer.log(level, message);
+        let _ = self.channel.send(BufferedLineDto {
+            level: level.into(),
+            message: message.to_string(),
+        });
+    }
+}
+
+fn op_context_streaming(
+    repo_path: &str,
+    channel: tauri::ipc::Channel<BufferedLineDto>,
+) -> Result<(GlobalContext, Arc<BufferedOutputSink>)> {
+    let buffer = BufferedOutputSink::new();
+    let sink = Arc::new(StreamingSink {
+        buffer: buffer.clone(),
+        channel,
+    });
+    let ctx = context_at(repo_path)?.with_output(sink as Arc<dyn OutputSink>);
+    Ok((ctx, buffer))
+}
+
+/// Run a repo-locked operation, streaming its output live and returning the full
+/// buffered output as the final result. Mirrors the CLI dispatch (which takes the
+/// repo-wide lock); the command's own `with_locked_env`/`modify_metadata` do the rest.
+fn run_locked_op<F>(
+    repo_path: &str,
+    lock_label: &str,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+    action: F,
+) -> OperationResultDto
+where
+    F: FnOnce(&GlobalContext) -> Result<()>,
+{
+    let (ctx, buffer) = match op_context_streaming(repo_path, on_log) {
+        Ok(v) => v,
+        Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
+    };
+
+    // Serialize against any other Hitch operation on the same repo (CLI or app).
+    let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
+        std::path::Path::new(&ctx.git().get_git_dir()),
+        lock_label,
+    ) {
+        Ok(lock) => lock,
+        Err(e) => return OperationResultDto::error(e.to_string(), buffer.snapshot()),
+    };
+
+    let res = action(&ctx);
+    OperationResultDto::from_result(res.map_err(|e| e.to_string()), buffer.snapshot())
 }
 
 #[tauri::command]
-async fn promote(repo_path: String, branch_name: String, env_name: String) -> OperationResultDto {
+async fn promote(
+    repo_path: String,
+    branch_name: String,
+    env_name: String,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        let (ctx, sink) = match op_context_with_sink(&repo_path) {
-            Ok(v) => v,
-            Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
-        };
-
-        // Serialize against any other Hitch operation on the same repo (CLI or app).
-        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
-            std::path::Path::new(&ctx.git().get_git_dir()),
-            "promote",
-        ) {
-            Ok(lock) => lock,
-            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
-        };
-
-        let args = hitch::commands::promote::PromoteCommand {
-            branch: branch_name,
-            env_name,
-            no_rebuild: false,
-        };
-
-        let res = hitch::commands::promote::run(args, &ctx);
-        OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
+        run_locked_op(&repo_path, "promote", on_log, |ctx| {
+            let args = hitch::commands::promote::PromoteCommand {
+                branch: branch_name,
+                env_name,
+                no_rebuild: false,
+            };
+            hitch::commands::promote::run(args, ctx)
+        })
     })
     .await
     .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
 }
 
 #[tauri::command]
-async fn rebuild(repo_path: String, env_name: String, force: bool) -> OperationResultDto {
+async fn rebuild(
+    repo_path: String,
+    env_name: String,
+    force: bool,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        let (ctx, sink) = match op_context_with_sink(&repo_path) {
-            Ok(v) => v,
-            Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
-        };
-
-        // Serialize against any other Hitch operation on the same repo (CLI or app).
-        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
-            std::path::Path::new(&ctx.git().get_git_dir()),
-            "rebuild",
-        ) {
-            Ok(lock) => lock,
-            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
-        };
-
-        let args = hitch::commands::rebuild::RebuildCommand { env_name, force };
-        let res = hitch::commands::rebuild::run(args, &ctx);
-        OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
+        run_locked_op(&repo_path, "rebuild", on_log, |ctx| {
+            let args = hitch::commands::rebuild::RebuildCommand { env_name, force };
+            hitch::commands::rebuild::run(args, ctx)
+        })
     })
     .await
     .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
 }
 
 #[tauri::command]
-async fn release(repo_path: String, env_name: String) -> OperationResultDto {
+async fn release(
+    repo_path: String,
+    env_name: String,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        let (ctx, sink) = match op_context_with_sink(&repo_path) {
-            Ok(v) => v,
-            Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
-        };
-
-        // Serialize against any other Hitch operation on the same repo (CLI or app).
-        let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
-            std::path::Path::new(&ctx.git().get_git_dir()),
-            "release",
-        ) {
-            Ok(lock) => lock,
-            Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
-        };
-
-        // The desktop app provides confirmation via UI, so always run with force=true.
-        let args = hitch::commands::release::ReleaseCommand {
-            env_name,
-            target_branch: None,
-            force: true,
-            no_prune: false,
-            no_rebuild_dependents: false,
-            squash: false,
-        };
-
-        let res = hitch::commands::release::run(args, &ctx);
-        OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
+        run_locked_op(&repo_path, "release", on_log, |ctx| {
+            // The desktop app provides confirmation via UI, so always run force=true.
+            let args = hitch::commands::release::ReleaseCommand {
+                env_name,
+                target_branch: None,
+                force: true,
+                no_prune: false,
+                no_rebuild_dependents: false,
+                squash: false,
+            };
+            hitch::commands::release::run(args, ctx)
+        })
     })
     .await
     .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
@@ -220,41 +247,15 @@ async fn approvals_list(repo_path: String) -> Result<ApprovalsListDto, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Run a mutating approval action under the repository lock, capturing its output.
-///
-/// Mirrors the promote/rebuild/release pattern: the desktop takes the repo-wide
-/// lock (the command's own `with_locked_env`/`modify_metadata` do the rest) and
-/// surfaces the buffered log lines to the UI regardless of success or failure.
-fn run_locked_approval<F>(repo_path: &str, lock_label: &str, action: F) -> OperationResultDto
-where
-    F: FnOnce(&GlobalContext) -> Result<()>,
-{
-    let (ctx, sink) = match op_context_with_sink(repo_path) {
-        Ok(v) => v,
-        Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
-    };
-
-    // Serialize against any other Hitch operation on the same repo (CLI or app).
-    let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
-        std::path::Path::new(&ctx.git().get_git_dir()),
-        lock_label,
-    ) {
-        Ok(lock) => lock,
-        Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
-    };
-
-    let res = action(&ctx);
-    OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
-}
-
 #[tauri::command]
 async fn approval_approve(
     repo_path: String,
     request_id: String,
     comment: Option<String>,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
 ) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        run_locked_approval(&repo_path, "approvals approve", |ctx| {
+        run_locked_op(&repo_path, "approvals approve", on_log, |ctx| {
             let args = hitch::commands::approvals::approve::ApproveArgs {
                 request_id,
                 // Normalize an empty/whitespace comment to None.
@@ -272,9 +273,10 @@ async fn approval_reject(
     repo_path: String,
     request_id: String,
     reason: String,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
 ) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        run_locked_approval(&repo_path, "approvals reject", |ctx| {
+        run_locked_op(&repo_path, "approvals reject", on_log, |ctx| {
             let args = hitch::commands::approvals::reject::RejectArgs { request_id, reason };
             hitch::commands::approvals::reject::run(args, ctx)
         })
@@ -284,9 +286,13 @@ async fn approval_reject(
 }
 
 #[tauri::command]
-async fn approval_cancel(repo_path: String, request_id: String) -> OperationResultDto {
+async fn approval_cancel(
+    repo_path: String,
+    request_id: String,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        run_locked_approval(&repo_path, "approvals cancel", |ctx| {
+        run_locked_op(&repo_path, "approvals cancel", on_log, |ctx| {
             // force=true: the desktop confirms via UI, and there is no stdin to
             // read an interactive confirmation from.
             let args = hitch::commands::approvals::cancel::CancelArgs {
@@ -301,9 +307,13 @@ async fn approval_cancel(repo_path: String, request_id: String) -> OperationResu
 }
 
 #[tauri::command]
-async fn approval_refresh(repo_path: String, request_id: String) -> OperationResultDto {
+async fn approval_refresh(
+    repo_path: String,
+    request_id: String,
+    on_log: tauri::ipc::Channel<BufferedLineDto>,
+) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
-        run_locked_approval(&repo_path, "approvals refresh", |ctx| {
+        run_locked_op(&repo_path, "approvals refresh", on_log, |ctx| {
             let args = hitch::commands::approvals::refresh::RefreshArgs { request_id };
             hitch::commands::approvals::refresh::run(args, ctx)
         })
@@ -316,6 +326,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_decorum::init())
         .setup(|app| {
             // Apply native macOS vibrancy (NSVisualEffectView) behind the window.
             // The content pane stays opaque via CSS; only the translucent sidebar
@@ -325,12 +336,7 @@ fn main() {
                 use tauri::Manager;
                 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = apply_vibrancy(
-                        &window,
-                        NSVisualEffectMaterial::Sidebar,
-                        None,
-                        None,
-                    );
+                    let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
                 }
             }
             Ok(())
@@ -349,6 +355,20 @@ fn main() {
             approval_cancel,
             approval_refresh
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, _event| {
+            // Center the native traffic lights once the app is ready (AppKit calls
+            // are unsafe to make in `setup`, which runs before the window exists).
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Ready = _event {
+                use tauri::Manager;
+                use tauri_plugin_decorum::WebviewWindowExt as _;
+                if let Some(window) = _app_handle.get_webview_window("main") {
+                    // decorum centers the lights in a region of height
+                    // (button_height + y); y=34 sat low, so 28 nears the middle.
+                    let _ = window.set_traffic_lights_inset(20.0, 28.0);
+                }
+            }
+        });
 }

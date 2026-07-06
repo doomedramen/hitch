@@ -106,7 +106,7 @@ fn build_env_overview(env: &EnvironmentStatusModel) -> String {
             lines.push(format!("locked_by: {}", by));
         }
         if let Some(ts) = env.locked_at {
-            lines.push(format!("locked_at: {}", ts.format("%Y-%m-%d %H:%M UTC")));
+            lines.push(format!("locked_at: {}", ts.to_rfc3339()));
         }
     }
     lines.push(format!("branches ({}):", env.branches.len()));
@@ -137,10 +137,10 @@ fn build_env_overview(env: &EnvironmentStatusModel) -> String {
         ));
     }
     if let Some(ts) = env.rebuilt_at {
-        lines.push(format!("rebuilt_at: {}", ts.format("%Y-%m-%d %H:%M UTC")));
+        lines.push(format!("rebuilt_at: {}", ts.to_rfc3339()));
     }
     if let Some(ts) = env.released_at {
-        lines.push(format!("released_at: {}", ts.format("%Y-%m-%d %H:%M UTC")));
+        lines.push(format!("released_at: {}", ts.to_rfc3339()));
     }
     lines.join("\n")
 }

@@ -37,9 +37,8 @@ export function SidebarRowButton({
       {icon ? (
         <span
           className={cn(
-            "shrink-0",
-            selected ? "text-primary-foreground/85" : "text-label-secondary",
-            hasSubtitle ? "mt-0.5" : ""
+            "shrink-0 self-center",
+            selected ? "text-primary-foreground/85" : "text-label-secondary"
           )}
           aria-hidden="true"
         >
@@ -60,12 +59,7 @@ export function SidebarRowButton({
         ) : null}
       </span>
       {trailing ? (
-        <span
-          className={cn(
-            "shrink-0 justify-self-end",
-            hasSubtitle ? "pt-0.5" : "self-center"
-          )}
-        >
+        <span className="shrink-0 justify-self-end self-center">
           {trailing}
         </span>
       ) : null}

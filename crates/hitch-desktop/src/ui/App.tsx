@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Channel } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ import { loadRepos, saveRepos } from "./storage";
 import type {
   ApprovalsList,
   BranchDetailsModel,
+  BufferedLine,
   EnvironmentDetailsModel,
   OperationResult,
   RepoEntry,
@@ -199,10 +201,39 @@ function looksCodey(value: string): boolean {
   return false;
 }
 
+// Overview keys whose value is an ISO timestamp we localize + humanize.
+const TIME_KEYS = new Set(["rebuilt_at", "released_at", "locked_at"]);
+
+/** Local, human time: "just now" / "2 minutes ago" for recent, else local date/time. */
+function formatWhen(iso: string, dateFmt: Intl.DateTimeFormat): string {
+  const d = new Date(iso);
+  const ms = d.getTime();
+  if (!Number.isFinite(ms)) return iso;
+  const diff = Date.now() - ms; // >0 = past
+  const abs = Math.abs(diff);
+  const MIN = 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  if (abs < 45_000) return "just now";
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (abs < HOUR) return rtf.format(-Math.round(diff / MIN), "minute");
+  if (abs < DAY) return rtf.format(-Math.round(diff / HOUR), "hour");
+  if (abs < 7 * DAY) return rtf.format(-Math.round(diff / DAY), "day");
+  return dateFmt.format(d);
+}
+
 function overviewKeyLabel(key: string): string {
   switch (key.trim().toLowerCase()) {
     case "diff_stat":
       return "Diff";
+    case "rebuilt_at":
+      return "Rebuilt";
+    case "released_at":
+      return "Released";
+    case "locked_at":
+      return "Locked";
+    case "locked_by":
+      return "Locked by";
     default:
       return key;
   }
@@ -232,7 +263,7 @@ function DiffStatList({ items }: { items: string[] }) {
   );
 }
 
-function OverviewPanel({ text }: { text: string }) {
+function OverviewPanel({ text, dateFmt }: { text: string; dateFmt: Intl.DateTimeFormat }) {
   const rows = useMemo(() => parseOverview(text), [text]);
   if (rows.length === 0) return <div className="py-12 text-[13px] text-label-tertiary text-center">No overview</div>;
 
@@ -291,6 +322,9 @@ function OverviewPanel({ text }: { text: string }) {
             </span>
           ) : null;
 
+        const isTime = TIME_KEYS.has(row.key.trim().toLowerCase());
+        const shownValue = isTime ? formatWhen(row.value, dateFmt) : row.value;
+
         return (
           <div key={idx} className={cn("py-2.5", showDivider ? "hairline-b" : "")}>
             <div className="grid grid-cols-[140px_1fr] gap-3">
@@ -299,8 +333,8 @@ function OverviewPanel({ text }: { text: string }) {
               </div>
               <div className="min-w-0 text-[13px] text-label">
                 {badge ?? (
-                  <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-[12px] text-label-secondary" : "")}>
-                    {row.value.length === 0 ? <span className="text-label-tertiary">—</span> : row.value}
+                  <span className={cn("break-words", !isTime && looksCodey(shownValue) ? "font-mono text-[12px] text-label-secondary" : "")}>
+                    {shownValue.length === 0 ? <span className="text-label-tertiary">—</span> : shownValue}
                   </span>
                 )}
               </div>
@@ -357,7 +391,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [detailsLoading, setDetailsLoading] = useState<boolean>(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
-  const [op, setOp] = useState<null | { title: string; result?: OperationResult }>(null);
+  const [op, setOp] = useState<null | { title: string; lines?: BufferedLine[]; result?: OperationResult }>(null);
   const [promotePicker, setPromotePicker] = useState<null | { branch: string }>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
 
@@ -674,11 +708,19 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
     }
   }
 
-  async function runOperation(title: string, opFn: () => Promise<OperationResult>) {
-    setOp({ title });
+  async function runOperation(
+    title: string,
+    opFn: (onLog: Channel<BufferedLine>) => Promise<OperationResult>
+  ) {
+    const channel = new Channel<BufferedLine>();
+    // Append streamed lines live, but stop once the final result has arrived.
+    channel.onmessage = (line) => {
+      setOp((prev) => (prev && !prev.result ? { ...prev, lines: [...(prev.lines ?? []), line] } : prev));
+    };
+    setOp({ title, lines: [] });
     setStatus(title);
     try {
-      const result = await opFn();
+      const result = await opFn(channel);
       setOp({ title, result });
       setStatus(result.ok ? "Done" : "Failed");
       // refresh index + approvals (promote can create a request; approvals ops
@@ -706,19 +748,19 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
     const label = `${r.branch} → ${r.environment}`;
     switch (action.kind) {
       case "approve":
-        void runOperation(`Approve ${label}`, () => approvalApprove(path, r.id, action.comment));
+        void runOperation(`Approve ${label}`, (onLog) => approvalApprove(path, r.id, action.comment, onLog));
         break;
       case "execute":
-        void runOperation(`Apply ${label}`, () => approvalApprove(path, r.id));
+        void runOperation(`Apply ${label}`, (onLog) => approvalApprove(path, r.id, undefined, onLog));
         break;
       case "reject":
-        void runOperation(`Reject ${label}`, () => approvalReject(path, r.id, action.reason));
+        void runOperation(`Reject ${label}`, (onLog) => approvalReject(path, r.id, action.reason, onLog));
         break;
       case "cancel":
-        void runOperation(`Cancel ${label}`, () => approvalCancel(path, r.id));
+        void runOperation(`Cancel ${label}`, (onLog) => approvalCancel(path, r.id, onLog));
         break;
       case "refresh":
-        void runOperation(`Refresh ${label}`, () => approvalRefresh(path, r.id));
+        void runOperation(`Refresh ${label}`, (onLog) => approvalRefresh(path, r.id, onLog));
         break;
     }
   }
@@ -738,7 +780,6 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-label">
-      <TitleBar onAboutClick={() => setAboutOpen(true)} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <ApprovalsDialog
         open={approvalsOpen}
@@ -752,35 +793,144 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           if (selectedRepo) void refreshApprovals(selectedRepo.path);
         }}
       />
-      <div className="flex flex-1 w-full overflow-hidden">
-        <aside className="flex w-[236px] shrink-0 flex-col hairline-r material-sidebar">
-        <div className="flex h-14 items-center hairline-b px-2.5">
+
+      <Tabs
+        value={tab}
+        onValueChange={(v) => setTab(v === "timeline" ? "timeline" : "overview")}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {/* Unified top toolbar — native macOS traffic lights sit in the left inset. */}
+        <header
+          data-tauri-drag-region
+          className="flex h-12 shrink-0 items-center gap-2.5 material-toolbar hairline-b pl-[82px] pr-2"
+        >
           <button
             type="button"
             onClick={toggleRepoList}
             className={cn(
-              "flex h-9 w-full items-center justify-between gap-2 rounded-[6px] bg-[var(--control-bg)] px-2 text-left shadow-control transition-colors",
+              "flex h-7 min-w-0 max-w-[240px] items-center gap-2 rounded-[6px] bg-[var(--control-bg)] px-2 text-left shadow-control transition-colors",
               "hover:bg-[var(--control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
           >
-            <div className="flex min-w-0 items-center gap-2">
-              <Monitor className="h-4 w-4 shrink-0 text-label-secondary" strokeWidth={1.8} aria-hidden="true" />
-              <div className="min-w-0">
-                <div className="text-[10px] font-medium uppercase tracking-wide text-label-tertiary">
-                  Repository
-                </div>
-                <div className="truncate text-[13px] font-medium tracking-tight text-label">
-                  {selectedRepo ? selectedRepo.display_name : "Select a repository"}
-                </div>
-              </div>
-            </div>
+            <Monitor className="h-4 w-4 shrink-0 text-label-secondary" strokeWidth={1.8} aria-hidden="true" />
+            <span className="truncate text-[13px] font-medium tracking-tight text-label">
+              {selectedRepo ? selectedRepo.display_name : "Select a repository"}
+            </span>
             {repoListOpen ? (
               <ChevronUp className="h-4 w-4 shrink-0 text-label-secondary" aria-hidden="true" />
             ) : (
               <ChevronDown className="h-4 w-4 shrink-0 text-label-secondary" aria-hidden="true" />
             )}
           </button>
-        </div>
+
+          <TabsList>
+            <TabsTrigger value="overview">
+              <FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="timeline">
+              <History className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              Timeline
+            </TabsTrigger>
+          </TabsList>
+
+          <div data-tauri-drag-region className="flex-1" />
+
+          {status !== "Ready" ? (
+            <div className="hidden text-[11px] text-label-secondary sm:block">{status}</div>
+          ) : null}
+          {selectedRepo ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-7 justify-center"
+              onClick={() => {
+                void refreshApprovals(selectedRepo.path);
+                setApprovalsOpen(true);
+              }}
+            >
+              <ShieldCheck className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+              Approvals
+              {pendingApprovalCount > 0 ? (
+                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
+                  {pendingApprovalCount}
+                </span>
+              ) : null}
+            </Button>
+          ) : null}
+          {selectedRepo && selection.kind === "branch" && !selection.isEnvironment ? (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-7 justify-center"
+              aria-label="Promote"
+              title="Promote…"
+              onClick={() => setPromotePicker({ branch: selection.name })}
+            >
+              <ArrowUpRight className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+              <span className="hidden md:inline">Promote…</span>
+            </Button>
+          ) : null}
+          {selectedRepo && selection.kind === "env" ? (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 justify-center"
+                aria-label="Rebuild"
+                title="Rebuild"
+                onClick={() =>
+                  setConfirm({
+                    title: `Rebuild ${selection.name}`,
+                    description: `Rebuild environment '${selection.name}'?`,
+                    actionLabel: "Rebuild",
+                    actionVariant: "default",
+                    onAction: () =>
+                      void runOperation(`Rebuild ${selection.name}`, (onLog) =>
+                        rebuild(selectedRepo.path, selection.name, false, onLog)
+                      )
+                  })
+                }
+              >
+                <RefreshCw className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                <span className="hidden md:inline">Rebuild</span>
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-7 justify-center"
+                aria-label="Release"
+                title="Release"
+                onClick={() =>
+                  setConfirm({
+                    title: `Release ${selection.name}`,
+                    description: `Release environment '${selection.name}'? This can rewrite history of the target branch.`,
+                    actionLabel: "Release",
+                    actionVariant: "destructive",
+                    onAction: () =>
+                      void runOperation(`Release ${selection.name}`, (onLog) => release(selectedRepo.path, selection.name, onLog))
+                  })
+                }
+              >
+                <Rocket className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                <span className="hidden md:inline">Release</span>
+              </Button>
+            </>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={() => setAboutOpen(true)}
+            title="About Hitch Desktop"
+            aria-label="About Hitch Desktop"
+            className="ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] text-label-secondary transition-colors hover:bg-[var(--fill-soft)] hover:text-label"
+          >
+            <Info className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 w-full overflow-hidden">
+        <aside className="flex w-[236px] shrink-0 flex-col hairline-r material-sidebar">
 
         {repoListOpen ? (
           <>
@@ -797,7 +947,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
               <Button
                 variant="outline"
                 size="default"
-                className="h-9 shrink-0 min-w-20 justify-center gap-2"
+                className="shrink-0 justify-center gap-1.5"
                 onClick={() => {
                   closeRepoList();
                   void addRepo();
@@ -1061,112 +1211,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           onClick={closeRepoList}
         />
 
-        <section className="relative z-0 flex min-h-0 flex-1 flex-col">
-          <Tabs
-            value={tab}
-            onValueChange={(v) => setTab(v === "timeline" ? "timeline" : "overview")}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <div className="flex h-14 items-center justify-between gap-3 hairline-b px-3">
-              <TabsList>
-                <TabsTrigger value="overview" aria-label="Overview" title="Overview">
-                  <FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                  <span className="hidden lg:inline">Overview</span>
-                </TabsTrigger>
-                <TabsTrigger value="timeline" aria-label="Timeline" title="Timeline">
-                  <History className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-                  <span className="hidden lg:inline">Timeline</span>
-                </TabsTrigger>
-              </TabsList>
-
-              <div className="flex items-center gap-2">
-                {status !== "Ready" ? (
-                  <div className="hidden text-[11px] text-label-secondary sm:block">{status}</div>
-                ) : null}
-                {selectedRepo ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="justify-center"
-                    aria-label="Approvals"
-                    title="Approvals"
-                    onClick={() => {
-                      void refreshApprovals(selectedRepo.path);
-                      setApprovalsOpen(true);
-                    }}
-                  >
-                    <ShieldCheck className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-                    <span className="hidden lg:inline">Approvals</span>
-                    {pendingApprovalCount > 0 ? (
-                      <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
-                        {pendingApprovalCount}
-                      </span>
-                    ) : null}
-                  </Button>
-                ) : null}
-                {selectedRepo && selection.kind === "branch" && !selection.isEnvironment ? (
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="justify-center"
-                    aria-label="Promote"
-                    title="Promote…"
-                    onClick={() => setPromotePicker({ branch: selection.name })}
-                  >
-                    <ArrowUpRight className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-                    <span className="hidden lg:inline">Promote…</span>
-                  </Button>
-                ) : null}
-                {selectedRepo && selection.kind === "env" ? (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="justify-center"
-                      aria-label="Rebuild"
-                      title="Rebuild"
-                      onClick={() =>
-                        setConfirm({
-                          title: `Rebuild ${selection.name}`,
-                          description: `Rebuild environment '${selection.name}'?`,
-                          actionLabel: "Rebuild",
-                          actionVariant: "default",
-                          onAction: () =>
-                            void runOperation(`Rebuild ${selection.name}`, () =>
-                              rebuild(selectedRepo.path, selection.name, false)
-                            )
-                        })
-                      }
-                    >
-                      <RefreshCw className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-                      <span className="hidden lg:inline">Rebuild</span>
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="justify-center"
-                      aria-label="Release"
-                      title="Release"
-                      onClick={() =>
-                        setConfirm({
-                          title: `Release ${selection.name}`,
-                          description: `Release environment '${selection.name}'? This can rewrite history of the target branch.`,
-                          actionLabel: "Release",
-                          actionVariant: "destructive",
-                          onAction: () =>
-                            void runOperation(`Release ${selection.name}`, () => release(selectedRepo.path, selection.name))
-                        })
-                      }
-                    >
-                      <Rocket className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
-                      <span className="hidden lg:inline">Release</span>
-                    </Button>
-                  </>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="relative min-h-0 flex-1">
+        <div className="relative z-0 min-h-0 flex-1">
               <ScrollArea className="h-full" scrollbarClassName="bg-background">
                 <div className="space-y-3 px-5 py-4">
                   {detailsError ? (
@@ -1190,7 +1235,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       data-state="open"
                     >
                       <TabsContent value="overview" className="m-0 mt-0">
-                        <OverviewPanel text={detailsOverview} />
+                        <OverviewPanel text={detailsOverview} dateFmt={dateFmt} />
                       </TabsContent>
                       <TabsContent value="timeline" className="m-0 mt-0">
                         {detailsTimeline.length === 0 ? (
@@ -1202,14 +1247,14 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 	                            {detailsTimeline.map((t, i) => (
 	                              <div key={i} className="space-y-1.5 pb-4 mb-3 hairline-b">
 	                                  <div className="flex items-center justify-between gap-3 text-[11px] text-label-secondary">
-	                                    <span className="min-w-0 truncate">
-	                                      {dateFmt.format(new Date(t.when))}
+	                                    <span className="min-w-0 truncate text-[11px] text-label-secondary">
+	                                      {formatWhen(t.when, dateFmt)}
 	                                    </span>
-	                                    <Sticker className="text-xs">
+	                                    <Sticker className="shrink-0 self-center">
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
 	                                        className="h-3 w-3"
-	                                      />	                                      <span>{t.kind}</span>
+	                                      /><span>{t.kind}</span>
 	                                    </Sticker>	                                  </div>
 	                                  <div className="text-[13px] font-medium text-label select-text">{t.summary}</div>
 	                                  {t.detail ? (
@@ -1245,10 +1290,9 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                 </div>
               ) : null}
             </div>
-          </Tabs>
-        </section>
-      </main>
-    </div>
+        </main>
+      </div>
+      </Tabs>
 
       {/* Repository missing */}
       <Dialog open={repoMissing != null} onOpenChange={(v) => (!v ? setRepoMissing(null) : null)}>
@@ -1360,8 +1404,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       onClick={() => {
                         if (!promotePicker) return;
                         setPromotePicker(null);
-                        void runOperation(`Promote ${promotePicker.branch} → ${e.name}`, () =>
-                          promote(selectedRepo.path, promotePicker.branch, e.name)
+                        void runOperation(`Promote ${promotePicker.branch} → ${e.name}`, (onLog) =>
+                          promote(selectedRepo.path, promotePicker.branch, e.name, onLog)
                         );
                       }}
                     >
@@ -1414,13 +1458,13 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
             </DialogDescription>
           </DialogHeader>
 
-          {op?.result ? (
-            <ScrollArea className="h-[50vh]">
-              <div className="space-y-2 pr-3">
-                {op.result.lines.length === 0 ? (
-                  <div className="text-[13px] text-label-secondary">No output.</div>
-                ) : (
-                  op.result.lines.map((l, i) => {
+          {(() => {
+            const running = op != null && !op.result;
+            const lines = op?.result ? op.result.lines : op?.lines ?? [];
+            return (
+              <ScrollArea className="h-[50vh]">
+                <div className="space-y-2 pr-3">
+                  {lines.map((l, i) => {
                     const levelClass =
                       l.level === "Info"
                         ? "text-label-secondary"
@@ -1443,16 +1487,26 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                         </div>
                       </div>
                     );
-                  })
-                )}
-              </div>
-            </ScrollArea>
-          ) : (
-            <div className="text-[13px] text-label-secondary">Running…</div>
-          )}
+                  })}
+                  {running ? (
+                    <div className="flex items-center gap-2 py-1 text-[12px] text-label-secondary">
+                      <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      Running…
+                    </div>
+                  ) : lines.length === 0 ? (
+                    <div className="text-[13px] text-label-secondary">No output.</div>
+                  ) : null}
+                </div>
+              </ScrollArea>
+            );
+          })()}
 
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setOp(null)} disabled={!op}>
+            <Button
+              variant="secondary"
+              onClick={() => setOp(null)}
+              disabled={op != null && !op.result}
+            >
               Close
             </Button>
           </DialogFooter>

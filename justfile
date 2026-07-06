@@ -186,11 +186,13 @@ desktop-dev:
 
 desktop-build:
     @echo "🖥️ Building Hitch Desktop..."
+    bash crates/hitch-desktop/scripts/build-liquid-glass-icon.sh
     cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
     cd crates/hitch-desktop && pnpm tauri:build
 
 desktop-build-dmg:
     @echo "🖥️ Building Hitch Desktop (macOS DMG)..."
+    bash crates/hitch-desktop/scripts/build-liquid-glass-icon.sh
     cd crates/hitch-desktop && CI=true pnpm install --no-frozen-lockfile
     cd crates/hitch-desktop && pnpm tauri build --bundles dmg
 
@@ -201,10 +203,12 @@ desktop-check:
     cargo check -p hitch-desktop
 
 desktop-icons:
-    @echo "🎨 Generating Hitch Desktop icons from hitch.svg..."
+    @echo "🎨 Generating Hitch Desktop icons (cream tile + Hitch knot)..."
     mkdir -p crates/hitch-desktop/src-tauri/icons
+    # Compose the macOS-style tiled icon source from hitch.svg (needs ImageMagick).
+    bash crates/hitch-desktop/scripts/build-app-icon.sh
     cd crates/hitch-desktop && CI=true pnpm install --frozen-lockfile --prefer-offline
-    cd crates/hitch-desktop && pnpm tauri icon --output src-tauri/icons ../../hitch.svg
+    cd crates/hitch-desktop && pnpm tauri icon --output src-tauri/icons app-icon.png
 
 # Create a new desktop release (auto-bump version like CLI)
 release-desktop:

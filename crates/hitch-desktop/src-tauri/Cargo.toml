@@ -22,6 +22,8 @@ serde_json = "1.0"
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
+# Inset the native macOS traffic lights so they center in the taller unified toolbar.
+tauri-plugin-decorum = "1"
 
 # Reuse Hitch's core/command implementation.
 hitch = { path = "../../.." }

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS 26+ renders the Liquid Glass icon from Assets.car ("App").
+	     Older macOS falls back to CFBundleIconFile (icon.icns). -->
+	<key>CFBundleIconName</key>
+	<string>App</string>
+</dict>
+</plist>

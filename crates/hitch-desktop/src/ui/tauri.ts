@@ -1,12 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   ApprovalsList,
   BranchDetailsModel,
+  BufferedLine,
   EnvironmentDetailsModel,
   OperationResult,
   RepoProbeResult,
   WorkspaceIndexModel
 } from "./types";
+
+/** A channel that streams operation output lines to the UI as they happen. */
+export type LogChannel = Channel<BufferedLine>;
 
 export function repoProbe(path: string): Promise<RepoProbeResult> {
   return invoke("repo_probe", { path });
@@ -24,42 +28,54 @@ export function envDetails(repoPath: string, envName: string): Promise<Environme
   return invoke("env_details", { repoPath, envName });
 }
 
-export function promote(repoPath: string, branchName: string, envName: string): Promise<OperationResult> {
-  return invoke("promote", { repoPath, branchName, envName });
+export function promote(
+  repoPath: string,
+  branchName: string,
+  envName: string,
+  onLog: LogChannel
+): Promise<OperationResult> {
+  return invoke("promote", { repoPath, branchName, envName, onLog });
 }
 
-export function rebuild(repoPath: string, envName: string, force: boolean): Promise<OperationResult> {
-  return invoke("rebuild", { repoPath, envName, force });
+export function rebuild(
+  repoPath: string,
+  envName: string,
+  force: boolean,
+  onLog: LogChannel
+): Promise<OperationResult> {
+  return invoke("rebuild", { repoPath, envName, force, onLog });
 }
 
-export function release(repoPath: string, envName: string): Promise<OperationResult> {
-  return invoke("release", { repoPath, envName });
-}
-
-export function approvalsList(repoPath: string): Promise<ApprovalsList> {
-  return invoke("approvals_list", { repoPath });
+export function release(repoPath: string, envName: string, onLog: LogChannel): Promise<OperationResult> {
+  return invoke("release", { repoPath, envName, onLog });
 }
 
 export function approvalApprove(
   repoPath: string,
   requestId: string,
-  comment?: string
+  comment: string | undefined,
+  onLog: LogChannel
 ): Promise<OperationResult> {
-  return invoke("approval_approve", { repoPath, requestId, comment: comment ?? null });
+  return invoke("approval_approve", { repoPath, requestId, comment: comment ?? null, onLog });
 }
 
 export function approvalReject(
   repoPath: string,
   requestId: string,
-  reason: string
+  reason: string,
+  onLog: LogChannel
 ): Promise<OperationResult> {
-  return invoke("approval_reject", { repoPath, requestId, reason });
+  return invoke("approval_reject", { repoPath, requestId, reason, onLog });
 }
 
-export function approvalCancel(repoPath: string, requestId: string): Promise<OperationResult> {
-  return invoke("approval_cancel", { repoPath, requestId });
+export function approvalCancel(repoPath: string, requestId: string, onLog: LogChannel): Promise<OperationResult> {
+  return invoke("approval_cancel", { repoPath, requestId, onLog });
 }
 
-export function approvalRefresh(repoPath: string, requestId: string): Promise<OperationResult> {
-  return invoke("approval_refresh", { repoPath, requestId });
+export function approvalRefresh(repoPath: string, requestId: string, onLog: LogChannel): Promise<OperationResult> {
+  return invoke("approval_refresh", { repoPath, requestId, onLog });
+}
+
+export function approvalsList(repoPath: string): Promise<ApprovalsList> {
+  return invoke("approvals_list", { repoPath });
 }
