@@ -529,4 +529,59 @@ mod tests {
 
         Ok(())
     }
+
+    /// Regression: a hitch-metadata branch without a `.gitignore` (e.g. a repo
+    /// initialized by an older hitch, or one where it was removed) must not break
+    /// metadata mutations. Previously `add_and_commit(["hitch.json", ".gitignore"])`
+    /// hard-failed on the missing `.gitignore`, leaving hitch.json staged but
+    /// uncommitted and stranding the operation on hitch-metadata — so the switch
+    /// back to the user's branch aborted with "local changes to hitch.json would
+    /// be overwritten by checkout".
+    #[test]
+    fn test_hitch_rebuild_without_gitignore_on_metadata() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Drop `.gitignore` from the hitch-metadata branch to mimic a repo
+            // that never had one committed there.
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            env.git.run(&["rm", "--quiet", ".gitignore"])?;
+            env.git
+                .run(&["commit", "-m", "test: drop .gitignore from metadata"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // The rebuild (which locks -> writes metadata -> unlocks) must succeed
+            // and return us to `main` with a clean tree.
+            env.hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("rebuilt successfully");
+
+            let branch = env.git.run(&["branch", "--show-current"])?;
+            assert_eq!(
+                branch.stdout().trim(),
+                "main",
+                "expected to be back on main after rebuild"
+            );
+
+            let status = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                status.stdout().trim().is_empty(),
+                "expected a clean working tree after rebuild, got '{}'",
+                status.stdout().trim()
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

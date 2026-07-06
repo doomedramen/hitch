@@ -276,10 +276,20 @@ impl GitOperations {
             let output = self.run_git_command(&["add", "-f", file])?;
 
             if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // Some entries (e.g. `.gitignore`) are optional metadata. If the
+                // file simply isn't present, git reports "did not match any files".
+                // Skipping it is correct — committing the files that ARE present is
+                // the intent. Failing here previously left hitch.json staged but
+                // uncommitted, stranding the caller on hitch-metadata with a dirty
+                // tree so the switch back to the user's branch aborted.
+                if stderr.contains("did not match any files") {
+                    continue;
+                }
                 return Err(anyhow::anyhow!(
                     "Failed to add file '{}': {}",
                     file,
-                    String::from_utf8_lossy(&output.stderr)
+                    stderr
                 ));
             }
         }
