@@ -51,8 +51,17 @@ jobs:
             echo "No DMG found under ${BUNDLE_DIR}"
             exit 1
           fi
-          echo "dmg_path=${DMG}" >> "$GITHUB_OUTPUT"
-          echo "dmg_name=$(basename "${DMG}")" >> "$GITHUB_OUTPUT"
+          # Tauri names the DMG "Hitch Desktop_<ver>_<arch>.dmg" (with a space),
+          # but GitHub rewrites spaces to dots in release asset names, which
+          # breaks the cask download URL. Rename to a space-free asset name we
+          # fully control so the uploaded asset and the cask URL always match.
+          SAFE_NAME="$(basename "${DMG}" | tr ' ' '-')"
+          SAFE_PATH="$(dirname "${DMG}")/${SAFE_NAME}"
+          if [ "${DMG}" != "${SAFE_PATH}" ]; then
+            mv "${DMG}" "${SAFE_PATH}"
+          fi
+          echo "dmg_path=${SAFE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=${SAFE_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Compute SHA256
         id: hash
@@ -89,7 +98,6 @@ jobs:
           set -euo pipefail
           VERSION="${TAG#desktop-}"
           DATE=$(date -u +"%Y-%m-%d")
-          DMG_URLENCODED="${DMG_NAME// /%20}"
 
           mkdir -p homebrew-hitch/Casks
           printf '# Cask published with desktop release workflow\n' > homebrew-hitch/Casks/hitch-desktop.rb
@@ -97,7 +105,7 @@ jobs:
           printf 'cask "hitch-desktop" do\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  version "%s"\n' "$VERSION" >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  sha256 "%s"\n\n' "$SHA256" >> homebrew-hitch/Casks/hitch-desktop.rb
-          printf '  url "https://github.com/doomedramen/hitch/releases/download/%s/%s"\n' "$TAG" "$DMG_URLENCODED" >> homebrew-hitch/Casks/hitch-desktop.rb
+          printf '  url "https://github.com/doomedramen/hitch/releases/download/%s/%s"\n' "$TAG" "$DMG_NAME" >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  name "Hitch Desktop"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  desc "Git branch management for environment-based deployments"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  homepage "https://github.com/doomedramen/hitch"\n\n' >> homebrew-hitch/Casks/hitch-desktop.rb
