@@ -380,15 +380,22 @@ mod tests {
     }
 
     #[test]
-    fn test_add_and_commit_empty_files() -> Result<()> {
+    fn test_add_and_commit_skips_missing_optional_files() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
             let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
 
-            // Try to add non-existent files
-            let result = git_ops.add_and_commit(&["nonexistent.txt"], "Test commit");
-            assert!(result.is_err());
+            // A missing file (e.g. an optional .gitignore) must be skipped rather
+            // than aborting the whole commit — the present files still commit.
+            git_ops.write_file("test1.txt", "content1")?;
+            git_ops.add_and_commit(&["test1.txt", "nonexistent.txt"], "Test commit")?;
+            assert!(git_ops.is_working_directory_clean()?);
+            assert_eq!(git_ops.read_file_from_branch("HEAD", "test1.txt")?, "content1");
+
+            // Committing only missing files is a no-op (nothing staged), not an error.
+            let only_missing = git_ops.add_and_commit(&["also-missing.txt"], "Nothing");
+            assert!(only_missing.is_ok());
 
             Ok::<(), anyhow::Error>(())
         });
