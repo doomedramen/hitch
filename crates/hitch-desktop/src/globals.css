@@ -4,44 +4,99 @@
 
 @layer base {
   :root {
-    --border-radius: 0px;
-    --box-shadow-x: 4px;
-    --box-shadow-y: 4px;
-    
-    --heading-font-weight: 800;
-    --base-font-weight: 500;
+    color-scheme: light dark;
 
-    /* Neobrutalist Palette */
-    --background: 255 100% 97%; /* Pale Lavender Background (#F3F0FF) */
-    --foreground: 0 0% 0%;
-    
-    --primary: 48 96% 53%; /* Bright Yellow */
-    --primary-foreground: 0 0% 0%;
-
-    --accent-hover: 255 100% 90%; /* Deeper Lavender for hover */
-
-    --secondary: 271 91% 65%; /* Purple */
-    --secondary-foreground: 0 0% 100%;
-
-    --accent: 142 71% 45%; /* Green */
-    --accent-foreground: 0 0% 0%;
-
-    --muted: 0 0% 90%;
-    --muted-foreground: 0 0% 40%;
-
-    --destructive: 0 84% 60%;
+    /* Solid semantic tokens (consumed by Tailwind via hsl(var(--x))) */
+    --background: 0 0% 100%;
+    --foreground: 240 6% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 6% 10%;
+    --primary: 211 100% 50%;            /* system blue #007AFF */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 100%;
+    --secondary-foreground: 240 6% 12%;
+    --muted: 240 6% 95%;
+    --muted-foreground: 240 4% 44%;
+    --accent: 240 6% 95%;
+    --accent-foreground: 240 6% 12%;
+    --destructive: 3 100% 59%;          /* #FF3B30 */
     --destructive-foreground: 0 0% 100%;
+    --border: 240 6% 90%;
+    --input: 240 6% 88%;
+    --ring: 211 100% 50%;
+    --radius: 10px;
 
-    --border: 0 0% 0%;
-    --input: 0 0% 0%;
-    --ring: 0 0% 0%;
+    /* macOS materials, label ramps, separators (rgba — alpha carries the feel) */
+    --label-1: rgba(0, 0, 0, 0.85);
+    --label-2: rgba(0, 0, 0, 0.5);
+    --label-3: rgba(0, 0, 0, 0.3);
+    --separator: rgba(0, 0, 0, 0.1);
+    --separator-strong: rgba(0, 0, 0, 0.14);
+    --toolbar-bg: rgba(246, 246, 248, 0.72);
+    --sidebar-bg: rgba(242, 242, 245, 0.6);
+    --fill-soft: rgba(0, 0, 0, 0.05);
+    --fill-soft-hover: rgba(0, 0, 0, 0.08);
+    --seg-bg: rgba(0, 0, 0, 0.06);
+    --control-bg: #ffffff;
+    --control-hover: #f2f2f4;
+    --control-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+    --popover-shadow: 0 12px 40px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+    --scrollbar-thumb: rgba(0, 0, 0, 0.26);
+    --warn: 32 90% 42%;
+    --warn-soft: rgba(217, 119, 6, 0.13);
+    --success: 145 63% 40%;
+    --success-soft: rgba(52, 199, 89, 0.14);
+    --brand: linear-gradient(160deg, #ffd60a, #ff9f0a);
+  }
 
-    --radius: var(--border-radius);
-    --shadow: var(--box-shadow-x) var(--box-shadow-y) 0px 0px hsl(var(--border));
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: 0 0% 12%;
+      --foreground: 0 0% 98%;
+      --card: 0 0% 12%;
+      --card-foreground: 0 0% 98%;
+      --popover: 0 0% 16%;
+      --popover-foreground: 0 0% 98%;
+      --primary: 211 100% 56%;          /* #0A84FF */
+      --primary-foreground: 0 0% 100%;
+      --secondary: 0 0% 20%;
+      --secondary-foreground: 0 0% 98%;
+      --muted: 0 0% 19%;
+      --muted-foreground: 0 0% 62%;
+      --accent: 0 0% 22%;
+      --accent-foreground: 0 0% 98%;
+      --destructive: 3 100% 63%;
+      --destructive-foreground: 0 0% 100%;
+      --border: 0 0% 26%;
+      --input: 0 0% 30%;
+      --ring: 211 100% 56%;
+
+      --label-1: rgba(255, 255, 255, 0.92);
+      --label-2: rgba(255, 255, 255, 0.55);
+      --label-3: rgba(255, 255, 255, 0.33);
+      --separator: rgba(255, 255, 255, 0.1);
+      --separator-strong: rgba(255, 255, 255, 0.16);
+      --toolbar-bg: rgba(46, 46, 48, 0.72);
+      --sidebar-bg: rgba(38, 38, 40, 0.5);
+      --fill-soft: rgba(255, 255, 255, 0.07);
+      --fill-soft-hover: rgba(255, 255, 255, 0.11);
+      --seg-bg: rgba(255, 255, 255, 0.09);
+      --control-bg: rgba(255, 255, 255, 0.09);
+      --control-hover: rgba(255, 255, 255, 0.14);
+      --control-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+      --popover-shadow: 0 14px 44px rgba(0, 0, 0, 0.55), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+      --scrollbar-thumb: rgba(255, 255, 255, 0.3);
+      --warn: 36 90% 58%;
+      --warn-soft: rgba(240, 168, 66, 0.16);
+      --success: 145 55% 55%;
+      --success-soft: rgba(52, 199, 89, 0.18);
+    }
   }
 
   * {
-    @apply border-border;
+    border-color: hsl(var(--border));
   }
 
   html,
@@ -51,46 +106,68 @@
   }
 
   body {
-    @apply bg-background text-foreground antialiased font-medium select-none;
+    font-family: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--label-1);
+    /* Transparent so the native window vibrancy shows through the chrome. */
+    background: transparent;
     overflow: hidden;
-    background-image: radial-gradient(circle, #000000 1px, transparent 1px);
-    background-size: 24px 24px;
-    background-color: hsl(var(--background));
-  }
-
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-black uppercase tracking-tight;
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
 
 @layer utilities {
-  .shadow-neo {
-    box-shadow: var(--box-shadow-x) var(--box-shadow-y) 0px 0px rgba(0, 0, 0, 1);
+  .material-toolbar {
+    background: var(--toolbar-bg);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
   }
-  .shadow-neo-sm {
-    box-shadow: 2px 2px 0px 0px rgba(0, 0, 0, 1);
+  .material-sidebar {
+    background: var(--sidebar-bg);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
   }
-  .shadow-neo-lg {
-    box-shadow: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  .hairline {
+    border: 0.5px solid var(--separator);
+  }
+  .hairline-strong {
+    border: 0.5px solid var(--separator-strong);
+  }
+  .hairline-b {
+    border-bottom: 0.5px solid var(--separator);
+  }
+  .hairline-t {
+    border-top: 0.5px solid var(--separator);
+  }
+  .hairline-r {
+    border-right: 0.5px solid var(--separator);
+  }
+  .shadow-control {
+    box-shadow: var(--control-shadow);
+  }
+  .shadow-popover {
+    box-shadow: var(--popover-shadow);
   }
 }
 
-/* Custom Scrollbar */
+/* Native-style thin overlay scrollbars (for plain-overflow elements). */
 ::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
 }
-
 ::-webkit-scrollbar-track {
-  background: white;
-  border-left: 2px solid black;
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: black;
-  border: 2px solid black;
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
-
 ::-webkit-scrollbar-corner {
-  background: white;
+  background: transparent;
 }

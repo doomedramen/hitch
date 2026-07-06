@@ -10,15 +10,18 @@
   "version": "0.0.7",
   "identifier": "com.doomedramen.hitchdesktop",
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Hitch Desktop",
         "width": 1200,
         "height": 760,
-        "minWidth": 980,
-        "minHeight": 640,
+        "minWidth": 512,
+        "minHeight": 560,
         "resizable": true,
-        "decorations": false
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true
       }
     ],
     "security": {

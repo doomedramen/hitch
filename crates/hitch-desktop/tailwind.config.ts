@@ -46,12 +46,23 @@ export default {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))"
+        },
+        warn: "hsl(var(--warn))",
+        success: "hsl(var(--success))",
+        label: {
+          DEFAULT: "var(--label-1)",
+          secondary: "var(--label-2)",
+          tertiary: "var(--label-3)"
+        },
+        separator: {
+          DEFAULT: "var(--separator)",
+          strong: "var(--separator-strong)"
         }
       },
       borderRadius: {
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)"
+        md: "8px",
+        sm: "6px"
       }
     }
   },

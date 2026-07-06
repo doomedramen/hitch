@@ -24,12 +24,12 @@ export function SidebarRowButton({
     <button
       type={type ?? "button"}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-none border-2 border-black pl-2 pr-3 text-left transition-all",
-        "focus-visible:outline-none focus-visible:translate-x-[2px] focus-visible:border-black",
-        hasSubtitle ? "items-start py-2" : "h-11 items-center",
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-2.5 rounded-[6px] px-2 text-left transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        hasSubtitle ? "items-start py-1.5" : "h-8 items-center",
         selected
-          ? "bg-primary text-primary-foreground shadow-neo-sm translate-x-[-1px] translate-y-[-1px]"
-          : "bg-white hover:border-black hover:bg-accent-hover/40 hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-sm",
+          ? "bg-primary text-primary-foreground"
+          : "text-label hover:bg-[var(--fill-soft)]",
         className
       )}
       {...props}
@@ -38,7 +38,7 @@ export function SidebarRowButton({
         <span
           className={cn(
             "shrink-0",
-            selected ? "text-inherit" : "text-black/60",
+            selected ? "text-primary-foreground/85" : "text-label-secondary",
             hasSubtitle ? "mt-0.5" : ""
           )}
           aria-hidden="true"
@@ -47,8 +47,17 @@ export function SidebarRowButton({
         </span>
       ) : null}
       <span className="min-w-0 overflow-hidden">
-        <span className="block truncate text-sm font-black uppercase tracking-tight">{label}</span>
-        {hasSubtitle ? <span className="mt-0.5 block truncate text-[10px] font-bold uppercase text-black/60">{subtitle}</span> : null}
+        <span className="block truncate text-[13px] font-normal tracking-tight">{label}</span>
+        {hasSubtitle ? (
+          <span
+            className={cn(
+              "mt-0.5 block truncate text-[11px]",
+              selected ? "text-primary-foreground/75" : "text-label-tertiary"
+            )}
+          >
+            {subtitle}
+          </span>
+        ) : null}
       </span>
       {trailing ? (
         <span

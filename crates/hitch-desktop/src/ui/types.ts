@@ -86,3 +86,56 @@ export type EnvironmentDetailsModel = {
   timeline: TimelineItem[];
 };
 
+export type ApprovalStatus = "Pending" | "Approved" | "Applied" | "Rejected" | "Cancelled";
+
+export type ApprovalOperation = "Promote" | "Demote";
+
+export type Approval = {
+  approved_by: string;
+  approved_at: string;
+  comment?: string | null;
+};
+
+export type Rejection = {
+  rejected_by: string;
+  rejected_at: string;
+  reason: string;
+};
+
+export type ApprovalSnapshot = {
+  base_branch: string;
+  base_sha: string;
+  /** [branch name, commit SHA] pairs, sorted by branch name. */
+  branch_shas: [string, string][];
+  merge_conflicts: boolean;
+};
+
+export type ApprovalRequest = {
+  id: string;
+  environment: string;
+  branch: string;
+  operation: ApprovalOperation;
+  requested_by: string;
+  requested_at: string;
+  status: ApprovalStatus;
+  approvals: Approval[];
+  rejection?: Rejection | null;
+  snapshot: ApprovalSnapshot;
+  approvers: string[];
+  approval_count: number;
+  min_approvals: number;
+  drifted_branches: string[];
+  viewer_is_requester: boolean;
+  viewer_has_approved: boolean;
+  viewer_can_approve: boolean;
+  viewer_can_reject: boolean;
+  viewer_can_cancel: boolean;
+  viewer_can_refresh: boolean;
+  viewer_can_execute: boolean;
+};
+
+export type ApprovalsList = {
+  current_user?: string | null;
+  requests: ApprovalRequest[];
+};
+

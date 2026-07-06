@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import { loadRepos, saveRepos } from "./storage";
 import type {
+  ApprovalsList,
   BranchDetailsModel,
   EnvironmentDetailsModel,
   OperationResult,
@@ -50,9 +51,23 @@ import type {
   RepoIdentity,
   WorkspaceIndexModel
 } from "./types";
-import { branchDetails, envDetails, promote, rebuild, release, repoProbe, workspaceIndex } from "./tauri";
+import {
+  approvalApprove,
+  approvalCancel,
+  approvalRefresh,
+  approvalReject,
+  approvalsList,
+  branchDetails,
+  envDetails,
+  promote,
+  rebuild,
+  release,
+  repoProbe,
+  workspaceIndex
+} from "./tauri";
 import { OutputLevelIcon, RepoIdentityIcon, TimelineKindIcon } from "./icons";
-import { HitchIcon, SidebarRowButton, Sticker, TitleBar, AboutDialog } from "./index";
+import { HitchIcon, SidebarRowButton, Sticker, TitleBar, AboutDialog, ApprovalsDialog } from "./index";
+import type { ApprovalAction } from "./ApprovalsDialog";
 
 const appWindow = getCurrentWindow();
 
@@ -122,7 +137,7 @@ function SidebarSectionHeading({
   return (
     <div
       className={cn(
-        "px-2 py-1 mb-1 text-[10px] font-black uppercase tracking-widest text-white bg-black",
+        "px-2 pt-3 pb-1 text-[11px] font-semibold text-label-secondary",
         className
       )}
       {...props}
@@ -206,28 +221,28 @@ function DiffStatList({ items }: { items: string[] }) {
           const stat = (parts[1] ?? "").trim();
           return (
             <React.Fragment key={j}>
-              <div className="min-w-0 truncate text-sm font-bold">{file.length > 0 ? file : line}</div>
-              <div className="text-xs font-black font-mono text-black bg-accent px-1 shadow-neo-sm border border-black">{stat.length > 0 ? stat : ""}</div>
+              <div className="min-w-0 truncate text-[13px] text-label">{file.length > 0 ? file : line}</div>
+              <div className="text-[11px] font-mono text-label-secondary bg-[var(--fill-soft)] px-1.5 py-0.5 rounded-[4px]">{stat.length > 0 ? stat : ""}</div>
             </React.Fragment>
           );
         })}
       </div>
-      {summary ? <div className="text-xs font-black uppercase text-black bg-primary px-2 py-0.5 border border-black shadow-neo-sm inline-block">{summary.trim()}</div> : null}
+      {summary ? <div className="text-[11px] font-medium text-label-secondary inline-block">{summary.trim()}</div> : null}
     </div>
   );
 }
 
 function OverviewPanel({ text }: { text: string }) {
   const rows = useMemo(() => parseOverview(text), [text]);
-  if (rows.length === 0) return <div className="py-12 text-sm font-black uppercase text-black/20 text-center italic">No overview</div>;
+  if (rows.length === 0) return <div className="py-12 text-[13px] text-label-tertiary text-center">No overview</div>;
 
   return (
-    <div className="space-y-1 select-text">
+    <div className="select-text">
       {rows.map((row, idx) => {
         const showDivider = idx !== rows.length - 1;
         if (row.kind === "text") {
           return (
-            <div key={idx} className={cn("py-2 text-sm", showDivider ? "border-b-2 border-black" : "")}>
+            <div key={idx} className={cn("py-2.5 text-[13px] text-label", showDivider ? "hairline-b" : "")}>
               {row.value}
             </div>
           );
@@ -236,22 +251,22 @@ function OverviewPanel({ text }: { text: string }) {
         if (row.kind === "list") {
           const isDiffStat = row.key.trim().toLowerCase() === "diff_stat";
           return (
-            <div key={idx} className={cn("py-2", showDivider ? "border-b-2 border-black" : "")}>
+            <div key={idx} className={cn("py-2.5", showDivider ? "hairline-b" : "")}>
               <div className="grid grid-cols-[140px_1fr] gap-3">
-                <div className="pt-0.5 text-[10px] font-black uppercase tracking-widest text-black">
+                <div className="pt-0.5 text-[12px] text-label-secondary">
                   {overviewKeyLabel(row.key)}
                 </div>
                 <div className="min-w-0">
                   {row.items.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">None</div>
+                    <div className="text-[13px] text-label-tertiary">None</div>
                   ) : isDiffStat ? (
                     <DiffStatList items={row.items} />
                   ) : (
                     <ul className="space-y-1">
                       {row.items.map((it, j) => (
-                        <li key={j} className="flex gap-2 text-sm">
-                          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />
-                          <span className={cn("min-w-0 break-words", looksCodey(it) ? "font-mono text-xs" : "")}>{it}</span>
+                        <li key={j} className="flex gap-2 text-[13px] text-label">
+                          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-label-tertiary" />
+                          <span className={cn("min-w-0 break-words", looksCodey(it) ? "font-mono text-[12px] text-label-secondary" : "")}>{it}</span>
                         </li>
                       ))}
                     </ul>
@@ -268,8 +283,8 @@ function OverviewPanel({ text }: { text: string }) {
           row.key === "locked" && (isYes || isNo) ? (
             <span
               className={cn(
-                "inline-flex items-center rounded-none border-2 border-black px-2 py-0.5 text-xs font-bold",
-                isYes ? "bg-destructive text-destructive-foreground shadow-neo-sm" : "bg-secondary text-secondary-foreground shadow-neo-sm"
+                "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                isYes ? "bg-[var(--warn-soft)] text-warn" : "bg-[var(--fill-soft)] text-label-secondary"
               )}
             >
               {row.value}
@@ -277,15 +292,15 @@ function OverviewPanel({ text }: { text: string }) {
           ) : null;
 
         return (
-          <div key={idx} className={cn("py-3", showDivider ? "border-b-2 border-black" : "")}>
+          <div key={idx} className={cn("py-2.5", showDivider ? "hairline-b" : "")}>
             <div className="grid grid-cols-[140px_1fr] gap-3">
-              <div className="pt-0.5 text-[10px] font-black uppercase tracking-widest text-black">
+              <div className="pt-0.5 text-[12px] text-label-secondary">
                 {overviewKeyLabel(row.key)}
               </div>
-              <div className="min-w-0 text-sm font-medium">
+              <div className="min-w-0 text-[13px] text-label">
                 {badge ?? (
-                  <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-xs bg-muted/30 px-1 py-0.5 border border-black shadow-neo-sm" : "")}>
-                    {row.value.length === 0 ? <span className="text-muted-foreground">—</span> : row.value}
+                  <span className={cn("break-words", looksCodey(row.value) ? "font-mono text-[12px] text-label-secondary" : "")}>
+                    {row.value.length === 0 ? <span className="text-label-tertiary">—</span> : row.value}
                   </span>
                 )}
               </div>
@@ -345,6 +360,16 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
   const [op, setOp] = useState<null | { title: string; result?: OperationResult }>(null);
   const [promotePicker, setPromotePicker] = useState<null | { branch: string }>(null);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
+
+  const [approvals, setApprovals] = useState<ApprovalsList | null>(null);
+  const [approvalsLoading, setApprovalsLoading] = useState<boolean>(false);
+  const [approvalsError, setApprovalsError] = useState<string | null>(null);
+  const [approvalsOpen, setApprovalsOpen] = useState<boolean>(false);
+
+  const pendingApprovalCount = useMemo(
+    () => (approvals?.requests ?? []).filter((r) => r.status === "Pending").length,
+    [approvals]
+  );
 
   useEffect(() => {
     void (async () => {
@@ -507,6 +532,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
     closeRepoList();
     setIndex(null);
     setIndexError(null);
+    setApprovals(null);
+    setApprovalsError(null);
     setSelection({ kind: "none" });
     setDesiredSelection({ kind: "none" });
     setRenderedSelection({ kind: "none" });
@@ -534,6 +561,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
       const idx = await workspaceIndex(repo.path);
       setIndex(idx);
       setStatus("Ready");
+      void refreshApprovals(repo.path);
       persistWith((prev) =>
         prev.map((r) => (r.id === repo.id ? { ...r, last_opened_at: nowIso() } : r))
       );
@@ -633,6 +661,19 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
     return `none:${tab}`;
   }, [renderedSelection, tab]);
 
+  async function refreshApprovals(repoPath: string) {
+    setApprovalsLoading(true);
+    setApprovalsError(null);
+    try {
+      const list = await approvalsList(repoPath);
+      setApprovals(list);
+    } catch (e: any) {
+      setApprovalsError(e?.toString?.() ?? "Failed to load approvals");
+    } finally {
+      setApprovalsLoading(false);
+    }
+  }
+
   async function runOperation(title: string, opFn: () => Promise<OperationResult>) {
     setOp({ title });
     setStatus(title);
@@ -640,7 +681,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
       const result = await opFn();
       setOp({ title, result });
       setStatus(result.ok ? "Done" : "Failed");
-      // refresh index
+      // refresh index + approvals (promote can create a request; approvals ops
+      // mutate the request list and, when applied, the environment itself)
       if (selectedRepo) {
         try {
           const idx = await workspaceIndex(selectedRepo.path);
@@ -649,10 +691,35 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
         } catch {
           // ignore
         }
+        void refreshApprovals(selectedRepo.path);
       }
     } catch (e: any) {
       setOp({ title, result: { ok: false, error: e?.toString?.() ?? "Operation failed", lines: [] } });
       setStatus("Failed");
+    }
+  }
+
+  function handleApprovalAction(action: ApprovalAction) {
+    if (!selectedRepo) return;
+    const path = selectedRepo.path;
+    const r = action.request;
+    const label = `${r.branch} → ${r.environment}`;
+    switch (action.kind) {
+      case "approve":
+        void runOperation(`Approve ${label}`, () => approvalApprove(path, r.id, action.comment));
+        break;
+      case "execute":
+        void runOperation(`Apply ${label}`, () => approvalApprove(path, r.id));
+        break;
+      case "reject":
+        void runOperation(`Reject ${label}`, () => approvalReject(path, r.id, action.reason));
+        break;
+      case "cancel":
+        void runOperation(`Cancel ${label}`, () => approvalCancel(path, r.id));
+        break;
+      case "refresh":
+        void runOperation(`Refresh ${label}`, () => approvalRefresh(path, r.id));
+        break;
     }
   }
 
@@ -670,35 +737,47 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
         : [];
 
   return (
-    <div className="flex flex-col h-full w-full bg-background border-4 border-black overflow-hidden">
+    <div className="flex flex-col h-full w-full overflow-hidden text-label">
       <TitleBar onAboutClick={() => setAboutOpen(true)} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <ApprovalsDialog
+        open={approvalsOpen}
+        onOpenChange={setApprovalsOpen}
+        approvals={approvals}
+        loading={approvalsLoading}
+        error={approvalsError}
+        dateFmt={dateFmt}
+        onAction={handleApprovalAction}
+        onRefresh={() => {
+          if (selectedRepo) void refreshApprovals(selectedRepo.path);
+        }}
+      />
       <div className="flex flex-1 w-full overflow-hidden">
-        <aside className="flex w-[420px] min-w-[340px] shrink-0 flex-col border-r-4 border-black bg-white">
-        <div className="flex h-16 items-center border-b-4 border-black bg-primary px-3">
+        <aside className="flex w-[236px] shrink-0 flex-col hairline-r material-sidebar">
+        <div className="flex h-14 items-center hairline-b px-2.5">
           <button
             type="button"
             onClick={toggleRepoList}
             className={cn(
-              "flex h-10 w-full items-center justify-between gap-3 rounded-[var(--border-radius,0px)] border-2 border-black bg-white px-2 text-left transition-all shadow-neo-sm",
-              "hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo hover:bg-accent-hover/20 focus-visible:outline-none"
+              "flex h-9 w-full items-center justify-between gap-2 rounded-[6px] bg-[var(--control-bg)] px-2 text-left shadow-control transition-colors",
+              "hover:bg-[var(--control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
           >
-            <div className="flex min-w-0 items-center gap-3">
-              <Monitor className="h-6 w-6 shrink-0 text-black" aria-hidden="true" />
+            <div className="flex min-w-0 items-center gap-2">
+              <Monitor className="h-4 w-4 shrink-0 text-label-secondary" strokeWidth={1.8} aria-hidden="true" />
               <div className="min-w-0">
-                <div className="text-[10px] font-black uppercase tracking-widest text-black/60">
-                  Current Repository
+                <div className="text-[10px] font-medium uppercase tracking-wide text-label-tertiary">
+                  Repository
                 </div>
-                <div className="truncate text-sm font-black uppercase tracking-tight text-black">
+                <div className="truncate text-[13px] font-medium tracking-tight text-label">
                   {selectedRepo ? selectedRepo.display_name : "Select a repository"}
                 </div>
               </div>
             </div>
             {repoListOpen ? (
-              <ChevronUp className="h-5 w-5 shrink-0 text-black" aria-hidden="true" />
+              <ChevronUp className="h-4 w-4 shrink-0 text-label-secondary" aria-hidden="true" />
             ) : (
-              <ChevronDown className="h-5 w-5 shrink-0 text-black" aria-hidden="true" />
+              <ChevronDown className="h-4 w-4 shrink-0 text-label-secondary" aria-hidden="true" />
             )}
           </button>
         </div>
@@ -707,7 +786,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           <>
             <div className="flex items-center gap-2 px-3 py-3">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black z-10" strokeWidth={3} aria-hidden="true" />
+                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-label-tertiary z-10" strokeWidth={2} aria-hidden="true" />
                 <Input
                   placeholder="Filter"
                   className="pl-9"
@@ -725,19 +804,19 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                 }}
               >
                 Add
-                <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <ChevronDown className="h-4 w-4 text-label-secondary" aria-hidden="true" />
               </Button>
             </div>
             <Separator />
             <ScrollArea className="flex-1" scrollbarClassName="bg-white">
-              <div className="space-y-6 p-2">
+              <div className="space-y-1 p-2">
                 {repos.length === 0 ? (
-                  <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No repositories yet</div>
+                  <div className="px-2 py-4 text-[12px] text-label-tertiary">No repositories yet</div>
                 ) : repoListModel.mode === "filtered" ? (
                   <div className="space-y-1">
                     <SidebarSectionHeading>Results</SidebarSectionHeading>
                     {repoListModel.results.length === 0 ? (
-                      <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No matches</div>
+                      <div className="px-2 py-4 text-[12px] text-label-tertiary">No matches</div>
                     ) : (
                       <div className="space-y-1">
                         {repoListModel.results.map((r) => (
@@ -759,7 +838,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                     <div className="space-y-1">
                       <SidebarSectionHeading>Recent</SidebarSectionHeading>
                       {repoListModel.recent.length === 0 ? (
-                        <div className="px-2 py-4 text-[10px] font-black uppercase text-black/40 italic">No recent repositories</div>
+                        <div className="px-2 py-4 text-[12px] text-label-tertiary">No recent repositories</div>
                       ) : (
                         <div className="space-y-1">
                           {repoListModel.recent.map((r) => (
@@ -808,7 +887,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           <>
             <div className="space-y-2 px-3 py-3">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black z-10" strokeWidth={3} aria-hidden="true" />
+                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-label-tertiary z-10" strokeWidth={2} aria-hidden="true" />
                 <Input
                   placeholder="Filter"
                   className="pl-9"
@@ -818,32 +897,32 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
               </div>
 
               {!filteredIndex && !indexLoading && !indexError && !selectedRepo ? (
-                <div className="text-[10px] font-black uppercase text-black/40 px-3">No workspace loaded.</div>
+                <div className="text-[12px] text-label-tertiary px-3">No workspace loaded.</div>
               ) : null}
             </div>
             <Separator />
 
             <ScrollArea className="flex-1" scrollbarClassName="bg-white">
-              <div className="space-y-6 p-2">
+              <div className="space-y-1 p-2">
                 {indexLoading ? (
-                  <div className="flex items-center gap-2 px-2 py-4 text-xs font-black uppercase animate-pulse text-black">
-                    <LoaderCircle className="h-5 w-5 animate-spin" />
+                  <div className="flex items-center gap-2 px-2 py-4 text-[12px] text-label-secondary">
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
                     Loading workspace…
                   </div>
                 ) : null}
                 {indexError ? (
-                  <div className="px-2 py-4 border-2 border-black bg-destructive text-white shadow-neo-sm">
-                    <div className="text-[10px] font-black uppercase mb-1">Error</div>
-                    <div className="text-sm font-black uppercase leading-tight">{indexError}</div>
+                  <div className="px-2.5 py-2 rounded-[8px] bg-destructive/10 text-destructive">
+                    <div className="text-[11px] font-semibold mb-0.5">Error</div>
+                    <div className="text-[13px] leading-snug">{indexError}</div>
                   </div>
                 ) : null}
 
                 {filteredIndex ? (
                   <>
                     <div className="space-y-1">
-                      <SidebarSectionHeading>ENVIRONMENTS</SidebarSectionHeading>
+                      <SidebarSectionHeading>Environments</SidebarSectionHeading>
                       {filteredIndex.environments.length === 0 ? (
-                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
+                        <div className="px-2 py-1 text-[12px] text-label-tertiary">None</div>
                       ) : null}
                       {filteredIndex.environments.map((e) => (
                         <SidebarRowButton
@@ -851,30 +930,26 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                           icon={<Layers className="h-4 w-4" strokeWidth={3} aria-hidden="true" />}
                           label={e.name}
                           subtitle={
-                            <span className="inline-flex min-w-0 items-center gap-1 font-black uppercase text-[10px]">
+                            <span className="inline-flex min-w-0 items-center gap-1 text-[11px]">
                               <span className="truncate">
-                                base: {e.base} • promoted: {e.promoted_count}
+                                base: {e.base} · promoted: {e.promoted_count}
                               </span>
                               {e.locked ? (
                                 <span className="inline-flex items-center gap-1">
-                                  <span aria-hidden="true">•</span>
-                                  <LockKeyhole className="h-3.5 w-3.5" strokeWidth={3} aria-hidden="true" />
-                                  <span>LOCKED</span>
+                                  <span aria-hidden="true">·</span>
+                                  <LockKeyhole className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                                  <span>Locked</span>
                                 </span>
                               ) : null}
                             </span>
                           }
                           trailing={
-                            <Sticker>
-                              {e.requires_approval ? (
-                                <>
-                                  <ShieldCheck className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  approvals {e.min_approvals}+
-                                </>
-                              ) : (
-                                "OPEN"
-                              )}
-                            </Sticker>
+                            e.requires_approval ? (
+                              <Sticker className="bg-[rgba(0,122,255,0.12)] text-primary">
+                                <ShieldCheck className="h-3 w-3" strokeWidth={2.2} aria-hidden="true" />
+                                {e.min_approvals}+
+                              </Sticker>
+                            ) : null
                           }
                           selected={selection.kind === "env" && selection.name === e.name}
                           onClick={() => requestDetails({ kind: "env", name: e.name })}
@@ -883,9 +958,9 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                     </div>
 
                     <div className="space-y-1">
-                      <SidebarSectionHeading>PROMOTED BRANCHES</SidebarSectionHeading>
+                      <SidebarSectionHeading>Promoted branches</SidebarSectionHeading>
                       {filteredIndex.promoted_branches.length === 0 ? (
-                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
+                        <div className="px-2 py-1 text-[12px] text-label-tertiary">None</div>
                       ) : null}
                       {filteredIndex.promoted_branches.map((b) => (
                         <SidebarRowButton
@@ -894,22 +969,22 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                           label={b.name}
                           subtitle={
                             b.promoted_to.length > 0
-                              ? `PROMOTED TO: ${b.promoted_to.join(", ")}`
+                              ? `Promoted to: ${b.promoted_to.join(", ")}`
                               : b.remote
-                                ? "REMOTE"
-                                : "LOCAL"
+                                ? "Remote"
+                                : "Local"
                           }
                           trailing={
                             <Sticker>
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  REMOTE
+                                  <Cloud className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                                  Remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  LOCAL
+                                  <HardDrive className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                                  Local
                                 </>
                               ) : (
                                 "-"
@@ -925,9 +1000,9 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                     </div>
 
                     <div className="space-y-1">
-                      <SidebarSectionHeading>BRANCHES</SidebarSectionHeading>
+                      <SidebarSectionHeading>Branches</SidebarSectionHeading>
                       {filteredIndex.branches.length === 0 ? (
-                        <div className="px-2 py-1 text-[10px] font-black uppercase text-black/40 italic">None</div>
+                        <div className="px-2 py-1 text-[12px] text-label-tertiary">None</div>
                       ) : null}
                       {filteredIndex.branches.map((b) => (
                         <SidebarRowButton
@@ -936,22 +1011,22 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                           label={b.name}
                           subtitle={
                             b.base_for.length > 0
-                              ? `BASE FOR: ${b.base_for.join(", ")}`
+                              ? `Base for: ${b.base_for.join(", ")}`
                               : b.remote
-                                ? "REMOTE"
-                                : "LOCAL"
+                                ? "Remote"
+                                : "Local"
                           }
                           trailing={
                             <Sticker>
                               {b.remote ? (
                                 <>
-                                  <Cloud className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  REMOTE
+                                  <Cloud className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                                  Remote
                                 </>
                               ) : b.local ? (
                                 <>
-                                  <HardDrive className="h-3.5 w-3.5 text-white" strokeWidth={3} aria-hidden="true" />
-                                  LOCAL
+                                  <HardDrive className="h-3 w-3" strokeWidth={2} aria-hidden="true" />
+                                  Local
                                 </>
                               ) : (
                                 "-"
@@ -980,7 +1055,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
           className={cn(
             "absolute inset-0 z-10 cursor-default transition-opacity duration-150 ease-out",
             repoListOpen
-              ? "pointer-events-auto opacity-100 bg-black/35 backdrop-blur-sm backdrop-saturate-150"
+              ? "pointer-events-auto opacity-100 bg-black/20 backdrop-blur-[2px]"
               : "pointer-events-none opacity-0 bg-black/0 backdrop-blur-0"
           )}
           onClick={closeRepoList}
@@ -992,45 +1067,70 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
             onValueChange={(v) => setTab(v === "timeline" ? "timeline" : "overview")}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <div className="flex h-16 items-center justify-between gap-3 border-b-4 border-black px-3">
-              <TabsList className="h-10">
-                <TabsTrigger value="overview" className="group">
-                  <FileText className="mr-2 h-4 w-4 text-black" strokeWidth={3} aria-hidden="true" />
-                  Overview
+            <div className="flex h-14 items-center justify-between gap-3 hairline-b px-3">
+              <TabsList>
+                <TabsTrigger value="overview" aria-label="Overview" title="Overview">
+                  <FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  <span className="hidden lg:inline">Overview</span>
                 </TabsTrigger>
-                <TabsTrigger value="timeline" className="group">
-                  <History className="mr-2 h-4 w-4 text-black" strokeWidth={3} aria-hidden="true" />
-                  Timeline
+                <TabsTrigger value="timeline" aria-label="Timeline" title="Timeline">
+                  <History className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+                  <span className="hidden lg:inline">Timeline</span>
                 </TabsTrigger>
               </TabsList>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 {status !== "Ready" ? (
-                  <div className="hidden text-[10px] font-black uppercase text-black/60 sm:block">{status}</div>
+                  <div className="hidden text-[11px] text-label-secondary sm:block">{status}</div>
+                ) : null}
+                {selectedRepo ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="justify-center"
+                    aria-label="Approvals"
+                    title="Approvals"
+                    onClick={() => {
+                      void refreshApprovals(selectedRepo.path);
+                      setApprovalsOpen(true);
+                    }}
+                  >
+                    <ShieldCheck className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                    <span className="hidden lg:inline">Approvals</span>
+                    {pendingApprovalCount > 0 ? (
+                      <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
+                        {pendingApprovalCount}
+                      </span>
+                    ) : null}
+                  </Button>
                 ) : null}
                 {selectedRepo && selection.kind === "branch" && !selection.isEnvironment ? (
                   <Button
-                    variant="outline"
+                    variant="default"
                     size="sm"
-                    className="h-10 min-w-24 justify-center"
+                    className="justify-center"
+                    aria-label="Promote"
+                    title="Promote…"
                     onClick={() => setPromotePicker({ branch: selection.name })}
                   >
-                    <ArrowUpRight className="mr-2 h-4 w-4 text-black" aria-hidden="true" />
-                    Promote…
+                    <ArrowUpRight className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                    <span className="hidden lg:inline">Promote…</span>
                   </Button>
                 ) : null}
                 {selectedRepo && selection.kind === "env" ? (
                   <>
                     <Button
-                      variant="outline"
+                      variant="secondary"
                       size="sm"
-                      className="h-10 min-w-24 justify-center"
+                      className="justify-center"
+                      aria-label="Rebuild"
+                      title="Rebuild"
                       onClick={() =>
                         setConfirm({
                           title: `Rebuild ${selection.name}`,
                           description: `Rebuild environment '${selection.name}'?`,
                           actionLabel: "Rebuild",
-                          actionVariant: "outline",
+                          actionVariant: "default",
                           onAction: () =>
                             void runOperation(`Rebuild ${selection.name}`, () =>
                               rebuild(selectedRepo.path, selection.name, false)
@@ -1038,13 +1138,15 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                         })
                       }
                     >
-                      <RefreshCw className="mr-2 h-4 w-4 text-black" aria-hidden="true" />
-                      Rebuild
+                      <RefreshCw className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                      <span className="hidden lg:inline">Rebuild</span>
                     </Button>
                     <Button
                       variant="destructive"
                       size="sm"
-                      className="h-10 min-w-24 justify-center"
+                      className="justify-center"
+                      aria-label="Release"
+                      title="Release"
                       onClick={() =>
                         setConfirm({
                           title: `Release ${selection.name}`,
@@ -1056,8 +1158,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                         })
                       }
                     >
-                      <Rocket className="mr-2 h-4 w-4 text-white" aria-hidden="true" />
-                      Release
+                      <Rocket className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+                      <span className="hidden lg:inline">Release</span>
                     </Button>
                   </>
                 ) : null}
@@ -1066,17 +1168,17 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 
             <div className="relative min-h-0 flex-1">
               <ScrollArea className="h-full" scrollbarClassName="bg-background">
-                <div className="space-y-3 px-4 py-4">
+                <div className="space-y-3 px-5 py-4">
                   {detailsError ? (
-                    <div className="p-4 border-2 border-black bg-destructive text-destructive-foreground font-black uppercase shadow-neo-sm">
+                    <div className="p-3 rounded-[8px] bg-destructive/10 text-destructive text-[13px]">
                       {detailsError}
                     </div>
                   ) : null}
-                  
+
                   {renderedSelection.kind === "none" ? (
-                    <div className="flex flex-col items-center justify-center py-24 px-6 border-4 border-dashed border-black/10">
-                      <div className="text-lg font-black uppercase tracking-tighter text-black/20 text-center leading-none">
-                        Select a branch or environment<br />to see details
+                    <div className="flex flex-col items-center justify-center py-24 px-6">
+                      <div className="text-[15px] font-medium text-label-tertiary text-center leading-relaxed">
+                        Select a branch or environment to see details
                       </div>
                     </div>
                   ) : null}
@@ -1092,26 +1194,26 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
                       </TabsContent>
                       <TabsContent value="timeline" className="m-0 mt-0">
                         {detailsTimeline.length === 0 ? (
-                          <div className="py-24 flex items-center justify-center border-4 border-dashed border-black/10">
-                            <div className="text-sm font-black uppercase text-black/20">No timeline entries</div>
+                          <div className="py-24 flex items-center justify-center">
+                            <div className="text-[13px] text-label-tertiary">No timeline entries</div>
                           </div>
 	                        ) : (
 	                          <div className="space-y-3">
 	                            {detailsTimeline.map((t, i) => (
-	                              <div key={i} className="space-y-1 mb-4 border-b-2 border-black pb-4">
-	                                  <div className="flex items-center justify-between gap-3 text-xs text-black font-black uppercase">
+	                              <div key={i} className="space-y-1.5 pb-4 mb-3 hairline-b">
+	                                  <div className="flex items-center justify-between gap-3 text-[11px] text-label-secondary">
 	                                    <span className="min-w-0 truncate">
 	                                      {dateFmt.format(new Date(t.when))}
 	                                    </span>
 	                                    <Sticker className="text-xs">
 	                                      <TimelineKindIcon
 	                                        kind={t.kind}
-	                                        className="h-3.5 w-3.5 text-white"
+	                                        className="h-3 w-3"
 	                                      />	                                      <span>{t.kind}</span>
 	                                    </Sticker>	                                  </div>
-	                                  <div className="text-sm font-bold uppercase tracking-tight select-text">{t.summary}</div>
+	                                  <div className="text-[13px] font-medium text-label select-text">{t.summary}</div>
 	                                  {t.detail ? (
-	                                    <pre className="whitespace-pre-wrap break-words border-2 border-black bg-muted/20 p-4 text-xs font-bold leading-5 text-black shadow-neo select-text">
+	                                    <pre className="whitespace-pre-wrap break-words rounded-[8px] hairline bg-[var(--fill-soft)] p-3 text-[12px] font-mono leading-5 text-label-secondary select-text">
 	                                      {t.detail}
 	                                    </pre>
 	                                  ) : null}
@@ -1129,8 +1231,8 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
 
               {detailsLoading ? (
                 <div className="pointer-events-none absolute inset-0 flex items-start justify-end p-3">
-                  <div className="flex items-center gap-2 rounded-none border-2 border-black bg-white px-3 py-2 text-[10px] font-black uppercase text-black shadow-neo-sm">
-                    <LoaderCircle className="h-4 w-4 animate-spin text-black" aria-hidden="true" />
+                  <div className="flex items-center gap-2 rounded-[8px] hairline bg-popover px-3 py-1.5 text-[11px] text-label-secondary shadow-popover">
+                    <LoaderCircle className="h-4 w-4 animate-spin text-label-secondary" aria-hidden="true" />
                     <div className="max-w-[28ch] truncate">
                       Loading{" "}
                       {selection.kind === "env"
@@ -1153,13 +1255,13 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <TriangleAlert className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <TriangleAlert className="h-4 w-4 text-warn" aria-hidden="true" />
               Repository not found
             </DialogTitle>
             <DialogDescription>Hitch Desktop can’t open this folder.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
+            <pre className="whitespace-pre-wrap break-words rounded-[6px] bg-[var(--fill-soft)] p-2.5 text-[12px] leading-5 text-label font-mono">
               {repoMissing?.repo.path}
             </pre>
             <div className="text-sm text-destructive">{repoMissing?.error}</div>
@@ -1185,21 +1287,21 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <TriangleAlert className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <TriangleAlert className="h-4 w-4 text-warn" aria-hidden="true" />
               That doesn’t look like the same repository
             </DialogTitle>
             <DialogDescription>Identity mismatch. You can pick again or override.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <div className="text-xs font-medium text-muted-foreground">Expected</div>
-              <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
+              <div className="text-[11px] font-medium text-label-secondary">Expected</div>
+              <pre className="whitespace-pre-wrap break-words rounded-[6px] bg-[var(--fill-soft)] p-2.5 text-[12px] leading-5 text-label font-mono">
                 {repoLocateMismatch ? expectedIdentityLabel(repoLocateMismatch.expected) : ""}
               </pre>
             </div>
             <div className="space-y-1">
-              <div className="text-xs font-medium text-muted-foreground">Found</div>
-              <pre className="whitespace-pre-wrap break-words rounded-md bg-secondary/40 p-3 text-xs leading-5 text-foreground">
+              <div className="text-[11px] font-medium text-label-secondary">Found</div>
+              <pre className="whitespace-pre-wrap break-words rounded-[6px] bg-[var(--fill-soft)] p-2.5 text-[12px] leading-5 text-label font-mono">
                 {repoLocateMismatch ? expectedIdentityLabel(repoLocateMismatch.found) : ""}
               </pre>
             </div>
@@ -1316,27 +1418,27 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
             <ScrollArea className="h-[50vh]">
               <div className="space-y-2 pr-3">
                 {op.result.lines.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No output.</div>
+                  <div className="text-[13px] text-label-secondary">No output.</div>
                 ) : (
                   op.result.lines.map((l, i) => {
                     const levelClass =
                       l.level === "Info"
-                        ? "text-muted-foreground"
+                        ? "text-label-secondary"
                         : l.level === "Warning"
-                          ? "text-amber-300"
+                          ? "text-warn"
                           : l.level === "Error"
                             ? "text-destructive"
-                            : "text-primary";
+                            : "text-success";
                     return (
                       <div
                         key={i}
-                        className="rounded-md border border-border bg-secondary/30 px-3 py-2"
+                        className="rounded-[8px] hairline bg-[var(--fill-soft)] px-3 py-2"
                       >
-                        <div className={cn("flex items-center gap-2 text-xs font-medium", levelClass)}>
+                        <div className={cn("flex items-center gap-2 text-[11px] font-medium", levelClass)}>
                           <OutputLevelIcon level={l.level} className={cn("h-3.5 w-3.5", levelClass)} />
                           <span>{l.level}</span>
                         </div>
-                        <div className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground select-text">
+                        <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-label select-text">
                           {l.message}
                         </div>
                       </div>
@@ -1346,7 +1448,7 @@ export function App() {  const [repos, setRepos] = useState<RepoEntry[]>([]);
               </div>
             </ScrollArea>
           ) : (
-            <div className="text-sm text-muted-foreground">Running…</div>
+            <div className="text-[13px] text-label-secondary">Running…</div>
           )}
 
           <DialogFooter>

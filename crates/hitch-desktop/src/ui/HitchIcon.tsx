@@ -14,13 +14,15 @@ export function HitchIcon({ className, size = "md", variant = "default", noShado
   };
 
   const variants = {
-    default: "bg-primary text-black",
+    default: "bg-[linear-gradient(160deg,#ffd60a,#ff9f0a)] text-black/80",
     inverted: "bg-white text-black",
   };
 
+  const rounding = size === "lg" ? "rounded-[20px]" : "rounded-[6px]";
+
   return (
-    <div className={cn(!noShadow && "shadow-neo-sm", "border-2 border-black flex items-center justify-center", variants[variant], sizes[size], className)}>
-      <span className={cn("font-black italic select-none", fontSizes[size])}>H</span>
+    <div className={cn(!noShadow && "shadow-control", rounding, "flex items-center justify-center", variants[variant], sizes[size], className)}>
+      <span className={cn("font-bold italic select-none", fontSizes[size])}>H</span>
     </div>
   );
 }

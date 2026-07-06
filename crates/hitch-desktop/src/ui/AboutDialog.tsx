@@ -26,22 +26,22 @@ export function AboutDialog({ open, onOpenChange }: { open: boolean, onOpenChang
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm text-center">
-        <div className="flex flex-col items-center gap-6 py-6">
-          <HitchIcon size="lg" className="transform rotate-6" />
+      <DialogContent className="max-w-xs text-center">
+        <div className="flex flex-col items-center gap-5 py-5">
+          <HitchIcon size="lg" />
           <div className="space-y-2">
-            <h2 className="text-2xl font-black uppercase tracking-tight">{info?.name ?? "HITCH DESKTOP"}</h2>
-            <div className="inline-block border-2 border-black bg-secondary px-3 py-1 text-xs font-black text-white shadow-neo-sm transform -rotate-2">
-              VERSION {info?.version ?? "0.0.0"}
+            <h2 className="text-[17px] font-semibold tracking-tight text-label">{info?.name ?? "Hitch Desktop"}</h2>
+            <div className="inline-flex rounded-full bg-[var(--fill-soft)] px-2.5 py-0.5 text-[12px] font-medium text-label-secondary">
+              Version {info?.version ?? "0.0.0"}
             </div>
           </div>
-          <div className="text-[10px] font-black uppercase tracking-widest text-black/40">
-            © 2026 DOOMEDRAMEN
+          <div className="text-[11px] text-label-tertiary">
+            © 2026 doomedramen
           </div>
         </div>
         <DialogFooter className="sm:justify-center">
-          <Button variant="default" onClick={() => onOpenChange(false)} className="min-w-32">
-            STAY NEUTRAL
+          <Button variant="default" onClick={() => onOpenChange(false)} className="min-w-24">
+            Done
           </Button>
         </DialogFooter>
       </DialogContent>

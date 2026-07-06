@@ -10,8 +10,8 @@ use hitch::utils::output::{BufferedOutputSink, OutputSink};
 use std::sync::Arc;
 
 use crate::types::{
-    BranchDetailsDto, EnvironmentDetailsDto, OperationResultDto, RepoProbeResultDto,
-    WorkspaceIndexDto,
+    ApprovalRequestDto, ApprovalsListDto, BranchDetailsDto, EnvironmentDetailsDto,
+    OperationResultDto, RepoProbeResultDto, WorkspaceIndexDto,
 };
 
 fn context_at(repo_path: &str) -> Result<GlobalContext> {
@@ -192,10 +192,149 @@ async fn release(repo_path: String, env_name: String) -> OperationResultDto {
     .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
 }
 
+#[tauri::command]
+async fn approvals_list(repo_path: String) -> Result<ApprovalsListDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ctx = context_at(&repo_path).map_err(|e| e.to_string())?;
+
+        // All requests, newest-first (the UI groups/filters by status).
+        let requests = hitch::utils::prelude::get_approval_requests(&ctx, None, None)
+            .map_err(|e| e.to_string())?;
+        let config = hitch::utils::prelude::access_metadata_read_only(&ctx, |c| Ok(c.clone()))
+            .map_err(|e| e.to_string())?;
+        // A missing git user email is not fatal — the viewer_* hints just resolve
+        // to false, so the UI shows the requests read-only.
+        let current_user = hitch::utils::authorization::get_current_user(&ctx).ok();
+
+        let requests = requests
+            .iter()
+            .map(|r| ApprovalRequestDto::build(&ctx, &config, r, current_user.as_deref()))
+            .collect();
+
+        Ok(ApprovalsListDto {
+            current_user,
+            requests,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run a mutating approval action under the repository lock, capturing its output.
+///
+/// Mirrors the promote/rebuild/release pattern: the desktop takes the repo-wide
+/// lock (the command's own `with_locked_env`/`modify_metadata` do the rest) and
+/// surfaces the buffered log lines to the UI regardless of success or failure.
+fn run_locked_approval<F>(repo_path: &str, lock_label: &str, action: F) -> OperationResultDto
+where
+    F: FnOnce(&GlobalContext) -> Result<()>,
+{
+    let (ctx, sink) = match op_context_with_sink(repo_path) {
+        Ok(v) => v,
+        Err(e) => return OperationResultDto::error(e.to_string(), vec![]),
+    };
+
+    // Serialize against any other Hitch operation on the same repo (CLI or app).
+    let _repo_lock = match hitch::utils::repo_lock::RepoLock::acquire(
+        std::path::Path::new(&ctx.git().get_git_dir()),
+        lock_label,
+    ) {
+        Ok(lock) => lock,
+        Err(e) => return OperationResultDto::error(e.to_string(), sink.snapshot()),
+    };
+
+    let res = action(&ctx);
+    OperationResultDto::from_result(res.map_err(|e| e.to_string()), sink.snapshot())
+}
+
+#[tauri::command]
+async fn approval_approve(
+    repo_path: String,
+    request_id: String,
+    comment: Option<String>,
+) -> OperationResultDto {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_locked_approval(&repo_path, "approvals approve", |ctx| {
+            let args = hitch::commands::approvals::approve::ApproveArgs {
+                request_id,
+                // Normalize an empty/whitespace comment to None.
+                comment: comment.filter(|c| !c.trim().is_empty()),
+            };
+            hitch::commands::approvals::approve::run(args, ctx)
+        })
+    })
+    .await
+    .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
+}
+
+#[tauri::command]
+async fn approval_reject(
+    repo_path: String,
+    request_id: String,
+    reason: String,
+) -> OperationResultDto {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_locked_approval(&repo_path, "approvals reject", |ctx| {
+            let args = hitch::commands::approvals::reject::RejectArgs { request_id, reason };
+            hitch::commands::approvals::reject::run(args, ctx)
+        })
+    })
+    .await
+    .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
+}
+
+#[tauri::command]
+async fn approval_cancel(repo_path: String, request_id: String) -> OperationResultDto {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_locked_approval(&repo_path, "approvals cancel", |ctx| {
+            // force=true: the desktop confirms via UI, and there is no stdin to
+            // read an interactive confirmation from.
+            let args = hitch::commands::approvals::cancel::CancelArgs {
+                request_id,
+                force: true,
+            };
+            hitch::commands::approvals::cancel::run(args, ctx)
+        })
+    })
+    .await
+    .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
+}
+
+#[tauri::command]
+async fn approval_refresh(repo_path: String, request_id: String) -> OperationResultDto {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_locked_approval(&repo_path, "approvals refresh", |ctx| {
+            let args = hitch::commands::approvals::refresh::RefreshArgs { request_id };
+            hitch::commands::approvals::refresh::run(args, ctx)
+        })
+    })
+    .await
+    .unwrap_or_else(|e| OperationResultDto::error(format!("Internal error: {}", e), vec![]))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .setup(|app| {
+            // Apply native macOS vibrancy (NSVisualEffectView) behind the window.
+            // The content pane stays opaque via CSS; only the translucent sidebar
+            // and toolbar let this material show through.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::Manager;
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = apply_vibrancy(
+                        &window,
+                        NSVisualEffectMaterial::Sidebar,
+                        None,
+                        None,
+                    );
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             repo_probe,
             workspace_index,
@@ -203,7 +342,12 @@ fn main() {
             env_details,
             promote,
             rebuild,
-            release
+            release,
+            approvals_list,
+            approval_approve,
+            approval_reject,
+            approval_cancel,
+            approval_refresh
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

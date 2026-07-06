@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ApprovalsList,
   BranchDetailsModel,
   EnvironmentDetailsModel,
   OperationResult,
@@ -33,4 +34,32 @@ export function rebuild(repoPath: string, envName: string, force: boolean): Prom
 
 export function release(repoPath: string, envName: string): Promise<OperationResult> {
   return invoke("release", { repoPath, envName });
+}
+
+export function approvalsList(repoPath: string): Promise<ApprovalsList> {
+  return invoke("approvals_list", { repoPath });
+}
+
+export function approvalApprove(
+  repoPath: string,
+  requestId: string,
+  comment?: string
+): Promise<OperationResult> {
+  return invoke("approval_approve", { repoPath, requestId, comment: comment ?? null });
+}
+
+export function approvalReject(
+  repoPath: string,
+  requestId: string,
+  reason: string
+): Promise<OperationResult> {
+  return invoke("approval_reject", { repoPath, requestId, reason });
+}
+
+export function approvalCancel(repoPath: string, requestId: string): Promise<OperationResult> {
+  return invoke("approval_cancel", { repoPath, requestId });
+}
+
+export function approvalRefresh(repoPath: string, requestId: string): Promise<OperationResult> {
+  return invoke("approval_refresh", { repoPath, requestId });
 }

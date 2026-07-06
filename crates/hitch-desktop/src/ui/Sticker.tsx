@@ -9,7 +9,7 @@ interface StickerProps {
 export function Sticker({ children, className }: StickerProps) {
   return (
     <span className={cn(
-      "inline-flex items-center gap-1 rounded-none border-2 border-black bg-secondary px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-neo-sm transition-transform duration-200 will-change-transform",
+      "inline-flex items-center gap-1 rounded-full bg-[var(--fill-soft)] px-2 py-0.5 text-[11px] font-medium text-label-secondary",
       className
     )}>
       {children}
