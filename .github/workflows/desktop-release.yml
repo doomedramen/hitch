@@ -101,7 +101,7 @@ jobs:
           printf '  name "Hitch Desktop"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  desc "Git branch management for environment-based deployments"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  homepage "https://github.com/doomedramen/hitch"\n\n' >> homebrew-hitch/Casks/hitch-desktop.rb
-          printf '  artifact :app, target: "Hitch Desktop.app"\n\n' >> homebrew-hitch/Casks/hitch-desktop.rb
+          printf '  app "Hitch Desktop.app"\n\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf '  uninstall quit: "com.doomedramen.hitchdesktop"\n' >> homebrew-hitch/Casks/hitch-desktop.rb
           printf 'end\n' >> homebrew-hitch/Casks/hitch-desktop.rb
 
