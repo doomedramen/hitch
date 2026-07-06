@@ -209,21 +209,32 @@ impl HitchTestFramework {
 
     /// Find the hitch binary for testing
     ///
-    /// Looks for hitch binary in target/debug or target/release directories
+    /// Looks for hitch binary in target/debug or target/release directories.
+    /// The executable name is platform-specific (`hitch.exe` on Windows).
     fn find_hitch_binary() -> anyhow::Result<PathBuf> {
+        // Cargo sets this for integration test binaries and it already points at
+        // the correct per-platform executable (e.g. `hitch.exe` on Windows).
+        if let Ok(bin) = env::var("CARGO_BIN_EXE_hitch") {
+            let path = PathBuf::from(bin);
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+
         let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR")
             .map_err(|_| anyhow::anyhow!("CARGO_MANIFEST_DIR not set"))?;
 
         let project_root = Path::new(&cargo_manifest_dir);
+        let bin_name = format!("hitch{}", env::consts::EXE_SUFFIX);
 
         // Try debug build first (more common during development)
-        let debug_binary = project_root.join("target/debug/hitch");
+        let debug_binary = project_root.join("target/debug").join(&bin_name);
         if debug_binary.exists() {
             return Ok(debug_binary);
         }
 
         // Try release build
-        let release_binary = project_root.join("target/release/hitch");
+        let release_binary = project_root.join("target/release").join(&bin_name);
         if release_binary.exists() {
             return Ok(release_binary);
         }
