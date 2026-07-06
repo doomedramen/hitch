@@ -7,7 +7,7 @@
     "frontendDist": "../dist"
   },
   "productName": "Hitch Desktop",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "identifier": "com.doomedramen.hitchdesktop",
   "app": {
     "macOSPrivateApi": true,
