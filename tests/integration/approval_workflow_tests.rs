@@ -206,7 +206,7 @@ mod tests {
                 .execute()?;
             unauthorized_result
                 .assert_failure()
-                .assert_stderr_contains("You are not authorized to approve requests");
+                .assert_stderr_contains("not authorized to approve changes to");
 
             // Test 2: Self-approval is prevented (Carol is the requester but not an approver)
             env.git.config_user("Carol", "carol@example.com")?;
@@ -217,7 +217,7 @@ mod tests {
                 .execute()?;
             self_approval_result
                 .assert_failure()
-                .assert_stderr_contains("You are not authorized to approve requests");
+                .assert_stderr_contains("not authorized to approve changes to");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -370,7 +370,7 @@ mod tests {
                 .execute()?;
             attempt_approve
                 .assert_failure()
-                .assert_stderr_contains("Cannot approve request with status: Rejected");
+                .assert_stderr_contains("was rejected and can no longer be approved");
 
             Ok::<(), anyhow::Error>(())
         });

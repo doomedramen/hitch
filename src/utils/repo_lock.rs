@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::utils::rebuild_lock::is_process_alive;
+use crate::utils::file_lock::FileLock;
 
 #[derive(Serialize, Deserialize)]
 struct RepoLockInfo {
@@ -21,12 +21,13 @@ struct RepoLockInfo {
 /// example two `hitch` invocations in different terminals, or a `hitch`
 /// invocation racing the desktop app on the same repo.
 ///
-/// The lock file lives at `.git/hitch-repo.lock`. It is created on `acquire` and
-/// removed on `Drop` (whether the command succeeds or fails). If a still-running
-/// process already holds it, `acquire` returns an error; a stale lock left by a
-/// process that has since exited is silently overwritten.
+/// The lock is an OS advisory lock (`flock`) on `.git/hitch-repo.lock`. Because
+/// it lives on an open file descriptor, acquisition is atomic and the kernel
+/// releases it automatically if the process dies for any reason (including
+/// Ctrl-C and SIGKILL) — there is no stale-lock cleanup to get wrong. If another
+/// live process holds it, `acquire` returns an error immediately.
 pub struct RepoLock {
-    path: PathBuf,
+    _inner: FileLock,
 }
 
 impl RepoLock {
@@ -36,38 +37,31 @@ impl RepoLock {
     pub fn acquire(git_dir: &Path, command: &str) -> Result<Self> {
         let path = git_dir.join("hitch-repo.lock");
 
-        if path.exists() {
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            if let Ok(info) = serde_json::from_str::<RepoLockInfo>(&content) {
-                if is_process_alive(info.pid) {
-                    return Err(anyhow::anyhow!(
-                        "Another Hitch operation is already in progress in this repository \
-                         (command '{}', PID {}, started {}).\n\
-                         Wait for it to finish, or delete '{}' if that process is no longer running.",
-                        info.command,
-                        info.pid,
-                        info.started_at,
-                        path.display()
-                    ));
-                }
-                // Stale lock (the recorded process is gone) — overwrite silently.
-            }
-        }
-
-        let info = RepoLockInfo {
+        let info = serde_json::to_string(&RepoLockInfo {
             pid: std::process::id(),
             command: command.to_string(),
             started_at: chrono::Utc::now().to_rfc3339(),
-        };
-        std::fs::write(&path, serde_json::to_string(&info)?)?;
+        })?;
 
-        Ok(Self { path })
-    }
-}
+        let lock_path = path.clone();
+        let inner =
+            FileLock::try_acquire(&path, &info, move |content| {
+                match serde_json::from_str::<RepoLockInfo>(content) {
+                    Ok(info) => format!(
+                        "Another Hitch operation is already in progress in this repository \
+                     (command '{}', PID {}, started {}).\n\
+                     Wait for it to finish before running another mutating command.",
+                        info.command, info.pid, info.started_at
+                    ),
+                    Err(_) => format!(
+                        "Another Hitch operation is already in progress in this repository \
+                     (lock held on '{}'). Wait for it to finish.",
+                        lock_path.display()
+                    ),
+                }
+            })?;
 
-impl Drop for RepoLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        Ok(Self { _inner: inner })
     }
 }
 
@@ -82,41 +76,38 @@ mod tests {
 
         let first = RepoLock::acquire(git_dir, "promote").expect("first acquire should succeed");
 
-        // A second acquire while the first is still held (same live PID) must fail.
+        // A second acquire while the first is still held must fail.
         let second = RepoLock::acquire(git_dir, "rebuild");
         assert!(
             second.is_err(),
             "second acquire should be blocked while the lock is held"
         );
 
-        // After the first guard is dropped, the lock file is removed and a new
+        // After the first guard is dropped the advisory lock is released and a new
         // acquire succeeds.
         drop(first);
-        assert!(
-            !git_dir.join("hitch-repo.lock").exists(),
-            "lock file should be removed on drop"
-        );
         let third = RepoLock::acquire(git_dir, "release");
         assert!(third.is_ok(), "acquire should succeed after release");
     }
 
     #[test]
-    fn stale_lock_from_dead_process_is_overwritten() {
+    fn leftover_lock_file_without_live_holder_is_reacquired() {
         let dir = tempfile::tempdir().unwrap();
         let git_dir = dir.path();
         let path = git_dir.join("hitch-repo.lock");
 
-        // Write a lock file referencing a PID that is essentially certain to be
-        // dead (0 is not a normal user process and `kill -0 0` does not report it
-        // as a live, signalable process for our purposes).
-        let stale =
-            r#"{"pid":999999990,"command":"promote","started_at":"2020-01-01T00:00:00+00:00"}"#;
-        std::fs::write(&path, stale).unwrap();
+        // A lock file left behind by a crashed process holds no live flock, so a
+        // fresh acquire must succeed (the kernel released the dead process's lock).
+        std::fs::write(
+            &path,
+            r#"{"pid":999999990,"command":"promote","started_at":"2020-01-01T00:00:00+00:00"}"#,
+        )
+        .unwrap();
 
         let lock = RepoLock::acquire(git_dir, "promote");
         assert!(
             lock.is_ok(),
-            "a stale lock from a dead process should be overwritten"
+            "a leftover lock file from a dead process should be re-acquirable"
         );
     }
 }

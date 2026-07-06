@@ -48,21 +48,51 @@ pub fn create_approval_request(
         ));
     }
 
+    // Get current user (the requester).
+    let requester_email = crate::utils::authorization::get_current_user(context)?;
+
+    // Feasibility check: because self-approval is forbidden, the requester cannot
+    // count toward the threshold. If the number of *other* approvers is below
+    // min_approvals, the request could never be satisfied — reject it up front
+    // with an actionable message instead of creating an unfillable request.
+    let eligible_approvers = environment
+        .approvers
+        .iter()
+        .filter(|a| **a != requester_email)
+        .count();
+    if environment.min_approvals > eligible_approvers {
+        return Err(anyhow!(
+            "Cannot create approval request: {} approval(s) required, but only {} eligible \
+             approver(s) are available.\n\
+             The requester ({}) cannot approve their own request, so they don't count toward \
+             the threshold.\n\
+             Add more approvers (hitch set {} --add-approver <email>) or lower the threshold \
+             (hitch set {} --min-approvals <n>).",
+            environment.min_approvals,
+            eligible_approvers,
+            requester_email,
+            environment_name,
+            environment_name
+        ));
+    }
+
+    // Freeze the threshold at creation time so later `hitch set --min-approvals`
+    // can't retroactively change what this request needs.
+    let frozen_min_approvals = environment.min_approvals;
+
     // Create snapshot
     let snapshot =
         crate::utils::snapshot::capture_rebuild_snapshot(context, environment, branch_name)?;
 
-    // Get current user
-    let requester_email = crate::utils::authorization::get_current_user(context)?;
-
     // Create the approval request
-    let request = ApprovalRequest::new(
+    let mut request = ApprovalRequest::new(
         environment_name.to_string(),
         branch_name.to_string(),
         operation,
         requester_email,
         snapshot,
     );
+    request.snapshot_min_approvals = Some(frozen_min_approvals);
 
     let request_id = request.id.clone();
 
@@ -74,23 +104,60 @@ pub fn create_approval_request(
     Ok(request_id)
 }
 
-/// Find an approval request by ID
+/// Resolve a user-supplied request identifier to a single request's full ID.
+///
+/// Accepts either the full UUID or an unambiguous prefix of it (the `list`/status
+/// commands display truncated IDs, so users naturally copy a prefix). Errors if
+/// nothing matches or if a prefix is ambiguous.
+pub fn resolve_request_id(config: &HitchConfig, request_id: &str) -> Result<String> {
+    if request_id.is_empty() {
+        return Err(anyhow!("No approval request ID provided"));
+    }
+
+    // Exact match wins outright.
+    if let Some(r) = config.get_approval_request(request_id) {
+        return Ok(r.id.clone());
+    }
+
+    // Otherwise, an unambiguous prefix match.
+    let matches: Vec<&ApprovalRequest> = config
+        .get_approval_requests()
+        .iter()
+        .filter(|r| r.id.starts_with(request_id))
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(anyhow!("Approval request '{}' not found", request_id)),
+        [only] => Ok(only.id.clone()),
+        many => Err(anyhow!(
+            "Approval request ID '{}' is ambiguous — it matches {} requests. \
+             Use more characters of the ID.",
+            request_id,
+            many.len()
+        )),
+    }
+}
+
+/// Find an approval request by ID (full UUID or unambiguous prefix).
 pub fn find_approval_request<'a>(
     config: &'a HitchConfig,
     request_id: &str,
 ) -> Result<&'a ApprovalRequest> {
+    let full_id = resolve_request_id(config, request_id)?;
     config
-        .get_approval_request(request_id)
+        .get_approval_request(&full_id)
         .ok_or_else(|| anyhow!("Approval request '{}' not found", request_id))
 }
 
-/// Find an approval request by ID (mutable)
+/// Find an approval request by ID (full UUID or unambiguous prefix), mutable.
 pub fn find_approval_request_mut<'a>(
     config: &'a mut HitchConfig,
     request_id: &str,
 ) -> Result<&'a mut ApprovalRequest> {
+    // Resolve with an immutable borrow first, then re-borrow mutably by full ID.
+    let full_id = resolve_request_id(config, request_id)?;
     config
-        .get_approval_request_mut(request_id)
+        .get_approval_request_mut(&full_id)
         .ok_or_else(|| anyhow!("Approval request '{}' not found", request_id))
 }
 
@@ -113,8 +180,9 @@ pub fn approve_request(
         .cloned()
         .ok_or_else(|| anyhow!("Environment '{}' not found", environment_name))?;
 
-    // Get min_approvals needed for validation
-    let min_approvals = environment.min_approvals;
+    // Threshold to satisfy — frozen at request creation (falls back to the
+    // environment's current value for legacy requests).
+    let min_approvals = request.required_approvals(&environment);
 
     // Validate authorization before getting mutable reference
     crate::utils::authorization::validate_approval_authorization(context, &environment, request)?;

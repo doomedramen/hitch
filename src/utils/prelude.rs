@@ -186,7 +186,7 @@ where
         context.log_info("Auto-stashing local changes before operation...");
         let created = context
             .git()
-            .stash_push("hitch: auto-stash before rebuild")?;
+            .stash_push("hitch: auto-stash before operation")?;
         if created {
             context.log_verbose("✓ Changes stashed");
         }
@@ -367,6 +367,27 @@ pub fn modify_metadata<F>(context: &GlobalContext, closure: F) -> Result<()>
 where
     F: FnOnce(&mut HitchConfig) -> Result<()>,
 {
+    modify_metadata_impl(context, closure, false)
+}
+
+/// Like [`modify_metadata`] but skips the pre-flight health check and remote
+/// fetch.
+///
+/// Recovery/rollback paths use this: they must be able to write even when the
+/// repository is in the degraded state (behind remote, mid-abort) that triggered
+/// the rollback — otherwise `check_metadata_health` would refuse on the very
+/// condition the rollback is trying to repair.
+pub fn modify_metadata_unchecked<F>(context: &GlobalContext, closure: F) -> Result<()>
+where
+    F: FnOnce(&mut HitchConfig) -> Result<()>,
+{
+    modify_metadata_impl(context, closure, true)
+}
+
+fn modify_metadata_impl<F>(context: &GlobalContext, closure: F, skip_preflight: bool) -> Result<()>
+where
+    F: FnOnce(&mut HitchConfig) -> Result<()>,
+{
     context.log_verbose("Accessing hitch metadata...");
 
     // Check if we're already on hitch-metadata branch (for init case)
@@ -376,9 +397,10 @@ where
         .map(|branch| branch == "hitch-metadata")
         .unwrap_or(false);
 
-    if !already_on_metadata_branch {
+    if !already_on_metadata_branch && !skip_preflight {
         // Check hitch-metadata health before modifying
         // Skip this check during init (when already_on_metadata_branch is true)
+        // and on recovery/rollback paths (skip_preflight).
         check_metadata_health(context)?;
 
         // Fetch latest hitch-metadata from remote
@@ -423,6 +445,14 @@ where
             ));
         }
 
+        // Refuse to rewrite a config newer than we understand (unless this is a
+        // recovery/rollback write, which restores our own captured snapshot).
+        if !skip_preflight {
+            if let Err(e) = config.check_write_compatibility() {
+                return Err(anyhow::anyhow!("{}", e));
+            }
+        }
+
         context.log_verbose("✓ hitch.json loaded successfully");
 
         // Execute closure (for modification)
@@ -445,7 +475,29 @@ where
         if context.should_push() {
             context.log_verbose("Pushing metadata to remote...");
             if let Err(e) = context.git().push_branch("hitch-metadata") {
-                context.log_warning(&format!("Failed to push metadata to remote: {}", e));
+                let msg = e.to_string();
+                // A non-fast-forward rejection means origin/hitch-metadata moved
+                // after our health check (someone else changed the config). Surface
+                // this loudly: the change is committed LOCALLY only and the remote
+                // is now out of sync — silently swallowing it (as before) leaves the
+                // team on divergent config.
+                if msg.contains("rejected")
+                    || msg.contains("non-fast-forward")
+                    || msg.contains("fetch first")
+                    || msg.contains("Updates were rejected")
+                {
+                    context.log_warning(
+                        "Could not push hitch-metadata: origin has changes yours do not. \
+                         Your update is committed LOCALLY only and the remote is now out of sync.",
+                    );
+                    context.log_warning(
+                        "Reconcile before others rely on the remote:\n  \
+                         git checkout hitch-metadata && git pull --rebase origin hitch-metadata && git checkout -\n  \
+                         then re-run, or push manually with: git push origin hitch-metadata",
+                    );
+                } else {
+                    context.log_warning(&format!("Failed to push metadata to remote: {}", e));
+                }
             } else {
                 context.log_verbose("✓ Metadata pushed to remote");
             }
@@ -460,7 +512,16 @@ where
         context.log_verbose("Already on hitch-metadata branch, proceeding with metadata access...");
         modification_closure()
     } else {
-        switch_to(context, "hitch-metadata", modification_closure)
+        // Auto-stash any uncommitted work on the user's branch before switching to
+        // hitch-metadata. Without this, the switch (and the hitch.json/.gitignore
+        // commit) could fail on, or accidentally sweep in, the user's local changes.
+        // This is the single choke point every metadata mutation flows through, so
+        // stashing here protects all callers (lock/unlock/refresh/cleanup included).
+        // Nesting is safe: with_auto_stash is a no-op on an already-clean tree, so a
+        // caller like promote/demote that already stashed incurs no double-stash.
+        with_auto_stash(context, || {
+            switch_to(context, "hitch-metadata", modification_closure)
+        })
     }
 }
 
@@ -891,41 +952,49 @@ fn perform_squash_merges_for_rebuild(
                 ));
             }
 
-            // Dry-run check first so we can generate the conflict report without
-            // actually leaving the repo in a half-merged state.
-            context.log_verbose(&format!(
-                "Checking for merge conflicts in branch '{}'...",
-                branch
-            ));
-            let conflict_result = context.git().check_merge_conflicts_comprehensive(branch)?;
-
-            if conflict_result.has_conflicts {
-                context.log_verbose(&format!("Merge conflicts detected in branch '{}'", branch));
-
-                let conflict_report = format_conflict_report(
-                    branch,
-                    &conflict_result.target_branch,
-                    base_branch,
-                    env_name,
-                    &conflict_result.conflicted_files,
-                    conflict_result.merge_base.as_ref(),
-                );
-
-                return Err(anyhow::anyhow!("{}", conflict_report));
-            }
-
-            context.log_verbose(&format!("No conflicts detected in branch '{}'", branch));
-
+            // Perform the squash merge directly. Previously this did a separate
+            // "dry-run" `merge --no-ff` conflict check and then a second real
+            // `merge --squash` — merging every branch twice. Instead we do the one
+            // real merge and, if it conflicts, build the report from the state it
+            // left behind (the trailing abort_merge_and_clean below then clears it).
             let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
             context.log_verbose(&format!(
                 "Attempting to squash merge '{}' into temp branch...",
                 branch
             ));
-            context.git().squash_merge(branch, &merge_message)?;
-            context.log_verbose(&format!(
-                "✓ Successfully squash merged '{}' into temp branch",
-                branch
-            ));
+
+            match context.git().squash_merge(branch, &merge_message) {
+                Ok(()) => {
+                    context.log_verbose(&format!(
+                        "✓ Successfully squash merged '{}' into temp branch",
+                        branch
+                    ));
+                }
+                Err(e) => {
+                    // Distinguish a genuine merge conflict (report it clearly) from
+                    // any other failure (propagate as-is).
+                    if context.git().has_merge_conflicts().unwrap_or(false) {
+                        context.log_verbose(&format!(
+                            "Merge conflicts detected in branch '{}'",
+                            branch
+                        ));
+
+                        let conflict_result = context.git().current_conflict_result(branch)?;
+                        let conflict_report = format_conflict_report(
+                            branch,
+                            &conflict_result.target_branch,
+                            base_branch,
+                            env_name,
+                            &conflict_result.conflicted_files,
+                            conflict_result.merge_base.as_ref(),
+                        );
+
+                        return Err(anyhow::anyhow!("{}", conflict_report));
+                    }
+
+                    return Err(e);
+                }
+            }
         }
 
         Ok(())

@@ -4,7 +4,6 @@
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
-    use std::io::Write;
 
     /// Helper: inject branches into hitch.json on hitch-metadata without using `hitch promote`.
     fn inject_branches_into_metadata(
@@ -440,10 +439,14 @@ mod tests {
     // Item 6: Concurrent rebuild detection
     // -------------------------------------------------------------------------
 
-    /// If a lock file exists whose PID is still alive, a second rebuild must
-    /// fail immediately with a clear "already in progress" message.
+    /// If another process is actively holding the per-environment rebuild lock,
+    /// a second rebuild must fail immediately with a clear "already in progress"
+    /// message. The lock is an advisory `flock`, so we hold a real one from this
+    /// process (via the library) while running `hitch rebuild` as a subprocess.
     #[test]
     fn test_rebuild_blocked_when_lock_held() -> anyhow::Result<()> {
+        use hitch::utils::rebuild_lock::RebuildLock;
+
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -453,34 +456,29 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Write a lock file that looks like it belongs to the current
-            // process (PID is alive by definition).
-            let lock_path = env.temp_dir.join(".git").join("hitch-rebuild-dev.lock");
-            let lock_json = serde_json::json!({
-                "pid": std::process::id(),
-                "env_name": "dev",
-                "started_at": "2099-01-01T00:00:00+00:00"
-            })
-            .to_string();
-            std::fs::File::create(&lock_path)?.write_all(lock_json.as_bytes())?;
+            // Actually hold the rebuild lock for `dev` in this process. Because it
+            // is an OS advisory lock, the separate `hitch rebuild` process below
+            // will contend with it (writing a lock file would NOT — the file's
+            // existence no longer enforces the lock).
+            let git_dir = env.temp_dir.join(".git");
+            let _held =
+                RebuildLock::acquire(&git_dir, "dev").expect("test should hold the rebuild lock");
 
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
-
-            // Clean up the lock so we don't interfere with other operations
-            let _ = std::fs::remove_file(&lock_path);
 
             result
                 .assert_failure()
                 .assert_stderr_contains("already in progress");
 
+            // `_held` releases the advisory lock when it drops at end of scope.
             Ok::<(), anyhow::Error>(())
         });
 
         Ok(())
     }
 
-    /// If the lock file's PID is not alive (stale lock), the rebuild should
-    /// proceed normally, overwriting the stale lock file.
+    /// A lock file left behind by a previous (now-dead) process holds no live
+    /// advisory lock, so a new rebuild should acquire it and proceed normally.
     #[test]
     fn test_rebuild_proceeds_with_stale_lock() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -505,21 +503,18 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Write a stale lock file with a PID that is not running
-            // (PID 1 is init/launchd and can't be killed, but any large
-            // obviously-unused PID works; we pick one and trust the OS won't
-            // have reused it for this short test window.)
+            // Leave behind a lock file from a "previous run". No live process holds
+            // an flock on it, so the rebuild must proceed.
             let lock_path = env.temp_dir.join(".git").join("hitch-rebuild-dev.lock");
-            let stale_pid: u32 = 999_999; // Very unlikely to be a live PID
             let lock_json = serde_json::json!({
-                "pid": stale_pid,
+                "pid": 999_999,
                 "env_name": "dev",
                 "started_at": "2000-01-01T00:00:00+00:00"
             })
             .to_string();
             std::fs::write(&lock_path, lock_json)?;
 
-            // Rebuild should succeed despite the stale lock
+            // Rebuild should succeed despite the leftover lock file
             env.hitch
                 .run()
                 .args(&["rebuild", "dev"])
@@ -527,12 +522,8 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("rebuilt successfully");
 
-            // Lock file must be gone (released on drop)
-            assert!(
-                !lock_path.exists(),
-                "Lock file should be removed after rebuild"
-            );
-
+            // With advisory locks the marker file is intentionally left in place
+            // (its existence does not hold the lock), so we do not assert removal.
             Ok::<(), anyhow::Error>(())
         });
 

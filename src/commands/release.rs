@@ -51,13 +51,15 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
         return Ok(());
     }
 
-    // Step 4-7: Execute release with automatic locking and unlocking
+    // Step 4-7: Execute release. In force mode the environment may already be
+    // locked, so we don't take the environment lock; otherwise we lock it for the
+    // duration of the release. The core logic is identical either way.
     if args.force {
         context.log_info(&format!(
             "Force releasing locked environment '{}' to '{}'...",
             args.env_name, target_branch
         ));
-        perform_release_forced(
+        perform_release_core(
             context,
             &args.env_name,
             &target_branch,
@@ -67,7 +69,7 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
         )?;
     } else {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            perform_release(
+            perform_release_core(
                 context,
                 &args.env_name,
                 &target_branch,
@@ -157,44 +159,6 @@ fn resolve_target_branch(
     ensure_branch_exists(context, &target)?;
 
     Ok(target)
-}
-
-/// Perform the release with normal locking
-fn perform_release(
-    context: &GlobalContext,
-    env_name: &str,
-    target_branch: &str,
-    no_prune: bool,
-    no_rebuild_dependents: bool,
-    squash: bool,
-) -> Result<()> {
-    perform_release_core(
-        context,
-        env_name,
-        target_branch,
-        no_prune,
-        no_rebuild_dependents,
-        squash,
-    )
-}
-
-/// Perform the release with forced mode (environment already locked)
-fn perform_release_forced(
-    context: &GlobalContext,
-    env_name: &str,
-    target_branch: &str,
-    no_prune: bool,
-    no_rebuild_dependents: bool,
-    squash: bool,
-) -> Result<()> {
-    perform_release_core(
-        context,
-        env_name,
-        target_branch,
-        no_prune,
-        no_rebuild_dependents,
-        squash,
-    )
 }
 
 /// Core release logic shared by normal and forced modes
@@ -314,12 +278,34 @@ fn perform_release_core(
         context.git().create_tag(&tag_name, &tag_message)?;
         context.log_info(&format!("✓ Created release tag '{}'", tag_name));
 
-        // Push changes and tag if enabled
+        // Push changes and tag if enabled. The merge + tag are already committed
+        // locally at this point, so a push failure (or a local-only repo with no
+        // remote) must NOT abort the release — otherwise we'd report failure for a
+        // release that actually landed locally. Warn clearly and tell the user how
+        // to publish it manually instead.
         if context.should_push() {
             context.log_info("Pushing release to remote...");
-            context.git().push_branch(target_branch)?;
-            context.git().push_tag(&tag_name)?;
-            context.log_verbose("✓ Pushed release and tag to remote");
+            if let Err(e) = context.git().push_branch(target_branch) {
+                context.log_warning(&format!(
+                    "Release was applied to the local '{}' branch, but pushing to origin failed: {}",
+                    target_branch, e
+                ));
+                context.log_warning(&format!(
+                    "Publish it manually with: git push origin {}",
+                    target_branch
+                ));
+            } else if let Err(e) = context.git().push_tag(&tag_name) {
+                context.log_warning(&format!(
+                    "Pushed '{}', but failed to push the release tag '{}': {}",
+                    target_branch, tag_name, e
+                ));
+                context.log_warning(&format!(
+                    "Push the tag manually with: git push origin {}",
+                    tag_name
+                ));
+            } else {
+                context.log_verbose("✓ Pushed release and tag to remote");
+            }
         }
 
         Ok(())
@@ -633,31 +619,35 @@ fn topological_environment_order(config: &crate::types::HitchConfig) -> Vec<Stri
         }
     }
 
-    for v in children.values_mut() {
-        v.sort();
-    }
+    // Kahn's algorithm with a min-heap keyed by name, so ready nodes are emitted
+    // in alphabetical order without the previous O(n²) `remove(0)` + re-`sort()`.
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
 
-    let mut queue: Vec<String> = indegree
+    let mut queue: BinaryHeap<Reverse<String>> = indegree
         .iter()
-        .filter_map(|(k, &d)| if d == 0 { Some(k.clone()) } else { None })
+        .filter_map(|(k, &d)| {
+            if d == 0 {
+                Some(Reverse(k.clone()))
+            } else {
+                None
+            }
+        })
         .collect();
-    queue.sort();
 
     let mut out: Vec<String> = Vec::with_capacity(env_names.len());
-    while let Some(node) = queue.first().cloned() {
-        queue.remove(0);
-        out.push(node.clone());
+    while let Some(Reverse(node)) = queue.pop() {
         if let Some(kids) = children.get(&node) {
             for kid in kids {
                 if let Some(d) = indegree.get_mut(kid) {
                     *d = d.saturating_sub(1);
                     if *d == 0 {
-                        queue.push(kid.clone());
-                        queue.sort();
+                        queue.push(Reverse(kid.clone()));
                     }
                 }
             }
         }
+        out.push(node);
     }
 
     // If there was a cycle (should be rare), fall back to a stable alphabetical order.

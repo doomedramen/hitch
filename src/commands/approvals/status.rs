@@ -105,9 +105,10 @@ fn display_approval_progress(
         }
     }
 
-    // Show progress
+    // Show progress. Use the request's frozen threshold (falls back to the
+    // environment's current value) for consistency with how approval is evaluated.
     let current_approvals = request.approval_count();
-    let required_approvals = environment.min_approvals;
+    let required_approvals = request.required_approvals(environment);
     let remaining = required_approvals.saturating_sub(current_approvals);
 
     println!();
@@ -116,9 +117,23 @@ fn display_approval_progress(
         current_approvals, required_approvals
     );
 
-    // Visual progress bar
-    let bar_width = 20;
-    let filled = (current_approvals * bar_width) / required_approvals.min(bar_width);
+    // Visual progress bar. Guard against a 0 threshold (possible only via
+    // hand-edited metadata) to avoid a divide-by-zero panic, and clamp so that
+    // over-approval can neither overflow the bar nor report more than 100%.
+    let bar_width = 20usize;
+    // `checked_div` yields None when required_approvals == 0 (only reachable via
+    // hand-edited metadata); fall back to a full bar / 100% in that case. Clamp so
+    // over-approval can't overflow the bar or exceed 100%.
+    let filled = current_approvals
+        .saturating_mul(bar_width)
+        .checked_div(required_approvals)
+        .unwrap_or(bar_width)
+        .min(bar_width);
+    let percent = current_approvals
+        .saturating_mul(100)
+        .checked_div(required_approvals)
+        .unwrap_or(100)
+        .min(100);
     let empty = bar_width.saturating_sub(filled);
 
     print!("  [");
@@ -128,7 +143,7 @@ fn display_approval_progress(
     for _ in 0..empty {
         print!("░");
     }
-    println!("] {}%", (current_approvals * 100) / required_approvals);
+    println!("] {}%", percent);
 
     if remaining > 0 && request.status == crate::types::ApprovalStatus::Pending {
         println!("  Waiting for {} more approval(s)", remaining);

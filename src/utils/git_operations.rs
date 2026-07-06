@@ -200,8 +200,12 @@ impl GitOperations {
 
                 if rev_output.status.success() {
                     let commit_hash = String::from_utf8(rev_output.stdout)?.trim().to_string();
-                    // Return a special name for detached HEAD state
-                    Ok(format!("detached-HEAD-{}", &commit_hash[..7]))
+                    // Return a special name for detached HEAD state. Use a checked
+                    // slice so a short/garbled rev-parse output can never panic.
+                    Ok(format!(
+                        "detached-HEAD-{}",
+                        commit_hash.get(..7).unwrap_or(&commit_hash)
+                    ))
                 } else {
                     Err(anyhow::anyhow!(
                         "Failed to get current branch or HEAD commit"
@@ -286,6 +290,13 @@ impl GitOperations {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
+            // A no-op write (byte-identical content) is not a failure: git reports
+            // "nothing to commit". Treat it as success so redundant metadata updates
+            // and rollbacks that restore already-current state don't spuriously error
+            // (mirrors `commit` and `clean_working_directory`).
+            if stderr.contains("nothing to commit") || stdout.contains("nothing to commit") {
+                return Ok(());
+            }
             return Err(anyhow::anyhow!(
                 "Failed to commit: {}\nstdout: {}\nstderr: {}",
                 stderr,
@@ -330,52 +341,92 @@ impl GitOperations {
     }
 
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
+        use std::io::Write;
+
         let file_path = std::path::Path::new(&self.repo_path).join(file);
-        std::fs::write(file_path, content).context(format!("Failed to write file '{}'", file))?;
+        let dir = file_path.parent().ok_or_else(|| {
+            anyhow::anyhow!("Cannot write '{}': path has no parent directory", file)
+        })?;
+
+        // Write atomically: write to a temp file in the SAME directory, fsync it,
+        // then rename over the target. rename(2) is atomic on POSIX, so a crash or
+        // full disk mid-write can never leave a torn/half-written file for the next
+        // `git show`/read to parse. Same-directory ensures the rename stays on one
+        // filesystem.
+        let tmp_name = format!(
+            ".{}.hitch-tmp-{}",
+            file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file"),
+            std::process::id()
+        );
+        let tmp_path = dir.join(tmp_name);
+
+        let write_res = (|| -> Result<()> {
+            let mut f = std::fs::File::create(&tmp_path)
+                .context(format!("Failed to create temp file for '{}'", file))?;
+            f.write_all(content.as_bytes())
+                .context(format!("Failed to write temp file for '{}'", file))?;
+            f.sync_all()
+                .context(format!("Failed to fsync temp file for '{}'", file))?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_res {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+
+        std::fs::rename(&tmp_path, &file_path).context(format!(
+            "Failed to atomically replace '{}' with the new contents",
+            file
+        ))?;
+
         Ok(())
     }
 
-    /// Fetch a specific branch from the remote origin
+    /// Whether a failed `git fetch` stderr indicates a benign "no remote /
+    /// offline / ref-not-on-remote" situation that Hitch should tolerate (it is
+    /// designed to work in local-only repos), as opposed to a real error (auth
+    /// failure, network problem) that a caller may want to surface.
+    fn is_benign_fetch_failure(stderr: &str) -> bool {
+        stderr.contains("does not appear to be a git repository")
+            || stderr.contains("could not read from remote repository")
+            || stderr.contains("couldn't find remote ref")
+            || stderr.contains("no such remote ref")
+            || stderr.contains("No remote configured")
+            || stderr.contains("No such remote")
+            || stderr.contains("does not have any commits yet")
+    }
+
+    /// Fetch a specific branch from the remote origin.
     ///
-    /// This function attempts to fetch a specific branch from the origin remote.
-    /// It's designed to be graceful about failures - if the fetch fails due to
-    /// no remote or branch not existing remotely, it continues without error.
-    ///
-    /// This is important because Hitch should work in offline mode or with
-    /// local-only repositories.
-    ///
-    /// # Arguments
-    /// - `branch`: Branch name to fetch from origin
-    ///
-    /// # Returns
-    /// - `Ok(())`: Always returns Ok (even if fetch fails for expected reasons)
-    /// - `Err(anyhow::Error)`: Only for unexpected errors
+    /// Returns `Ok(())` when the fetch succeeds or when it fails for a benign
+    /// reason (no remote configured, offline, or the ref doesn't exist remotely) —
+    /// Hitch is designed to work in local-only repositories. A genuine failure
+    /// (authentication, network) is returned as `Err` so callers can warn instead
+    /// of silently proceeding on stale data.
     pub fn fetch_branch(&self, branch: &str) -> Result<()> {
         let output = self.run_git_command(&["fetch", "origin", branch])?;
 
-        if !output.status.success() {
-            // Don't fail if fetch fails - user may not have a remote or branch may not exist remotely
-            // According to SPEC.md, fetching should be optional and not block operations
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Check for common "no remote" scenarios that should not fail the operation
-            if stderr.contains("does not appear to be a git repository")
-                || stderr.contains("could not read from remote repository")
-                || stderr.contains("couldn't find remote ref")
-                || stderr.contains("no such remote ref")
-                || stderr.contains("fatal: unable to access")
-                || stderr.contains("fatal: could not read")
-            {
-                // These are expected "no remote available" scenarios - continue gracefully
-                return Ok(());
-            }
-
-            // Other fetch errors might be network issues, but should still not block local operations
-            // according to SPEC.md requirements for working with local repositories
+        if output.status.success() {
             return Ok(());
         }
 
-        Ok(())
+        // No remote / ref-not-on-remote is expected and must not block local-only
+        // operation. Genuine failures (auth, network) are returned so callers that
+        // care (metadata read/write) can warn instead of silently using stale data.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if Self::is_benign_fetch_failure(&stderr) {
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to fetch '{}' from origin: {}",
+            branch,
+            stderr.trim()
+        ))
     }
 
     pub fn push_branch(&self, branch: &str) -> Result<()> {
@@ -408,9 +459,13 @@ impl GitOperations {
     }
 
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
-        let output = self.run_git_command(&["branch", "--list", branch])?;
+        // Use an exact ref lookup rather than `git branch --list <name>`, which
+        // treats <name> as a shell-style glob (so a branch like `feature/[wip]`
+        // would be matched incorrectly, and `main` would match `main*`).
+        let ref_name = format!("refs/heads/{}", branch);
+        let output = self.run_git_command(&["show-ref", "--verify", "--quiet", &ref_name])?;
 
-        Ok(output.status.success() && !output.stdout.is_empty())
+        Ok(output.status.success())
     }
 
     pub fn is_working_directory_clean(&self) -> Result<bool> {
@@ -678,8 +733,10 @@ impl GitOperations {
             return Ok(true);
         }
 
-        // Check remote
-        let output = self.run_git_command(&["ls-remote", "--heads", "origin", branch])?;
+        // Check remote using the fully-qualified ref so `ls-remote` matches
+        // exactly instead of treating the name as a tail/glob pattern.
+        let full_ref = format!("refs/heads/{}", branch);
+        let output = self.run_git_command(&["ls-remote", "--heads", "origin", &full_ref])?;
 
         Ok(output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
@@ -730,13 +787,28 @@ impl GitOperations {
             } else if self.branch_exists("master")? {
                 "master".to_string()
             } else {
-                // Find any other branch
+                // Find any other *user* branch to land on. Exclude hitch-managed
+                // branches (the metadata branch and the transient tmp/backup
+                // branches) so cleanup never strands the user on internal plumbing.
+                // Strip both the current-branch marker ("* ") and the worktree
+                // marker ("+ ") that `git branch --list` may prefix.
                 let output = self.run_git_command(&["branch", "--list"])?;
                 let branches = String::from_utf8_lossy(&output.stdout);
                 branches
                     .lines()
-                    .map(|b| b.trim().trim_start_matches("* ").to_string())
-                    .find(|b| !b.is_empty() && b != branch)
+                    .map(|b| {
+                        b.trim_start_matches("* ")
+                            .trim_start_matches("+ ")
+                            .trim()
+                            .to_string()
+                    })
+                    .find(|b| {
+                        !b.is_empty()
+                            && b != branch
+                            && b != "hitch-metadata"
+                            && !b.starts_with("hitch-tmp-")
+                            && !b.starts_with("hitch-backup-")
+                    })
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "Cannot delete branch '{}': no other branch to switch to",
@@ -1044,6 +1116,38 @@ impl GitOperations {
         ))
     }
 
+    /// Build a comprehensive conflict result from the CURRENT conflicted state of
+    /// the working tree — e.g. immediately after a `merge --squash` that
+    /// conflicted — WITHOUT performing any additional merge.
+    ///
+    /// Callers use this to avoid a second, redundant "dry-run" merge purely to
+    /// produce a conflict report: they attempt the real (squash) merge once, and
+    /// if it conflicts, describe the conflict from the state it left behind.
+    pub fn current_conflict_result(&self, source_branch: &str) -> Result<MergeConflictResult> {
+        let target_branch = self
+            .get_current_branch()
+            .unwrap_or_else(|_| "HEAD".to_string());
+
+        let conflicted_files = self.collect_detailed_conflicts()?;
+        let merge_base = self
+            .get_merge_base(&target_branch, source_branch)?
+            .map(|hash| {
+                let date = self.get_commit_date(&hash).ok().flatten();
+                let mut base_info = MergeBaseInfo::new(hash);
+                if let Some(d) = date {
+                    base_info = base_info.with_date(d);
+                }
+                base_info
+            });
+
+        Ok(MergeConflictResult::with_conflicts(
+            source_branch.to_string(),
+            target_branch,
+            conflicted_files,
+            merge_base,
+        ))
+    }
+
     /// Collect detailed information about conflicted files
     ///
     /// This function gathers:
@@ -1123,15 +1227,38 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Abort any in-progress merge/cherry-pick/revert and, ONLY if the tree is
+    /// actually in a conflicted/merge state, hard-reset and clean it.
+    ///
+    /// The unconditional `reset --hard` + `clean -fd` this used to do would
+    /// silently destroy a user's uncommitted changes and untracked files (data
+    /// loss) whenever it ran while HEAD was on the user's branch. Callers that
+    /// operate on the user's branch stash first (`with_auto_stash`) or require a
+    /// clean tree (`pre_check`), so on those paths the tree is already clean and
+    /// this is a no-op. The destructive reset now fires only when there is real
+    /// merge state to clear — which, on hitch's own transient temp branches, is
+    /// exactly what we want.
     pub fn abort_merge_and_clean(&self) -> Result<()> {
-        // First try to abort any ongoing merge
+        // Aborting an in-progress operation is safe: it only unwinds something git
+        // itself started, never the user's committed history or unrelated work.
         let _ = self.run_git_command(&["merge", "--abort"]);
+        let _ = self.run_git_command(&["cherry-pick", "--abort"]);
+        let _ = self.run_git_command(&["revert", "--abort"]);
 
-        // Then reset any conflicted files to clean state
-        let _ = self.run_git_command(&["reset", "--hard"]);
+        // Decide whether a destructive reset is warranted. After the aborts above,
+        // a lingering unmerged index means a `--squash`-style conflict (no
+        // MERGE_HEAD to abort), or an in-progress rebase — both of which we do want
+        // to clear before checking out another branch.
+        let git_dir = self.repo.path();
+        let in_progress = git_dir.join("MERGE_HEAD").exists()
+            || git_dir.join("CHERRY_PICK_HEAD").exists()
+            || git_dir.join("REVERT_HEAD").exists();
+        let needs_reset = in_progress || self.has_merge_conflicts().unwrap_or(false);
 
-        // Clean up any untracked files
-        let _ = self.run_git_command(&["clean", "-fd"]);
+        if needs_reset {
+            let _ = self.run_git_command(&["reset", "--hard"]);
+            let _ = self.run_git_command(&["clean", "-fd"]);
+        }
 
         Ok(())
     }
@@ -1140,28 +1267,23 @@ impl GitOperations {
     pub fn fetch_all_remotes(&self) -> Result<()> {
         let output = self.run_git_command(&["fetch", "--all"])?;
 
-        if !output.status.success() {
-            // Don't fail if fetch fails - user may not have a remote or network issues
-            // Similar to fetch_branch, continue gracefully
-            let stderr = String::from_utf8_lossy(&output.stderr);
-
-            // Check for common "no remote" scenarios that should not fail the operation
-            if stderr.contains("does not appear to be a git repository")
-                || stderr.contains("could not read from remote repository")
-                || stderr.contains("couldn't find remote ref")
-                || stderr.contains("no such remote ref")
-                || stderr.contains("fatal: unable to access")
-                || stderr.contains("fatal: could not read")
-            {
-                // These are expected "no remote available" scenarios - continue gracefully
-                return Ok(());
-            }
-
-            // Other fetch errors might be network issues, but should still not block local operations
+        if output.status.success() {
             return Ok(());
         }
 
-        Ok(())
+        // No remote configured / offline is fine (local-only repos). Real failures
+        // are returned so callers can decide whether to warn; `synchronize_branches`
+        // intentionally treats this as best-effort so rebuild/release still work
+        // offline, using whatever refs are available locally.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if Self::is_benign_fetch_failure(&stderr) {
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!(
+            "Failed to fetch from origin: {}",
+            stderr.trim()
+        ))
     }
 
     /// Create a local branch from a remote tracking branch
@@ -1187,34 +1309,102 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Synchronize branches to ensure they're available locally
+    /// Fast-forward a local branch to `origin/<branch>` when it is strictly behind
+    /// and has NOT diverged (i.e. the update is a pure fast-forward that cannot
+    /// lose any local-only commits).
     ///
-    /// This function ensures all specified branches exist locally by:
-    /// 1. Fetching all remotes to get latest updates
-    /// 2. Creating local branches from remote tracking branches if they don't exist locally
-    ///
-    /// This is critical before operations like rebuild to ensure we have all necessary branches.
-    ///
-    /// # Arguments
-    /// - `branches`: List of branch names to ensure are available locally
-    ///
-    /// # Returns
-    /// - `Ok(())`: All branches are now available locally
-    /// - `Err(anyhow::Error)`: If fetch or branch creation fails
-    pub fn synchronize_branches(&self, branches: &[String]) -> Result<()> {
-        // First, fetch all remote branches to get latest updates
-        self.fetch_all_remotes()?;
+    /// Returns `Ok(true)` if the local ref was advanced, `Ok(false)` if nothing
+    /// was done (no remote, already up to date, ahead, or diverged). Never rewinds
+    /// or discards local work.
+    pub fn fast_forward_to_remote_if_behind(&self, branch: &str) -> Result<bool> {
+        let local_ref = format!("refs/heads/{}", branch);
+        let remote_ref = format!("refs/remotes/origin/{}", branch);
 
-        // Then, ensure each branch exists locally by creating from remote if needed
+        // Remote counterpart must exist to compare against.
+        if !self
+            .run_git_command(&["rev-parse", "--verify", "--quiet", &remote_ref])?
+            .status
+            .success()
+        {
+            return Ok(false);
+        }
+        if !self.branch_exists(branch)? {
+            return Ok(false);
+        }
+
+        // Only advance on a true fast-forward: local must be an ancestor of remote.
+        // This excludes the diverged case (would lose local commits) and the
+        // local-ahead case (would rewind), and also short-circuits when equal.
+        let is_ancestor = self
+            .run_git_command(&["merge-base", "--is-ancestor", &local_ref, &remote_ref])?
+            .status
+            .success();
+        if !is_ancestor {
+            return Ok(false);
+        }
+
+        // Must actually be behind (remote has commits local lacks).
+        let behind = self.run_git_command(&[
+            "rev-list",
+            "--count",
+            &format!("{}..{}", local_ref, remote_ref),
+        ])?;
+        let behind_count: i64 = String::from_utf8_lossy(&behind.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        if behind_count == 0 {
+            return Ok(false); // already up to date
+        }
+
+        // Don't rewrite the ref of the currently checked-out branch behind the
+        // working tree's back; fast-forward it through the worktree instead.
+        let current = self.get_current_branch().unwrap_or_default();
+        if current == branch {
+            let ff = self.run_git_command(&["merge", "--ff-only", &remote_ref])?;
+            return Ok(ff.status.success());
+        }
+
+        let update = self.run_git_command(&["update-ref", &local_ref, &remote_ref])?;
+        if !update.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to fast-forward '{}' to origin: {}",
+                branch,
+                String::from_utf8_lossy(&update.stderr).trim()
+            ));
+        }
+        Ok(true)
+    }
+
+    /// Synchronize branches to ensure they're available locally AND up to date.
+    ///
+    /// This function, for each requested branch:
+    /// 1. Fetches all remotes to get the latest updates (best-effort — offline is OK).
+    /// 2. Creates the local branch from its remote tracking branch if it doesn't exist.
+    /// 3. If it already exists locally, fast-forwards it to `origin/<branch>` when it
+    ///    is strictly behind (so rebuild/release don't operate on stale commits and
+    ///    then force-push over newer remote work). Diverged/ahead branches are left
+    ///    untouched to avoid losing local commits.
+    ///
+    /// This is critical before operations like rebuild to ensure we have all
+    /// necessary branches at their current commits.
+    pub fn synchronize_branches(&self, branches: &[String]) -> Result<()> {
+        // Best-effort fetch: a genuine network/auth failure should not block a
+        // local-only rebuild/release. We proceed with whatever refs we have; the
+        // mutating command's metadata fetch surfaces remote-connectivity problems.
+        let _ = self.fetch_all_remotes();
+
         for branch in branches {
-            // Skip if branch already exists locally
             if self.branch_exists(branch)? {
+                // Advance stale local branches so we build from current commits.
+                // Best-effort: if the fast-forward can't be performed we fall back
+                // to the existing local ref rather than failing the whole operation.
+                let _ = self.fast_forward_to_remote_if_behind(branch);
                 continue;
             }
 
-            // Check if remote branch exists
+            // Not local yet — create it from the remote tracking branch if present.
             if self.branch_exists_anywhere(branch)? {
-                // Create local branch from remote tracking branch
                 self.create_local_branch_from_remote(branch)?;
             }
         }
@@ -1514,22 +1704,19 @@ impl GitOperations {
     /// - `Ok(false)`: No merge conflicts
     /// - `Err`: If unable to check
     pub fn has_merge_conflicts(&self) -> Result<bool> {
-        // Check for merge state
-        let merge_head = self.run_git_command(&["rev-parse", "--verify", "MERGE_HEAD"]);
-
-        // If MERGE_HEAD exists, we're in a merge state
-        if merge_head.is_ok() && merge_head.unwrap().status.success() {
-            // Check if there are actual conflict files
-            let conflicted = self.get_conflicted_files()?;
-            return Ok(!conflicted.is_empty());
+        // Unmerged index entries indicate conflicts regardless of how they arose
+        // (regular merge, squash merge, cherry-pick, rebase). This is the reliable
+        // signal: a `--squash` merge in particular leaves conflicts with SQUASH_MSG
+        // and NO MERGE_HEAD, so keying off MERGE_HEAD alone would miss them.
+        if let Ok(output) = self.run_git_command(&["ls-files", "--unmerged"]) {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Ok(true);
+            }
         }
 
-        // Also check for rebase/apply states
+        // Also treat an in-progress rebase/apply as an unresolved state.
         let git_dir = self.repo.path();
-        let rebase_apply = git_dir.join("rebase-apply");
-        let rebase_merge = git_dir.join("rebase-merge");
-
-        if rebase_apply.exists() || rebase_merge.exists() {
+        if git_dir.join("rebase-apply").exists() || git_dir.join("rebase-merge").exists() {
             return Ok(true);
         }
 

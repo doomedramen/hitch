@@ -130,36 +130,49 @@ fn check_for_merge_conflicts(
     let current_branch = context.git().get_current_branch()?;
     context.git().checkout_branch(&environment.base)?;
 
-    // Check conflicts between base and new branch
-    let conflict_result = context
-        .git()
-        .check_merge_conflicts_comprehensive(branch_to_promote)?;
+    // Run the conflict checks inside a closure so we ALWAYS return to the original
+    // branch afterward — even if a check errors out. Previously an early `?` here
+    // left the user stranded on the base branch.
+    let result = (|| -> Result<bool> {
+        // Check conflicts between base and new branch
+        let conflict_result = context
+            .git()
+            .check_merge_conflicts_comprehensive(branch_to_promote)?;
 
-    let mut has_conflicts = conflict_result.has_conflicts;
+        let mut has_conflicts = conflict_result.has_conflicts;
 
-    // If no conflicts with new branch, check conflicts with existing promoted branches
-    if !has_conflicts {
-        for existing_branch in &environment.branches {
-            if existing_branch != branch_to_promote {
-                let conflicts = context
-                    .git()
-                    .check_merge_conflicts_comprehensive(existing_branch)?;
-                if conflicts.has_conflicts {
-                    context.log_verbose(&format!(
-                        "Merge conflict detected with existing branch: {}",
-                        existing_branch
-                    ));
-                    has_conflicts = true;
-                    break;
+        // If no conflicts with new branch, check conflicts with existing promoted branches
+        if !has_conflicts {
+            for existing_branch in &environment.branches {
+                if existing_branch != branch_to_promote {
+                    let conflicts = context
+                        .git()
+                        .check_merge_conflicts_comprehensive(existing_branch)?;
+                    if conflicts.has_conflicts {
+                        context.log_verbose(&format!(
+                            "Merge conflict detected with existing branch: {}",
+                            existing_branch
+                        ));
+                        has_conflicts = true;
+                        break;
+                    }
                 }
             }
         }
+
+        Ok(has_conflicts)
+    })();
+
+    // Always return to the original branch and clear any dangling merge state.
+    let _ = context.git().abort_merge_and_clean();
+    if let Err(e) = context.git().checkout_branch(&current_branch) {
+        context.log_warning(&format!(
+            "Failed to return to original branch '{}' after conflict check: {}",
+            current_branch, e
+        ));
     }
 
-    // Return to original branch
-    context.git().checkout_branch(&current_branch)?;
-
-    Ok(has_conflicts)
+    result
 }
 
 /// Return the list of branch names (including the base branch) that have

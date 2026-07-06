@@ -232,6 +232,31 @@ fn apply_changes(context: &GlobalContext, args: &SetCommand) -> Result<()> {
     ));
 
     crate::utils::prelude::modify_metadata(context, |config| {
+        // Warn if the approval policy is being changed while requests are in flight.
+        // Approver-list changes take effect immediately (a removed approver's prior
+        // approval still counts; a newly-added approver can approve), while each
+        // request keeps the min-approvals threshold it was created with.
+        let changing_approval_policy = args.min_approvals.is_some()
+            || args.requires_approval.is_some()
+            || !args.add_approver.is_empty()
+            || !args.remove_approver.is_empty()
+            || !args.set_approvers.is_empty();
+        if changing_approval_policy {
+            let pending = config
+                .get_approval_requests_for_env(&args.env_name)
+                .into_iter()
+                .filter(|r| r.status == crate::types::ApprovalStatus::Pending)
+                .count();
+            if pending > 0 {
+                context.log_warning(&format!(
+                    "{} pending approval request(s) exist for '{}'. Approver-list changes apply \
+                     immediately, but each request keeps the approval threshold it was created \
+                     with. Review them with: hitch approvals list --status pending",
+                    pending, args.env_name
+                ));
+            }
+        }
+
         let environment = config
             .get_environment_mut(&args.env_name)
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", args.env_name))?;

@@ -149,8 +149,13 @@ pub struct RollbackInfo {
     pub env_name: String,
     /// The branch being promoted/demoted
     pub branch: String,
-    /// The environment state before the operation
+    /// The environment state before the operation (single-environment fallback)
     pub previous_state: Option<Environment>,
+    /// The FULL configuration before the operation. Rollback restores this whole
+    /// snapshot so that changes beyond the target environment (e.g. an approval
+    /// request appended to `approval_requests`, or edits to other environments)
+    /// are also reverted, not just the one `Environment`.
+    pub previous_config: Option<HitchConfig>,
     /// When the operation was started
     #[allow(dead_code)]
     pub timestamp: DateTime<Utc>,
@@ -163,6 +168,7 @@ impl RollbackInfo {
             env_name,
             branch,
             previous_state: None,
+            previous_config: None,
             timestamp: Utc::now(),
         }
     }
@@ -264,6 +270,13 @@ pub struct ApprovalRequest {
     pub rejection: Option<Rejection>,
     /// Snapshot of branch states at request time
     pub rebuild_snapshot: RebuildSnapshot,
+    /// The approval threshold frozen at request-creation time. Evaluating the
+    /// threshold against this (rather than the environment's live `min_approvals`)
+    /// prevents a later `hitch set --min-approvals` from retroactively satisfying
+    /// or invalidating an in-flight request. `None` for requests created before
+    /// this field existed, in which case the environment's current value is used.
+    #[serde(default)]
+    pub snapshot_min_approvals: Option<usize>,
 }
 
 impl ApprovalRequest {
@@ -286,7 +299,18 @@ impl ApprovalRequest {
             approvals: Vec::new(),
             rejection: None,
             rebuild_snapshot,
+            snapshot_min_approvals: None,
         }
+    }
+
+    /// The approval threshold governing this request.
+    ///
+    /// Uses the value frozen at creation time when present, falling back to the
+    /// environment's current `min_approvals` for older requests. This is what
+    /// keeps threshold evaluation stable across `hitch set --min-approvals`.
+    pub fn required_approvals(&self, environment: &Environment) -> usize {
+        self.snapshot_min_approvals
+            .unwrap_or(environment.min_approvals)
     }
 
     /// Check if user has already approved this request
@@ -339,6 +363,12 @@ impl ApprovalRequest {
     }
 }
 
+/// The maximum config schema MAJOR version this binary knows how to safely
+/// rewrite. Reading a newer config is tolerated, but rewriting one is refused
+/// (see [`HitchConfig::check_write_compatibility`]) because serde silently drops
+/// fields this binary doesn't model, which would corrupt a newer config on save.
+pub const SUPPORTED_CONFIG_MAJOR: u64 = 1;
+
 /// Main Hitch configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitchConfig {
@@ -359,6 +389,35 @@ impl HitchConfig {
             version: "1.0".to_string(),
             environments: std::collections::HashMap::new(),
             approval_requests: Vec::new(),
+        }
+    }
+
+    /// Parse the MAJOR component of `version` (e.g. "1.0" -> 1, "2.3" -> 2).
+    /// Returns `None` if the version string is missing or unparseable.
+    fn major_version(&self) -> Option<u64> {
+        self.version
+            .split('.')
+            .next()
+            .and_then(|s| s.trim().parse().ok())
+    }
+
+    /// Refuse to rewrite a config that was written by a newer schema than this
+    /// binary supports. Because the config is deserialized without capturing
+    /// unknown fields, serializing it back would silently drop any configuration
+    /// this (older) binary doesn't understand — so we block the write instead.
+    ///
+    /// A missing/unparseable version is treated as compatible (legacy/hand-edited
+    /// configs) to avoid spurious blocks.
+    pub fn check_write_compatibility(&self) -> Result<(), String> {
+        match self.major_version() {
+            Some(major) if major > SUPPORTED_CONFIG_MAJOR => Err(format!(
+                "hitch.json is schema version '{}', which is newer than this hitch binary \
+                 supports (up to major version {}). Rewriting it could drop configuration this \
+                 version does not understand. Please upgrade hitch before modifying it \
+                 (e.g. `cargo install hitch` or `brew upgrade hitch`).",
+                self.version, SUPPORTED_CONFIG_MAJOR
+            )),
+            _ => Ok(()),
         }
     }
 

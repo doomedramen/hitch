@@ -598,4 +598,24 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_config_write_compatibility_gate() {
+        // Current schema version is writable.
+        let mut config = HitchConfig::new();
+        assert!(config.check_write_compatibility().is_ok());
+
+        // A newer MAJOR version must be refused for writing (avoids dropping
+        // fields this binary doesn't understand).
+        config.version = "2.0".to_string();
+        assert!(config.check_write_compatibility().is_err());
+
+        // Same major, newer minor is still writable.
+        config.version = "1.5".to_string();
+        assert!(config.check_write_compatibility().is_ok());
+
+        // Missing/unparseable version is treated as compatible (legacy configs).
+        config.version = "".to_string();
+        assert!(config.check_write_compatibility().is_ok());
+    }
 }

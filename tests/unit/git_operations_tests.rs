@@ -753,12 +753,39 @@ mod tests {
 
         let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
             let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let base = env.temp_dir.to_string_lossy().to_string();
+            let work_path = std::path::Path::new(&base).join("user_work.txt");
 
-            // Create some state and clean it
-            git_ops.write_file("test.txt", "content")?;
+            // Scenario 1: no merge/conflict in progress. abort_merge_and_clean must
+            // NOT destroy the user's untracked work. It previously ran an
+            // unconditional `reset --hard` + `clean -fd`, silently deleting
+            // uncommitted/untracked files whenever it was called on the user's branch.
+            std::fs::write(&work_path, "important uncommitted content")?;
             git_ops.abort_merge_and_clean()?;
+            assert!(
+                work_path.exists(),
+                "untracked user work must be preserved when no merge is in progress"
+            );
+            std::fs::remove_file(&work_path)?;
 
-            // Should be clean after
+            // Scenario 2: a real, in-progress merge conflict must still be cleared so
+            // a subsequent checkout can proceed.
+            git_ops.write_file("conflict.txt", "base content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Base commit")?;
+            git_ops.create_branch_from("feature", "main")?;
+            git_ops.checkout_branch("feature")?;
+            git_ops.write_file("conflict.txt", "feature content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Feature commit")?;
+            git_ops.checkout_branch("main")?;
+            git_ops.write_file("conflict.txt", "main content")?;
+            git_ops.add_and_commit(&["conflict.txt"], "Main commit")?;
+
+            // Trigger a conflicting merge, leaving the tree in a conflicted state.
+            let _ = git_ops.run_git_command(&["merge", "feature"]);
+            assert!(git_ops.has_merge_conflicts()?);
+
+            git_ops.abort_merge_and_clean()?;
+            assert!(!git_ops.has_merge_conflicts()?);
             assert!(git_ops.is_working_directory_clean()?);
 
             Ok::<(), anyhow::Error>(())

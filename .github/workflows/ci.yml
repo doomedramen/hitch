@@ -58,6 +58,46 @@ jobs:
     - name: Run tests
       run: just test-core
 
+  # Run the full CLI test suite on macOS and Windows too, so cross-platform
+  # regressions (path handling, file locking, git subprocess behavior) are caught.
+  # Uses plain cargo rather than `just` to avoid any shell portability concerns on
+  # the Windows runner.
+  test-cross-platform:
+    name: Test Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Configure git for tests
+      run: |
+        git config --global user.email "ci@example.com"
+        git config --global user.name "Hitch CI"
+        git config --global init.defaultBranch main
+        git config --global core.autocrlf false
+
+    - name: Cache dependencies
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Run CLI test suite
+      run: cargo test -p hitch
+
   desktop-check:
     name: Desktop Build Check
     runs-on: ${{ matrix.os }}

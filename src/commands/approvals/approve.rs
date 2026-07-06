@@ -15,17 +15,65 @@ pub struct ApproveArgs {
 }
 
 pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
+    use crate::types::ApprovalStatus;
+
     context.log_info(&format!("Approving request {}...", args.request_id));
 
     // Step 1: pre_check - Ensure git repository is in good state
     crate::utils::prelude::pre_check(context)?;
 
-    // Step 2: Validate and process the approval
+    // Step 2: Resolve the request (accepts a full ID or an unambiguous prefix) and
+    // branch on its current status.
     context.log_info("");
     context.log_info("Fetching approval request...");
-    let (request_details, environment_name, min_approvals) = validate_and_approve(context, &args)?;
+    let request = crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
+    let request_id = request.id.clone();
+    let environment_name = request.environment.clone();
+    context.log_info(&format!("  ✓ Request found: {}", short_id(&request_id)));
 
-    // Step 3: If threshold is met, execute the operation
+    let environment =
+        crate::utils::prelude::get_environment_config_for_approval(context, &environment_name)?;
+    let min_approvals = request.required_approvals(&environment);
+
+    match request.status {
+        ApprovalStatus::Applied => {
+            return Err(anyhow::anyhow!(
+                "Request {} has already been applied — nothing to do.",
+                request_id
+            ));
+        }
+        ApprovalStatus::Rejected => {
+            return Err(anyhow::anyhow!(
+                "Request {} was rejected and can no longer be approved.",
+                request_id
+            ));
+        }
+        ApprovalStatus::Cancelled => {
+            return Err(anyhow::anyhow!(
+                "Request {} was cancelled and can no longer be approved.",
+                request_id
+            ));
+        }
+        ApprovalStatus::Approved => {
+            // The threshold was already met but the operation was never applied
+            // (e.g. a previous apply was interrupted). Re-drive execution so an
+            // approved request isn't a dead end.
+            context.log_info("");
+            context.log_info("Request already meets its approval threshold; applying it now...");
+            let executed = execute_approved_operation(context, &request_id, &environment_name)?;
+            context.log_info("");
+            if executed {
+                context.log_success(&format!("✓ Request {} applied successfully!", request_id));
+            }
+            return Ok(());
+        }
+        ApprovalStatus::Pending => { /* normal approval flow below */ }
+    }
+
+    // Step 3: Record this approval (validation happens under the lock).
+    let request_details = validate_and_approve(context, &args, &request_id, &environment_name)?;
+
+    // Step 4: If the (frozen) threshold is now met, execute the operation.
     let mut executed = false;
     if request_details.threshold_met(min_approvals) {
         context.log_info("");
@@ -43,21 +91,18 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
                 "demotion"
             }
         ));
-        executed = execute_approved_operation(context, &args.request_id, &environment_name)?;
+        executed = execute_approved_operation(context, &request_id, &environment_name)?;
     }
 
-    // Step 4: Show completion status
+    // Step 5: Show completion status
     context.log_info("");
     if executed {
         context.log_success(&format!(
             "✓ Request {} approved and operation executed successfully!",
-            args.request_id
+            request_id
         ));
     } else {
-        context.log_success(&format!(
-            "✓ Request {} approved successfully!",
-            args.request_id
-        ));
+        context.log_success(&format!("✓ Request {} approved successfully!", request_id));
         context.log_info(&format!(
             "Waiting for {} more approval(s) to execute the operation.",
             min_approvals.saturating_sub(request_details.approvals.len())
@@ -67,110 +112,85 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
+/// First 8 characters of an ID for display (safe on short/odd IDs).
+fn short_id(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+/// Record the current user's approval for a Pending request.
+///
+/// All authorization and freshness checks (approver membership, no self-approval,
+/// no double-approval, status == Pending, snapshot unchanged) are performed on the
+/// locked, freshly-read config inside `approve_request`/`validate_snapshot` — this
+/// function deliberately does NOT re-check them on a stale pre-lock clone.
 fn validate_and_approve(
     context: &GlobalContext,
     args: &ApproveArgs,
-) -> Result<(crate::types::ApprovalRequest, String, usize)> {
-    // Get request details first for validation
-    let request = crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
-    context.log_info(&format!("  ✓ Request found: {}", &args.request_id[..8]));
-    let environment_name = request.environment.clone();
-
-    // Get environment configuration
-    let environment =
-        crate::utils::prelude::get_environment_config_for_approval(context, &environment_name)?;
-    let min_approvals = environment.min_approvals;
-
-    // Validate authorization
-    context.log_info("");
-    context.log_info("Validating authorization...");
-
-    let current_user = get_current_user_email(context)?;
-
-    if !environment.is_approver(&current_user) {
-        return Err(anyhow::anyhow!(
-            "You are not authorized to approve requests for environment '{}'",
-            environment_name
-        ));
-    }
-    context.log_info(&format!("  ✓ You ({}) are authorized", current_user));
-
-    if request.requested_by == current_user {
-        return Err(anyhow::anyhow!("Self-approval is not allowed"));
-    }
-    context.log_info("  ✓ Not a self-approval");
-
-    if request.has_approved(&current_user) {
-        return Err(anyhow::anyhow!("You have already approved this request"));
-    }
-    context.log_info("  ✓ No duplicate approval");
-
-    if request.status != crate::types::ApprovalStatus::Pending {
-        return Err(anyhow::anyhow!(
-            "Cannot approve request with status: {}",
-            request.status
-        ));
-    }
-
-    // Validate snapshot BEFORE recording approval - if the snapshot is stale,
-    // we shouldn't record an approval that can never be executed
-    context.log_info("");
-    context.log_info("Validating snapshot...");
-    crate::utils::snapshot::validate_snapshot(context, &request.rebuild_snapshot)?;
-    context.log_info(&format!(
-        "  ✓ Base branch unchanged ({})",
-        &request.rebuild_snapshot.base_sha[..7]
-    ));
-    context.log_info("  ✓ All promoted branches unchanged");
-
-    // Perform the approval with rollback protection
+    request_id: &str,
+    environment_name: &str,
+) -> Result<crate::types::ApprovalRequest> {
     context.log_info("");
     context.log_info("Recording approval...");
 
+    let branch = crate::utils::prelude::get_approval_request_by_id(context, request_id)?
+        .branch
+        .clone();
+
     let mut rollback_info = RollbackInfo::new(
         RollbackOperation::Promote, // Use Promote as default for approval operations
-        environment_name.clone(),
-        request.branch.clone(),
+        environment_name.to_string(),
+        branch,
     );
 
-    let result = with_locked_env(context, &environment_name, || {
+    let result = with_locked_env(context, environment_name, || {
         modify_metadata(context, |config: &mut HitchConfig| {
-            // Store the original state for rollback
-            if let Some(env) = config.get_environment(&environment_name) {
+            // Store the original environment state for rollback.
+            if let Some(env) = config.get_environment(environment_name) {
                 rollback_info.previous_state = Some(env.clone());
             }
 
-            // Approve the request
+            // Validate snapshot freshness on the locked, freshly-read request
+            // before recording an approval that could never execute.
+            let snapshot = crate::utils::approvals::find_approval_request(config, request_id)?
+                .rebuild_snapshot
+                .clone();
+            crate::utils::snapshot::validate_snapshot(context, &snapshot)?;
+
+            // Record the approval. This performs authorization on the fresh config.
             let threshold_met = crate::utils::approvals::approve_request(
                 context,
                 config,
-                &args.request_id,
+                request_id,
                 args.comment.clone(),
             )?;
 
             context.log_info("  ✓ Approval recorded");
 
-            // Get updated approval count
             let updated_request = config
-                .get_approval_request(&args.request_id)
+                .get_approval_request(request_id)
                 .ok_or_else(|| anyhow::anyhow!("Request not found after approval"))?;
+            let required = updated_request.required_approvals(
+                config
+                    .get_environment(environment_name)
+                    .ok_or_else(|| anyhow::anyhow!("Environment not found"))?,
+            );
 
             context.log_info("");
             if threshold_met {
                 context.log_info(&format!(
                     "Approvals: {}/{} - Threshold met!",
                     updated_request.approvals.len(),
-                    min_approvals
+                    required
                 ));
             } else {
                 context.log_info(&format!(
                     "Approvals: {}/{}",
                     updated_request.approvals.len(),
-                    min_approvals
+                    required
                 ));
                 context.log_info(&format!(
                     "Waiting for {} more approval(s)",
-                    min_approvals.saturating_sub(updated_request.approvals.len())
+                    required.saturating_sub(updated_request.approvals.len())
                 ));
             }
 
@@ -178,17 +198,11 @@ fn validate_and_approve(
         })
     });
 
-    // Handle potential errors with rollback
     match result {
-        Ok(()) => {
-            // Create a copy of the updated request for return and check threshold
-            let updated_request =
-                crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
-            let _threshold_met = updated_request.threshold_met(min_approvals);
-            Ok((updated_request, environment_name, min_approvals))
-        }
+        Ok(()) => Ok(crate::utils::prelude::get_approval_request_by_id(
+            context, request_id,
+        )?),
         Err(e) => {
-            // Attempt rollback if possible
             if let Err(rollback_err) = attempt_approval_rollback(context, &rollback_info) {
                 context.log_error(&format!(
                     "CRITICAL: Failed to rollback approval changes: {}",
@@ -324,10 +338,6 @@ fn execute_operation_based_on_request(
     crate::utils::prelude::rebuild_environment(context, &request.environment)?;
 
     Ok(())
-}
-
-fn get_current_user_email(context: &GlobalContext) -> Result<String> {
-    crate::utils::authorization::get_current_user(context)
 }
 
 fn attempt_approval_rollback(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {

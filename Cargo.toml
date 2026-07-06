@@ -46,6 +46,10 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 # Async runtime (for future async commands if needed)
 tokio = { version = "1.49", features = ["full"] }
 
+# Cross-platform OS advisory file locks (flock on Unix, LockFileEx on Windows)
+# for atomic, crash-safe repo/rebuild locks.
+fs4 = "1"
+
 # Dependencies for test binaries
 tempfile = "3.25"
 parking_lot = "0.12"

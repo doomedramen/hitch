@@ -189,9 +189,9 @@ fn promote_branch_to_environment(
         branch, env_name
     ));
 
-    // Capture pre-operation environment state for rollback
-    rollback_info.previous_state =
-        crate::utils::rollback::capture_environment_state(context, env_name)?;
+    // Capture pre-operation configuration for rollback (full snapshot so any
+    // side effects beyond this environment are also reverted on failure).
+    rollback_info.previous_config = crate::utils::rollback::capture_config_state(context)?;
 
     // Modify metadata to add the branch. The pre-operation state for rollback was
     // already captured above via `capture_environment_state`.

@@ -18,10 +18,7 @@ pub fn rollback_metadata_changes(
         rollback_info.env_name
     ));
 
-    let result = match rollback_info.operation {
-        RollbackOperation::Promote => rollback_promote(context, rollback_info),
-        RollbackOperation::Demote => rollback_demote(context, rollback_info),
-    };
+    let result = restore_previous_state(context, rollback_info);
 
     match result {
         Ok(()) => {
@@ -48,22 +45,40 @@ pub fn rollback_metadata_changes(
     }
 }
 
-/// Rollback a failed promote operation by restoring the previous environment state
-fn rollback_promote(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
-    context.log_info("Rolling back promote operation...");
+/// Restore the pre-operation state. Promote and demote both simply revert the
+/// captured configuration, so they share one implementation.
+///
+/// This uses the health-check-free write path (`modify_metadata_unchecked`) so
+/// that recovery can proceed even when the repository is in the degraded state
+/// that caused the original failure.
+fn restore_previous_state(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
+    // Prefer restoring the FULL configuration snapshot so that any change beyond
+    // the target environment (an appended approval request, edits to other
+    // environments) is reverted too — not just the single `Environment`.
+    if let Some(previous_config) = rollback_info.previous_config.clone() {
+        context.log_verbose("Restoring previous configuration snapshot...");
+        crate::utils::prelude::modify_metadata_unchecked(
+            context,
+            move |config: &mut HitchConfig| {
+                *config = previous_config;
+                Ok(())
+            },
+        )?;
+        context.log_verbose("✓ Configuration restored");
+        return Ok(());
+    }
 
-    // Restore the previous environment state
-    if let Some(ref previous_state) = rollback_info.previous_state {
+    // Fallback: restore just the single environment (older capture path).
+    if let Some(previous_state) = rollback_info.previous_state.clone() {
         context.log_verbose("Restoring previous environment state...");
-
-        // Use modify_metadata to restore the environment
-        crate::utils::prelude::modify_metadata(context, |config: &mut HitchConfig| {
-            config
-                .environments
-                .insert(rollback_info.env_name.clone(), previous_state.clone());
-            Ok(())
-        })?;
-
+        let env_name = rollback_info.env_name.clone();
+        crate::utils::prelude::modify_metadata_unchecked(
+            context,
+            move |config: &mut HitchConfig| {
+                config.environments.insert(env_name, previous_state);
+                Ok(())
+            },
+        )?;
         context.log_verbose("✓ Environment state restored");
     } else {
         context.log_warning("No previous state available for rollback (this should not happen)");
@@ -72,46 +87,16 @@ fn rollback_promote(context: &GlobalContext, rollback_info: &RollbackInfo) -> Re
     Ok(())
 }
 
-/// Rollback a failed demote operation by restoring the previous environment state
-fn rollback_demote(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
-    context.log_info("Rolling back demote operation...");
+/// Capture the full configuration before making changes, so rollback can restore
+/// the entire state atomically (not just one environment).
+pub fn capture_config_state(context: &GlobalContext) -> Result<Option<HitchConfig>> {
+    context.log_verbose("Capturing current configuration for rollback...");
 
-    // Restore the previous environment state
-    if let Some(ref previous_state) = rollback_info.previous_state {
-        context.log_verbose("Restoring previous environment state...");
+    let current =
+        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
 
-        // Use modify_metadata to restore the environment
-        crate::utils::prelude::modify_metadata(context, |config: &mut HitchConfig| {
-            config
-                .environments
-                .insert(rollback_info.env_name.clone(), previous_state.clone());
-            Ok(())
-        })?;
-
-        context.log_verbose("✓ Environment state restored");
-    } else {
-        context.log_warning("No previous state available for rollback (this should not happen)");
-    }
-
-    Ok(())
-}
-
-/// Capture the current environment state before making changes
-pub fn capture_environment_state(
-    context: &GlobalContext,
-    env_name: &str,
-) -> Result<Option<crate::types::Environment>> {
-    context.log_verbose(&format!(
-        "Capturing current state for environment '{}'...",
-        env_name
-    ));
-
-    let current_state = crate::utils::prelude::access_metadata_read_only(context, |config| {
-        Ok(config.get_environment(env_name).cloned())
-    })?;
-
-    context.log_verbose("✓ Environment state captured");
-    Ok(current_state)
+    context.log_verbose("✓ Configuration captured");
+    Ok(Some(current))
 }
 
 #[cfg(test)]
