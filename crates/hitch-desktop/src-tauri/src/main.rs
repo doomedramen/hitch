@@ -5,6 +5,7 @@ mod types;
 
 use anyhow::Result;
 use hitch::commands::global_context::GlobalContext;
+use hitch::utils::confirm::{AlwaysYesConfirm, Confirm};
 use hitch::utils::logging::Logger;
 use hitch::utils::output::{BufferedOutputSink, OutputLevel, OutputSink};
 use std::sync::Arc;
@@ -123,7 +124,13 @@ fn op_context_streaming(
         buffer: buffer.clone(),
         channel,
     });
-    let ctx = context_at(repo_path)?.with_output(sink as Arc<dyn OutputSink>);
+    // The user already confirmed this action in the UI and there is no stdin to
+    // read an interactive [y/N] from, so auto-approve the rebuild force-push
+    // prompt. Without this the default StdinConfirm reads EOF, declines, and the
+    // rebuilt branch is silently never pushed to the remote.
+    let ctx = context_at(repo_path)?
+        .with_output(sink as Arc<dyn OutputSink>)
+        .with_confirm(Arc::new(AlwaysYesConfirm) as Arc<dyn Confirm>);
     Ok((ctx, buffer))
 }
 
