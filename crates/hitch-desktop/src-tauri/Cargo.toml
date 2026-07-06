@@ -1,6 +1,6 @@
 [package]
 name = "hitch-desktop"
-version = "0.0.11"
+version = "0.0.12"
 description = "Hitch Desktop GUI"
 authors = ["Martin Page"]
 license = "MIT"
