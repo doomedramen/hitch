@@ -5,6 +5,10 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.30.3"
+# Build only the released package(s) individually (cargo build -p hitch) instead
+# of `--workspace`, so the macOS-only Tauri desktop crate (which needs GTK/gdk on
+# Linux) is never compiled on the Linux release runners.
+precise-builds = true
 # CI backends to support
 ci = "github"
 # The installers to generate for each app (powershell installer covers Windows)
