@@ -33,7 +33,7 @@ pub struct HitchEventFilter<'a> {
     pub branch: Option<&'a str>,
 }
 
-impl<'a> HitchEventFilter<'a> {
+impl HitchEventFilter<'_> {
     #[allow(dead_code)]
     pub fn any() -> Self {
         Self {
