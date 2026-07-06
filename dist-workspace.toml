@@ -9,6 +9,9 @@ cargo-dist-version = "0.30.3"
 # of `--workspace`, so the macOS-only Tauri desktop crate (which needs GTK/gdk on
 # Linux) is never compiled on the Linux release runners.
 precise-builds = true
+# release.yml is hand-tweaked to exclude desktop-v* tags (the desktop app has its
+# own workflow), so tell dist not to regenerate/verify the CI files.
+allow-dirty = ["ci"]
 # CI backends to support
 ci = "github"
 # The installers to generate for each app (powershell installer covers Windows)
