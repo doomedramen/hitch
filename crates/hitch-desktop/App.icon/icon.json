@@ -4,13 +4,17 @@
     {
       "layers" : [
         {
+          "blend-mode" : "normal",
+          "glass" : true,
+          "hidden" : false,
           "image-name" : "hitch.svg",
           "name" : "hitch",
+          "opacity" : 1,
           "position" : {
-            "scale" : 0.42,
+            "scale" : 0.38,
             "translation-in-points" : [
-              0.25700938014563235,
-              -0.12304035269085034
+              0,
+              0
             ]
           }
         }
