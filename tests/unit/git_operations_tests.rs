@@ -391,7 +391,10 @@ mod tests {
             git_ops.write_file("test1.txt", "content1")?;
             git_ops.add_and_commit(&["test1.txt", "nonexistent.txt"], "Test commit")?;
             assert!(git_ops.is_working_directory_clean()?);
-            assert_eq!(git_ops.read_file_from_branch("HEAD", "test1.txt")?, "content1");
+            assert_eq!(
+                git_ops.read_file_from_branch("HEAD", "test1.txt")?,
+                "content1"
+            );
 
             // Committing only missing files is a no-op (nothing staged), not an error.
             let only_missing = git_ops.add_and_commit(&["also-missing.txt"], "Nothing");

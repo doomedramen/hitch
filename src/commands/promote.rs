@@ -116,8 +116,7 @@ fn resolve_to_branches(
     branch: &str,
     env_name: &str,
 ) -> Result<Vec<String>> {
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
 
     if let Some(source_env) = config.environments.get(branch) {
         if source_env.branches.is_empty() {

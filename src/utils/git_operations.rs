@@ -286,11 +286,7 @@ impl GitOperations {
                 if stderr.contains("did not match any files") {
                     continue;
                 }
-                return Err(anyhow::anyhow!(
-                    "Failed to add file '{}': {}",
-                    file,
-                    stderr
-                ));
+                return Err(anyhow::anyhow!("Failed to add file '{}': {}", file, stderr));
             }
         }
 

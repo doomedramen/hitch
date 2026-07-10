@@ -1237,18 +1237,30 @@ mod tests {
             create_approval_environment(env, "prod", &["alice@example.com"], 1)?;
 
             // A normal source env that resolves to [feat-a, feat-b].
-            env.hitch.run().args(&["add", "staging"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "staging"])
+                .execute()?
+                .assert_success();
             for name in ["feat-a", "feat-b"] {
                 env.git.run(&["checkout", "-b", name])?;
                 env.fs.write_file(&format!("{}.txt", name), name)?;
                 env.git.run(&["add", "."])?;
                 env.git.run(&["commit", "-m", name])?;
                 env.git.run(&["checkout", "main"])?;
-                env.hitch.run().args(&["promote", name, "staging"]).execute()?.assert_success();
+                env.hitch
+                    .run()
+                    .args(&["promote", name, "staging"])
+                    .execute()?
+                    .assert_success();
             }
 
             // Pre-create a pending request for feat-b in prod so the batch will fail on it.
-            env.hitch.run().args(&["promote", "feat-b", "prod"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feat-b", "prod"])
+                .execute()?
+                .assert_success();
 
             // Batch-promote staging -> prod. feat-a is created first, then feat-b fails
             // (pending already exists) — the whole batch must roll back.

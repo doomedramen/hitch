@@ -62,8 +62,7 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // aren't present, and resolving a source environment can include such branches.
     // Validation guarantees at least one resolved branch is present here.
     let demoted: Vec<String> = {
-        let config =
-            crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+        let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
         match config.environments.get(&args.env_name) {
             Some(e) => branches
                 .iter()
@@ -130,8 +129,7 @@ fn resolve_to_branches(
     branch: &str,
     env_name: &str,
 ) -> Result<Vec<String>> {
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
 
     // Check if the branch arg is an environment name.
     // If so, resolve it to that environment's promoted branches.

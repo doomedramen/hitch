@@ -187,8 +187,16 @@ mod tests {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            env.hitch.run().args(&["add", "dev"]).execute()?.assert_success();
-            env.hitch.run().args(&["add", "qa"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_success();
 
             // Branch X promoted to both dev and qa.
             env.git.run(&["checkout", "-b", "feature-x"])?;
@@ -196,11 +204,23 @@ mod tests {
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "feature x"])?;
             env.git.run(&["checkout", "main"])?;
-            env.hitch.run().args(&["promote", "feature-x", "dev"]).execute()?.assert_success();
-            env.hitch.run().args(&["promote", "feature-x", "qa"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feature-x", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feature-x", "qa"])
+                .execute()?
+                .assert_success();
 
             // qa is locked by another operation while dev is released.
-            env.hitch.run().args(&["lock", "qa"]).execute()?.assert_success();
+            env.hitch
+                .run()
+                .args(&["lock", "qa"])
+                .execute()?
+                .assert_success();
 
             env.hitch
                 .run()
@@ -286,8 +306,8 @@ mod tests {
     /// of '<env>' because it is locked"), leaving its metadata pruned but its branch
     /// stale against the new base.
     #[test]
-    fn test_hitch_release_rebuilds_the_released_environment_even_when_locked(
-    ) -> anyhow::Result<()> {
+    fn test_hitch_release_rebuilds_the_released_environment_even_when_locked() -> anyhow::Result<()>
+    {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -813,7 +833,8 @@ mod tests {
 
             // feat-b: edits shared.txt line2. Compatible with feat-a, so it promotes.
             env.git.run(&["checkout", "-b", "feat-b"])?;
-            env.fs.write_file("shared.txt", "line1\nB-CHANGE\nline3\n")?;
+            env.fs
+                .write_file("shared.txt", "line1\nB-CHANGE\nline3\n")?;
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "feat b"])?;
             env.git.run(&["checkout", "main"])?;
@@ -825,7 +846,8 @@ mod tests {
 
             // main advances independently, editing the same line so feat-b will conflict
             // at release time (but only after feat-a has already merged cleanly).
-            env.fs.write_file("shared.txt", "line1\nMAIN-MOVED\nline3\n")?;
+            env.fs
+                .write_file("shared.txt", "line1\nMAIN-MOVED\nline3\n")?;
             env.git.run(&["add", "."])?;
             env.git.run(&["commit", "-m", "main advances"])?;
 
