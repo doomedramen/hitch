@@ -262,12 +262,8 @@ fn perform_release_core(
             }
         }
 
-        if squash {
-            // Commit the merged changes (single commit for squash mode)
-            let commit_message = format!("Hitch: release {} to {}", env_name, target_branch);
-            context.git().commit(&commit_message)?;
-            context.log_info(&format!("✓ Committed release to '{}'", target_branch));
-        }
+        // Note: in squash mode each branch is already committed by `squash_merge` above
+        // (one squash commit per branch), so there is nothing extra to commit here.
 
         // Create auto-tag for release tracking with descriptive name and ISO 8601 timestamp
         let now = chrono::Utc::now();
