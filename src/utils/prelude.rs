@@ -537,25 +537,40 @@ where
 {
     context.log_verbose(&format!("Locking environment '{}'...", env_name));
 
-    // Lock the environment
-    lock_environment(context, env_name)?;
+    // Only manage the lock if we actually acquire it. If the environment is already
+    // locked — by another operation or a re-entrant call — leave the lock untouched so
+    // we never release a lock we didn't take (which would let a concurrent operation
+    // proceed, or unlock an env mid-way through an outer operation that still needs it).
+    let already_locked = access_metadata_read_only(context, |config| {
+        Ok(config
+            .environments
+            .get(env_name)
+            .map(|e| e.is_locked())
+            .unwrap_or(false))
+    })?;
+
+    if !already_locked {
+        lock_environment(context, env_name)?;
+    }
 
     // Execute the closure
     let result = closure();
 
-    // Always unlock the environment, even if closure failed
-    context.log_verbose(&format!("Unlocking environment '{}'...", env_name));
-    if let Err(e) = unlock_environment(context, env_name) {
-        context.log_warning(&format!(
-            "Failed to unlock environment '{}': {}",
-            env_name, e
-        ));
-        context.log_warning("You may need to manually unlock the environment");
-    } else {
-        context.log_verbose(&format!(
-            "✓ Environment '{}' unlocked successfully",
-            env_name
-        ));
+    // Unlock only if we were the ones who locked it, even if the closure failed.
+    if !already_locked {
+        context.log_verbose(&format!("Unlocking environment '{}'...", env_name));
+        if let Err(e) = unlock_environment(context, env_name) {
+            context.log_warning(&format!(
+                "Failed to unlock environment '{}': {}",
+                env_name, e
+            ));
+            context.log_warning("You may need to manually unlock the environment");
+        } else {
+            context.log_verbose(&format!(
+                "✓ Environment '{}' unlocked successfully",
+                env_name
+            ));
+        }
     }
 
     result
