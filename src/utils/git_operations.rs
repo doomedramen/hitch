@@ -1273,6 +1273,23 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Hard-reset the currently checked-out branch (and working tree) to `reference`.
+    ///
+    /// Used to roll a branch back to a previously captured commit — e.g. to undo
+    /// partially-applied merges when a multi-branch release fails partway through, so
+    /// the target branch is never left in a half-released state.
+    pub fn reset_hard_to(&self, reference: &str) -> Result<()> {
+        let output = self.run_git_command(&["reset", "--hard", reference])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to reset to '{}': {}",
+                reference,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
     /// Fetch all remote branches from origin
     pub fn fetch_all_remotes(&self) -> Result<()> {
         let output = self.run_git_command(&["fetch", "--all"])?;

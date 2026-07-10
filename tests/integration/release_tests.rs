@@ -232,6 +232,93 @@ mod tests {
         Ok(())
     }
 
+    /// Regression: the environment being released must have its own branch rebuilt
+    /// after the release, even though that environment is locked for the duration of
+    /// the release. Previously the post-release rebuild skipped it ("Skipping rebuild
+    /// of '<env>' because it is locked"), leaving its metadata pruned but its branch
+    /// stale against the new base.
+    #[test]
+    fn test_hitch_release_rebuilds_the_released_environment_even_when_locked(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_success();
+
+            // Build qa from a promoted feature branch: qa == base + f1.
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "qa"])
+                .execute()?
+                .assert_success();
+
+            // Advance main independently so a *stale* qa (base + f1) is distinguishable
+            // from a correctly rebuilt qa (base + extra + f1).
+            env.fs.write_file("extra.txt", "landed on main directly")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add extra.txt on main"])?;
+
+            // Lock qa to reproduce the state the release itself puts it in.
+            env.hitch
+                .run()
+                .args(&["lock", "qa"])
+                .execute()?
+                .assert_success();
+
+            // Release qa -> main. feature-1 is pruned from qa, and qa must be rebuilt
+            // from the new main (which now also contains extra.txt).
+            env.hitch
+                .run()
+                .args(&["release", "qa", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            // The released environment's branch must exist and be fully rebuilt.
+            env.git
+                .run(&["show-ref", "--verify", "--quiet", "refs/heads/qa"])?
+                .assert_success();
+
+            // The independently-landed commit on main must be present in the rebuilt qa
+            // branch. A stale (skipped) qa would be missing extra.txt.
+            env.git
+                .run(&["cat-file", "-e", "qa:extra.txt"])?
+                .assert_success();
+
+            // With all promoted branches pruned, qa should be an exact rebuild of main.
+            let main_tree = env
+                .git
+                .run(&["rev-parse", "main^{tree}"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+            let qa_tree = env
+                .git
+                .run(&["rev-parse", "qa^{tree}"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(
+                main_tree, qa_tree,
+                "released 'qa' branch was not rebuilt to match 'main' (left stale)"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn test_hitch_release_without_init() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -638,6 +725,92 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Regression: a release that fails partway (a later branch conflicts with a target
+    /// that moved after promotion) must be atomic — the target branch must not be left
+    /// with the earlier branches' merges committed on it.
+    #[test]
+    fn test_hitch_release_is_atomic_when_a_later_branch_conflicts() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // A shared file on main that a later branch and main will both edit.
+            env.fs.write_file("shared.txt", "line1\nline2\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add shared.txt"])?;
+
+            // feat-a: clean, unrelated file. Promoted first.
+            env.git.run(&["checkout", "-b", "feat-a"])?;
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feat a"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            // feat-b: edits shared.txt line2. Compatible with feat-a, so it promotes.
+            env.git.run(&["checkout", "-b", "feat-b"])?;
+            env.fs.write_file("shared.txt", "line1\nB-CHANGE\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feat b"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-b", "dev"])
+                .execute()?
+                .assert_success();
+
+            // main advances independently, editing the same line so feat-b will conflict
+            // at release time (but only after feat-a has already merged cleanly).
+            env.fs.write_file("shared.txt", "line1\nMAIN-MOVED\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "main advances"])?;
+
+            let main_before = env
+                .git
+                .run(&["rev-parse", "main"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+
+            // The release must fail on feat-b.
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_failure();
+
+            // ...and main must be exactly where it was — feat-a must NOT be left merged.
+            let main_after = env
+                .git
+                .run(&["rev-parse", "main"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(
+                main_before, main_after,
+                "failed release left 'main' partially merged (not atomic)"
+            );
+            env.git
+                .run(&["cat-file", "-e", "main:a.txt"])?
+                .assert_failure(); // feat-a's file must not be on main
 
             Ok::<(), anyhow::Error>(())
         });

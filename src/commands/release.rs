@@ -201,6 +201,12 @@ fn perform_release_core(
     let original_branch = context.git().get_current_branch()?;
     context.log_verbose(&format!("Current branch: '{}'", original_branch));
 
+    // Commit the target branch points at before we merge anything. A release merges
+    // each promoted branch and commits it to the target one at a time, so if a later
+    // branch conflicts we must roll the target back to this commit — otherwise the
+    // earlier branches are left committed on the target and the release is not atomic.
+    let mut target_rollback: Option<String> = None;
+
     let release_result = (|| -> Result<()> {
         // Synchronize all branches
         context.log_info("Synchronizing branches for release...");
@@ -214,6 +220,9 @@ fn perform_release_core(
             target_branch
         ));
         context.git().checkout_branch(target_branch)?;
+
+        // Capture the rollback point now that the target is synced and checked out.
+        target_rollback = Some(context.git().rev_parse("HEAD")?);
 
         // Perform merges with conflict checking
         for branch in &environment.branches {
@@ -311,8 +320,34 @@ fn perform_release_core(
         Ok(())
     })();
 
-    // Always attempt to return to the user's original branch and clean up merge state.
+    // Always attempt to clean up merge state left by an aborted merge.
     let _ = context.git().abort_merge_and_clean();
+
+    // If the release failed after one or more branches were already merged and committed
+    // to the target, roll the target back to its pre-release commit so it is not left in a
+    // partially-released state. Only touch the target on failure; a successful release keeps
+    // its merges. Best-effort: warn (with the recovery commit) rather than mask the original error.
+    if release_result.is_err() {
+        if let Some(rollback_sha) = &target_rollback {
+            let rolled_back = context
+                .git()
+                .checkout_branch(target_branch)
+                .and_then(|_| context.git().reset_hard_to(rollback_sha));
+            match rolled_back {
+                Ok(()) => context.log_verbose(&format!(
+                    "Rolled '{}' back to its pre-release commit after a failed release",
+                    target_branch
+                )),
+                Err(e) => context.log_warning(&format!(
+                    "Release failed and '{}' could not be rolled back automatically: {}. \
+                     Restore it manually with: git checkout {} && git reset --hard {}",
+                    target_branch, e, target_branch, rollback_sha
+                )),
+            }
+        }
+    }
+
+    // Always attempt to return to the user's original branch.
     if let Err(e) = context.git().checkout_branch(&original_branch) {
         context.log_warning(&format!(
             "Failed to return to original branch '{}': {}",
@@ -338,7 +373,7 @@ fn perform_release_core(
 
     // Rebuild dependent environments (best-effort) so env branches stay up to date after base moves.
     if !no_rebuild_dependents {
-        rebuild_dependent_environments(context, target_branch, &pruned_envs)?;
+        rebuild_dependent_environments(context, target_branch, env_name, &pruned_envs)?;
     }
 
     Ok(())
@@ -486,6 +521,7 @@ fn update_release_metadata_and_prune(
 fn rebuild_dependent_environments(
     context: &GlobalContext,
     target_branch: &str,
+    released_env: &str,
     pruned_envs: &[String],
 ) -> Result<()> {
     use crate::utils::prelude::preflight_compatibility_merge_tree;
@@ -545,6 +581,12 @@ fn rebuild_dependent_environments(
             None => continue,
         };
 
+        // The just-released environment is a special case: in the non-force path it is
+        // still locked by *this* release (via the outer `with_locked_env`), so we must
+        // NOT treat that lock as a reason to skip it — otherwise its metadata gets pruned
+        // but its branch is never rebuilt, leaving it stale against the new base.
+        let is_released_env = env_name == released_env;
+
         // If this env depends on another env we intended to rebuild, and that rebuild failed/skipped,
         // skip this one too so we don't rebuild on a stale base.
         if rebuild_set.contains(&env.base) && rebuild_ok.get(&env.base) != Some(&true) {
@@ -556,7 +598,9 @@ fn rebuild_dependent_environments(
             continue;
         }
 
-        if env.is_locked() {
+        // Skip environments locked by *someone else*. The released environment is
+        // (expected to be) locked by this release itself, so we rebuild it regardless.
+        if env.is_locked() && !is_released_env {
             context.log_warning(&format!(
                 "Skipping rebuild of '{}' because it is locked",
                 env_name
@@ -580,9 +624,17 @@ fn rebuild_dependent_environments(
             continue;
         }
 
-        let rebuild_res = crate::utils::prelude::with_locked_env(context, &env_name, || {
+        // The released environment is already locked by this release (non-force) or was
+        // force-released; rebuild it directly instead of taking a nested `with_locked_env`,
+        // which would prematurely unlock it out from under the outer release lock. All
+        // other environments take their own lock for the duration of their rebuild.
+        let rebuild_res = if is_released_env {
             crate::utils::prelude::rebuild_environment(context, &env_name)
-        });
+        } else {
+            crate::utils::prelude::with_locked_env(context, &env_name, || {
+                crate::utils::prelude::rebuild_environment(context, &env_name)
+            })
+        };
 
         match rebuild_res {
             Ok(()) => {
