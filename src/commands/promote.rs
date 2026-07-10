@@ -213,14 +213,16 @@ fn validate_preconditions(
             env_name
         ));
 
-        for branch in branches {
-            let request_id = crate::utils::prelude::create_approval_request_for_operation(
-                context,
-                env_name,
-                branch,
-                crate::types::Operation::Promote,
-            )?;
-            crate::utils::prelude::display_approval_request_created(context, &request_id)?;
+        // Create all requests in one transaction so a mid-batch failure (e.g. one branch
+        // already has a pending request) doesn't leave the earlier ones committed.
+        let request_ids = crate::utils::prelude::create_approval_requests_for_operation(
+            context,
+            env_name,
+            branches,
+            crate::types::Operation::Promote,
+        )?;
+        for request_id in &request_ids {
+            crate::utils::prelude::display_approval_request_created(context, request_id)?;
         }
 
         return Ok(true);

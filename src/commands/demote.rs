@@ -200,26 +200,26 @@ fn validate_preconditions(
             env_name
         ));
 
-        for branch in branches {
-            // Only request approval for branches actually promoted to this environment.
-            // Resolving a source environment can include branches that were never promoted
-            // here; demoting those is a no-op, so creating approval requests for them would
-            // leave bogus pending requests that demote nothing when approved.
-            if !environment.branches.contains(branch) {
-                context.log_verbose(&format!(
-                    "Skipping approval request for '{}' — not promoted to '{}'",
-                    branch, env_name
-                ));
-                continue;
-            }
+        // Only request approval for branches actually promoted to this environment.
+        // Resolving a source environment can include branches that were never promoted
+        // here; demoting those is a no-op, so creating approval requests for them would
+        // leave bogus pending requests that demote nothing when approved.
+        let present: Vec<String> = branches
+            .iter()
+            .filter(|b| environment.branches.contains(*b))
+            .cloned()
+            .collect();
 
-            let request_id = crate::utils::prelude::create_approval_request_for_operation(
-                context,
-                env_name,
-                branch,
-                crate::types::Operation::Demote,
-            )?;
-            crate::utils::prelude::display_approval_request_created(context, &request_id)?;
+        // Create all requests in one transaction so a mid-batch failure doesn't leave the
+        // earlier ones committed.
+        let request_ids = crate::utils::prelude::create_approval_requests_for_operation(
+            context,
+            env_name,
+            &present,
+            crate::types::Operation::Demote,
+        )?;
+        for request_id in &request_ids {
+            crate::utils::prelude::display_approval_request_created(context, request_id)?;
         }
 
         return Ok(true);

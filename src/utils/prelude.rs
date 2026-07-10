@@ -1118,31 +1118,31 @@ fn update_rebuilt_timestamp_for_rebuild(context: &GlobalContext, env_name: &str)
 // Approval Workflow Helper Functions
 // =============================================================================
 
-/// Create an approval request for a promote/demote operation
-pub fn create_approval_request_for_operation(
+/// Create approval requests for a batch of branches atomically.
+///
+/// All requests are created inside a single metadata transaction. If creating a request
+/// for any branch fails (e.g. one already has a pending request), the whole transaction
+/// is rolled back and none are persisted — avoiding a partially-created set of approval
+/// requests that would have to be cleaned up by hand. Returns the created request IDs in
+/// input order.
+pub fn create_approval_requests_for_operation(
     context: &GlobalContext,
     env_name: &str,
-    branch_name: &str,
+    branches: &[String],
     operation: crate::types::Operation,
-) -> Result<String> {
-    context.log_verbose(&format!(
-        "Creating approval request for {} operation: {} -> {}",
-        operation, branch_name, env_name
-    ));
-
-    let mut request_id = String::new();
+) -> Result<Vec<String>> {
+    let mut request_ids = Vec::new();
     modify_metadata(context, |config| {
-        request_id = crate::utils::approvals::create_approval_request(
-            context,
-            config,
-            env_name,
-            branch_name,
-            operation,
-        )?;
+        for branch in branches {
+            let id = crate::utils::approvals::create_approval_request(
+                context, config, env_name, branch, operation,
+            )?;
+            request_ids.push(id);
+        }
         Ok(())
     })?;
 
-    Ok(request_id)
+    Ok(request_ids)
 }
 
 /// Get approval requests with optional filtering
