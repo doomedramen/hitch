@@ -201,6 +201,18 @@ fn validate_preconditions(
         ));
 
         for branch in branches {
+            // Only request approval for branches actually promoted to this environment.
+            // Resolving a source environment can include branches that were never promoted
+            // here; demoting those is a no-op, so creating approval requests for them would
+            // leave bogus pending requests that demote nothing when approved.
+            if !environment.branches.contains(branch) {
+                context.log_verbose(&format!(
+                    "Skipping approval request for '{}' — not promoted to '{}'",
+                    branch, env_name
+                ));
+                continue;
+            }
+
             let request_id = crate::utils::prelude::create_approval_request_for_operation(
                 context,
                 env_name,
