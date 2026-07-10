@@ -179,6 +179,54 @@ mod tests {
         Ok(())
     }
 
+    /// Regression: post-release pruning must not mutate an environment that is locked by
+    /// another operation. Its rebuild is skipped while locked, so pruning its metadata would
+    /// leave the metadata and the built branch inconsistent (and violates the lock).
+    #[test]
+    fn test_hitch_release_does_not_prune_from_locked_environments() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?.assert_success();
+            env.hitch.run().args(&["add", "qa"]).execute()?.assert_success();
+
+            // Branch X promoted to both dev and qa.
+            env.git.run(&["checkout", "-b", "feature-x"])?;
+            env.fs.write_file("x.txt", "x")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feature x"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch.run().args(&["promote", "feature-x", "dev"]).execute()?.assert_success();
+            env.hitch.run().args(&["promote", "feature-x", "qa"]).execute()?.assert_success();
+
+            // qa is locked by another operation while dev is released.
+            env.hitch.run().args(&["lock", "qa"]).execute()?.assert_success();
+
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            let cfg = env.read_hitch_config()?;
+            let dev = cfg.environments.get("dev").expect("dev missing");
+            let qa = cfg.environments.get("qa").expect("qa missing");
+
+            assert!(
+                !dev.branches.contains(&"feature-x".to_string()),
+                "released 'dev' should have feature-x pruned"
+            );
+            assert!(
+                qa.branches.contains(&"feature-x".to_string()),
+                "locked 'qa' must NOT be pruned (its branch was not rebuilt)"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn test_hitch_release_rebuilds_dependent_environments_in_order() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;

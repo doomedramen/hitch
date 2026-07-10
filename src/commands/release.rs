@@ -445,6 +445,19 @@ fn update_release_metadata_and_prune(
         context.log_info("Post-release: pruning promoted branches now in their base...");
 
         for (env_name, environment) in config.environments.iter_mut() {
+            // Don't mutate an environment locked by another operation/user. Its rebuild is
+            // skipped too (see rebuild_dependent_environments), so pruning its metadata here
+            // would leave the metadata and the built branch inconsistent — and it violates
+            // the lock. Defer the prune until that environment is next rebuilt. The env being
+            // released is locked by *this* release, so it is still pruned.
+            if environment.is_locked() && env_name.as_str() != released_env {
+                context.log_verbose(&format!(
+                    "Skipping prune from '{}' because it is locked by another operation",
+                    env_name
+                ));
+                continue;
+            }
+
             for branch in released_branches {
                 if !environment.branches.contains(branch) {
                     continue;
