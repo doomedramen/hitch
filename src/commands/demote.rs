@@ -57,6 +57,23 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
         args.branch.clone(),
     );
 
+    // Snapshot which resolved branches are actually promoted to the target env, so the
+    // success message reports what was really demoted. Demotion no-ops branches that
+    // aren't present, and resolving a source environment can include such branches.
+    // Validation guarantees at least one resolved branch is present here.
+    let demoted: Vec<String> = {
+        let config =
+            crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
+        match config.environments.get(&args.env_name) {
+            Some(e) => branches
+                .iter()
+                .filter(|b| e.branches.contains(*b))
+                .cloned()
+                .collect(),
+            None => branches.clone(),
+        }
+    };
+
     // Step 4: Auto-stash dirty changes, execute demotion, then pop stash
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
@@ -73,15 +90,15 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 5: Handle result with automatic rollback on failure
     match result {
         Ok(()) => {
-            if branches.len() == 1 {
+            if demoted.len() == 1 {
                 context.log_success(&format!(
                     "Successfully demoted '{}' from environment '{}'!",
-                    branches[0], args.env_name
+                    demoted[0], args.env_name
                 ));
             } else {
                 context.log_success(&format!(
                     "Successfully demoted {} branches from environment '{}'!",
-                    branches.len(),
+                    demoted.len(),
                     args.env_name
                 ));
             }
