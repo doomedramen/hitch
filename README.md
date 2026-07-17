@@ -93,6 +93,8 @@ Rebuild is a read-only assembly check first: if any promoted branch can't be com
 
 The tradeoff is merge fixes. Because Hitch repeatedly composes branches against a base and against each other, conflicts are still real Git conflicts. If a branch needs a compatibility fix in one environment, you may need to carry that fix back into the branch or repeat equivalent fixes when composing it elsewhere. Hitch makes the environment contents explicit and rebuildable; it does not erase the underlying Git cost of resolving conflicting changes.
 
+**Release also rebuilds dependent environments.** Once a release moves `<target>`, any environment whose `base` is `<target>` — and transitively, any environment based on *those* — is now stale relative to its own definition, so Hitch rebuilds (and pushes) each of them as part of the same release. This is common: if `dev`'s base is `main` and you `hitch release dev main`, `dev` itself qualifies and gets rebuilt right after. In practice this is usually a no-op, since `main` now already contains what `dev` was rebuilding from — it only does real work when other promoted branches or dependent environments are still layered on top. This step is best-effort (a rebuild failure is reported as a warning, not a release failure) and can be skipped with `--no-rebuild-dependents`.
+
 ## 📋 Key Commands
 
 ```bash
