@@ -481,11 +481,13 @@ impl GitOperations {
             }
         }
 
-        self.pending_branch_writes.borrow_mut().push(PendingBranchWrite {
-            branch: branch.to_string(),
-            base_commit,
-            index_path,
-        });
+        self.pending_branch_writes
+            .borrow_mut()
+            .push(PendingBranchWrite {
+                branch: branch.to_string(),
+                base_commit,
+                index_path,
+            });
 
         Ok(())
     }
@@ -511,7 +513,10 @@ impl GitOperations {
             .take()
             .expect("stdin was configured as piped")
             .write_all(content.as_bytes())
-            .context(format!("Failed to write '{}' content to git hash-object", file))?;
+            .context(format!(
+                "Failed to write '{}' content to git hash-object",
+                file
+            ))?;
 
         let output = child
             .wait_with_output()
@@ -562,15 +567,16 @@ impl GitOperations {
             .pop()
             .ok_or_else(|| anyhow::anyhow!("No branch write is in progress"))?;
 
-        let tree_output =
-            self.run_git_command_with_index(&pending.index_path, &["write-tree"])?;
+        let tree_output = self.run_git_command_with_index(&pending.index_path, &["write-tree"])?;
         if !tree_output.status.success() {
             return Err(anyhow::anyhow!(
                 "git write-tree failed: {}",
                 String::from_utf8_lossy(&tree_output.stderr)
             ));
         }
-        let new_tree = String::from_utf8_lossy(&tree_output.stdout).trim().to_string();
+        let new_tree = String::from_utf8_lossy(&tree_output.stdout)
+            .trim()
+            .to_string();
 
         if let Some(base_commit) = &pending.base_commit {
             if let Ok(base_tree) = self.rev_parse(&format!("{}^{{tree}}", base_commit)) {
@@ -595,12 +601,17 @@ impl GitOperations {
                 String::from_utf8_lossy(&commit_output.stderr)
             ));
         }
-        let new_commit = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+        let new_commit = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_string();
 
         let ref_name = format!("refs/heads/{}", pending.branch);
         // All-zeros as the expected old value tells `update-ref` the ref must
         // not currently exist — the compare-and-swap for the root-commit case.
-        let expected_old = pending.base_commit.clone().unwrap_or_else(|| "0".repeat(40));
+        let expected_old = pending
+            .base_commit
+            .clone()
+            .unwrap_or_else(|| "0".repeat(40));
         let update_ref_output =
             self.run_git_command(&["update-ref", &ref_name, &new_commit, &expected_old])?;
         if !update_ref_output.status.success() {

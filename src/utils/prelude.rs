@@ -26,7 +26,9 @@ pub fn ensure_hitch_metadata_branch(context: &GlobalContext) -> Result<bool> {
 
     let _ = context.git().fetch_branch("hitch-metadata");
     if context.git().branch_exists_anywhere("hitch-metadata")? {
-        context.git().create_local_branch_from_remote("hitch-metadata")?;
+        context
+            .git()
+            .create_local_branch_from_remote("hitch-metadata")?;
         return Ok(true);
     }
 
