@@ -30,6 +30,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let command = cli.command.expect("checked above");
 
+    // `completion` generates a static script from the clap command tree and
+    // has no git dependency at all, so handle it before constructing
+    // `GlobalContext` below (which requires an actual git repository) —
+    // otherwise `hitch completion zsh > ~/.zsh/completions/_hitch` fails with
+    // "Not in a git repository" when run from outside one.
+    let command = match command {
+        Commands::Completion(args) => {
+            return commands::completion::run(args).map_err(|e| e.into());
+        }
+        other => other,
+    };
+
     // Configure logger for the specific command
     let command_name = match &command {
         Commands::Init(_) => "init",
@@ -44,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(_) => "lock",
         Commands::Unlock(_) => "unlock",
         Commands::Guard(_) => "guard",
-        Commands::Completion(_) => "completion",
+        Commands::Completion(_) => unreachable!("handled above before GlobalContext is created"),
         Commands::Approvals(_) => "approvals",
         Commands::Cleanup(_) => "cleanup",
         Commands::Diff(_) => "diff",
@@ -88,9 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
         Commands::Guard(args) => commands::guard::run(args, &context).map_err(|e| e.into()),
-        Commands::Completion(args) => {
-            commands::completion::run(args, &context).map_err(|e| e.into())
-        }
+        Commands::Completion(_) => unreachable!("handled above before GlobalContext is created"),
         Commands::Approvals(args) => commands::approvals::run(args, &context).map_err(|e| e.into()),
         Commands::Cleanup(args) => commands::cleanup::run(args, &context).map_err(|e| e.into()),
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
@@ -100,14 +110,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Whether a command mutates repository state and therefore needs the
-/// repository-wide lock. Read-only commands (status, tree, diff, completion, and
-/// the read-only approvals subcommands) skip it so they remain usable while a
-/// mutating operation is in progress.
+/// repository-wide lock. Read-only commands (status, tree, diff, and the
+/// read-only approvals subcommands) skip it so they remain usable while a
+/// mutating operation is in progress. `completion` never reaches this
+/// function — it's handled in `main` before a `GlobalContext` even exists.
 fn command_is_mutating(command: &Commands) -> bool {
     match command {
-        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Completion(_) => {
-            false
-        }
+        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) => false,
         Commands::Approvals(args) => args.is_mutating(),
         _ => true,
     }

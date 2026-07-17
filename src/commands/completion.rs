@@ -1,5 +1,4 @@
 use crate::cli::Cli;
-use crate::commands::global_context::GlobalContext;
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 
@@ -11,7 +10,10 @@ pub struct CompletionCommand {
     pub shell: clap_complete::Shell,
 }
 
-pub fn run(args: CompletionCommand, _context: &GlobalContext) -> Result<()> {
+/// Takes no `GlobalContext` — unlike every other command, this doesn't touch
+/// git at all, so it must stay callable without one (see `main.rs`, which
+/// dispatches this before opening a repository).
+pub fn run(args: CompletionCommand) -> Result<()> {
     // Generated straight from the real `Cli` command tree, so it can never
     // drift out of sync with the actual commands/subcommands/flags the way a
     // hand-maintained script per shell would.
