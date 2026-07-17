@@ -38,8 +38,10 @@ pub fn run(args: GuardCommand, context: &GlobalContext) -> Result<()> {
 
 /// Validate that hitch is properly initialized
 fn validate_preconditions(context: &GlobalContext) -> Result<()> {
-    // Check if hitch-metadata branch exists
-    if !context.git().branch_exists("hitch-metadata")? {
+    // Check if hitch-metadata branch exists locally, bootstrapping it from
+    // origin first if a teammate already initialized Hitch (see
+    // `ensure_hitch_metadata_branch`).
+    if !crate::utils::prelude::ensure_hitch_metadata_branch(context)? {
         return Err(anyhow::anyhow!(
             "Hitch is not initialized. Run 'hitch init' first."
         ));

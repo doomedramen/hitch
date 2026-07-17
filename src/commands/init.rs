@@ -1,6 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
-use crate::utils::prelude::{modify_metadata, pre_check};
+use crate::utils::prelude::{ensure_hitch_metadata_branch, modify_metadata, pre_check};
 use anyhow::Result;
 use clap::Args;
 
@@ -17,9 +17,14 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
     pre_check(context)?;
 
-    // Step 2: Ensure hitch-metadata branch does not exist
+    // Step 2: Ensure hitch-metadata branch does not exist locally or on
+    // origin. Checking origin too (and bootstrapping the local branch from it
+    // if found) matters: without it, a second teammate who never fetched
+    // hitch-metadata locally would sail past this guard and create a
+    // divergent root commit instead of correctly being told Hitch is already
+    // initialized.
     context.log_verbose("Checking if hitch-metadata branch already exists...");
-    if context.git().branch_exists("hitch-metadata")? {
+    if ensure_hitch_metadata_branch(context)? {
         return Err(anyhow::anyhow!("Hitch is already initialized in this repository. hitch-metadata branch already exists."));
     }
     context.log_verbose("✓ hitch-metadata branch does not exist");

@@ -4,10 +4,39 @@ use crate::utils::conflict_report::format_conflict_report;
 use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
 
+/// Ensure the `hitch-metadata` branch exists locally, bootstrapping it from
+/// `origin/hitch-metadata` if a teammate already ran `hitch init` and pushed.
+///
+/// `hitch-metadata` is a separate branch, so a plain `git pull` on whatever
+/// branch a teammate is actually working on never creates a local tracking
+/// branch for it — only the person who ran `init` (or previously bootstrapped
+/// it themselves) has it locally. Without this, every other teammate hits a
+/// false "not initialized" error despite the metadata sitting right there on
+/// origin. This never touches an *existing* local branch (staleness is
+/// handled separately, deliberately, by `check_metadata_health`'s
+/// behind-remote check, which errors rather than silently advancing it).
+///
+/// Returns whether the branch exists locally once this returns (already
+/// present, or just bootstrapped) — `false` only when it truly doesn't exist
+/// anywhere (local or origin), meaning Hitch has never been initialized here.
+pub fn ensure_hitch_metadata_branch(context: &GlobalContext) -> Result<bool> {
+    if context.git().branch_exists("hitch-metadata")? {
+        return Ok(true);
+    }
+
+    let _ = context.git().fetch_branch("hitch-metadata");
+    if context.git().branch_exists_anywhere("hitch-metadata")? {
+        context.git().create_local_branch_from_remote("hitch-metadata")?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 /// Check that the hitch-metadata branch is in a healthy state
 ///
 /// This function verifies that the hitch-metadata branch:
-/// 1. Exists locally
+/// 1. Exists locally (bootstrapping it from origin first if needed)
 /// 2. Is not behind the remote (i.e., has all remote changes pulled)
 /// 3. Is not in a merge conflict state
 /// 4. Has a clean working tree (if currently on hitch-metadata)
@@ -21,10 +50,10 @@ use anyhow::{Context, Result};
 pub fn check_metadata_health(context: &GlobalContext) -> Result<()> {
     context.log_verbose("Checking hitch-metadata branch health...");
 
-    // 1. Check that hitch-metadata branch exists locally
-    if !context.git().branch_exists("hitch-metadata")? {
+    // 1. Check that hitch-metadata branch exists locally (or on origin)
+    if !ensure_hitch_metadata_branch(context)? {
         return Err(anyhow::anyhow!(
-            "hitch-metadata branch does not exist locally. Run 'hitch init' to initialize Hitch."
+            "hitch-metadata branch does not exist locally or on origin. Run 'hitch init' to initialize Hitch."
         ));
     }
     context.log_verbose("✓ hitch-metadata branch exists locally");
@@ -320,10 +349,14 @@ where
 {
     context.log_verbose("Accessing hitch metadata...");
 
-    // The branch not existing yet is the init bootstrap case: there is
-    // nothing to health-check or fetch, and the write below will create it
-    // as a root commit.
-    let branch_exists = context.git().branch_exists("hitch-metadata")?;
+    // The branch not existing locally OR on origin is the init bootstrap
+    // case: there is nothing to health-check or fetch, and the write below
+    // will create it as a root commit. If it exists on origin but not
+    // locally (a teammate ran `init` and pushed, we just haven't bootstrapped
+    // our local branch yet), this pulls it down first — otherwise this write
+    // would wrongly take the bootstrap path and create a divergent root
+    // commit, orphaning the team's real metadata history.
+    let branch_exists = ensure_hitch_metadata_branch(context)?;
 
     if branch_exists && !skip_preflight {
         // Check hitch-metadata health before modifying (skipped on
