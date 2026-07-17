@@ -212,77 +212,6 @@ where
     result
 }
 
-/// Switch to a branch, execute a closure, and always return to the original branch
-///
-/// According to the specification:
-/// - Record current branch
-/// - Checkout target branch
-/// - Execute the provided closure while on the target branch
-/// - Always attempt to switch back to the original branch after the closure runs, even if it fails
-pub fn switch_to<F, R>(context: &GlobalContext, target_branch: &str, closure: F) -> Result<R>
-where
-    F: FnOnce() -> Result<R>,
-{
-    context.log_verbose(&format!("Switching to branch '{}'...", target_branch));
-
-    // Record current branch
-    let original_branch = context.git().get_current_branch()?;
-    context.log_verbose(&format!("Current branch recorded: {}", original_branch));
-
-    // CRITICAL: Clean up any uncommitted files before checkout
-    if let Err(e) = context.git().abort_merge_and_clean() {
-        context.log_warning(&format!(
-            "Failed to reset working directory before checkout: {}",
-            e
-        ));
-    }
-
-    // Checkout target branch
-    context.git().checkout_branch(target_branch)?;
-    context.log_verbose(&format!("Switched to branch: {}", target_branch));
-
-    // Execute the closure
-    let result = closure();
-
-    // Always attempt to switch back to original branch
-    context.log_verbose(&format!(
-        "Switching back to original branch: {}",
-        original_branch
-    ));
-
-    // CRITICAL: Clean up any uncommitted files before returning
-    if let Err(e) = context.git().abort_merge_and_clean() {
-        context.log_warning(&format!(
-            "Failed to reset working directory before returning: {}",
-            e
-        ));
-    }
-
-    // Handle detached HEAD case specially
-    let checkout_result = if let Some(commit_hash) = original_branch.strip_prefix("detached-HEAD-")
-    {
-        // Extract commit hash from detached-HEAD-abcdef1 format
-        context.git().checkout_branch(commit_hash)
-    } else {
-        context.git().checkout_branch(&original_branch)
-    };
-
-    if let Err(e) = checkout_result {
-        context.log_error(&format!(
-            "Failed to return to original branch '{}': {}",
-            original_branch, e
-        ));
-        context.log_warning("You may need to manually switch back to your original branch");
-    } else {
-        context.log_verbose(&format!(
-            "Successfully returned to original branch: {}",
-            original_branch
-        ));
-    }
-
-    result
-}
-
 /// Read-only access to hitch metadata without branch switching
 ///
 /// According to the specification (status command note):
@@ -358,11 +287,12 @@ where
 ///
 /// According to the specification:
 /// - Fetch latest hitch-metadata from remote: git fetch origin hitch-metadata
-/// - Temporarily switch to the hitch-metadata branch using switch-to
+/// - Stage changes onto hitch-metadata via a scratch git index (see
+///   `GitOperations::begin_branch_write`) — the user's working directory,
+///   real index, and current branch are never touched
 /// - Load and parse hitch.json
 /// - Execute closure with mutable metadata object (for modification)
 /// - Commit and optionally push changes (warn if push fails or skip with --no-push)
-/// - Always switch back to the original branch afterward
 pub fn modify_metadata<F>(context: &GlobalContext, closure: F) -> Result<()>
 where
     F: FnOnce(&mut HitchConfig) -> Result<()>,
@@ -390,17 +320,14 @@ where
 {
     context.log_verbose("Accessing hitch metadata...");
 
-    // Check if we're already on hitch-metadata branch (for init case)
-    let already_on_metadata_branch = context
-        .git()
-        .get_current_branch()
-        .map(|branch| branch == "hitch-metadata")
-        .unwrap_or(false);
+    // The branch not existing yet is the init bootstrap case: there is
+    // nothing to health-check or fetch, and the write below will create it
+    // as a root commit.
+    let branch_exists = context.git().branch_exists("hitch-metadata")?;
 
-    if !already_on_metadata_branch && !skip_preflight {
-        // Check hitch-metadata health before modifying
-        // Skip this check during init (when already_on_metadata_branch is true)
-        // and on recovery/rollback paths (skip_preflight).
+    if branch_exists && !skip_preflight {
+        // Check hitch-metadata health before modifying (skipped on
+        // recovery/rollback paths via `skip_preflight`).
         check_metadata_health(context)?;
 
         // Fetch latest hitch-metadata from remote
@@ -414,7 +341,13 @@ where
         }
     }
 
-    let modification_closure = || {
+    // Stage every write below into a scratch index tied to hitch-metadata.
+    // Nothing here touches the user's working directory, real index, or
+    // current branch, so there is no checkout to protect and no auto-stash
+    // needed — regardless of what branch the user happens to be on.
+    context.git().begin_branch_write("hitch-metadata")?;
+
+    let result = (|| {
         // Load and parse hitch.json
         context.log_verbose("Loading hitch.json...");
         let config_json = match context
@@ -465,11 +398,13 @@ where
             .git()
             .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
 
-        // Commit changes
+        // Commit changes (any other file staged into this transaction, e.g.
+        // init's .gitignore, is carried over from the branch's existing tree
+        // or was staged earlier via the same `write_file` call).
         context.log_verbose("Committing metadata changes...");
         context
             .git()
-            .add_and_commit(&["hitch.json", ".gitignore"], "Update hitch configuration")?;
+            .commit_branch_write("Update hitch configuration")?;
 
         // Optionally push
         if context.should_push() {
@@ -506,23 +441,15 @@ where
         }
 
         Ok(())
-    };
+    })();
 
-    if already_on_metadata_branch {
-        context.log_verbose("Already on hitch-metadata branch, proceeding with metadata access...");
-        modification_closure()
-    } else {
-        // Auto-stash any uncommitted work on the user's branch before switching to
-        // hitch-metadata. Without this, the switch (and the hitch.json/.gitignore
-        // commit) could fail on, or accidentally sweep in, the user's local changes.
-        // This is the single choke point every metadata mutation flows through, so
-        // stashing here protects all callers (lock/unlock/refresh/cleanup included).
-        // Nesting is safe: with_auto_stash is a no-op on an already-clean tree, so a
-        // caller like promote/demote that already stashed incurs no double-stash.
-        with_auto_stash(context, || {
-            switch_to(context, "hitch-metadata", modification_closure)
-        })
+    if result.is_err() {
+        // Never leave a half-finished transaction behind — it would block
+        // the next `begin_branch_write` call in this process.
+        context.git().abort_branch_write();
     }
+
+    result
 }
 
 /// Execute operations within a locked environment context

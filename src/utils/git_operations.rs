@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use git2::Repository;
-use std::process::Command;
+use std::cell::RefCell;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use super::conflict_report::{parse_conflict_type, ConflictedFile, MergeBaseInfo};
 
@@ -54,6 +56,39 @@ pub struct GitOperations {
     #[allow(dead_code)]
     repo: Repository,
     repo_path: String,
+    /// Stack of branch writes in progress (see
+    /// `begin_branch_write`/`commit_branch_write`). A stack, not a single
+    /// slot, because a caller's `modify_metadata`-style closure can itself
+    /// trigger another metadata write before the outer one commits (e.g. a
+    /// rebuild updating its own timestamp while an approval's outer write is
+    /// still open) — each nested call gets its own independent scratch index,
+    /// and only the innermost (top of stack) is ever the active write target.
+    /// `RefCell` because writes are staged across several `&self` calls
+    /// (`write_file`, then `commit_branch_write`) without a mutable borrow of
+    /// `GitOperations`.
+    pending_branch_writes: RefCell<Vec<PendingBranchWrite>>,
+}
+
+/// A branch write staged into a temporary index file, never touching the
+/// caller's real working directory, index, or current branch.
+struct PendingBranchWrite {
+    branch: String,
+    /// The commit the branch pointed at when the write began, or `None` if
+    /// the branch does not exist yet (the write will create it as a root
+    /// commit). Doubles as the expected old value for the `update-ref`
+    /// compare-and-swap in `commit_branch_write`, so an external concurrent
+    /// writer is detected instead of silently overwritten. Bumped forward
+    /// whenever a nested write for the same branch commits first (see
+    /// `commit_branch_write`), so that legitimate same-process nesting never
+    /// trips the CAS meant for external races.
+    base_commit: Option<String>,
+    /// A reserved-but-absent path: `git read-tree`/`update-index` only starts
+    /// a fresh index when `GIT_INDEX_FILE` points to a path that doesn't
+    /// exist yet — an existing empty file is treated as a corrupt index. The
+    /// path is removed right after being reserved (see `begin_branch_write`)
+    /// so git creates it itself on first use; the `TempPath` guard still
+    /// cleans up whatever git leaves behind once this is dropped.
+    index_path: tempfile::TempPath,
 }
 
 /// Result of `git merge-tree --write-tree --name-only` used for compatibility preflight.
@@ -80,7 +115,11 @@ impl GitOperations {
             .ok_or_else(|| anyhow::anyhow!("Repository has no working directory"))?
             .to_string_lossy()
             .to_string();
-        Ok(GitOperations { repo, repo_path })
+        Ok(GitOperations {
+            repo,
+            repo_path,
+            pending_branch_writes: RefCell::new(Vec::new()),
+        })
     }
 
     /// Return the path to the `.git` directory for this repository
@@ -97,7 +136,11 @@ impl GitOperations {
             .ok_or_else(|| anyhow::anyhow!("Repository has no working directory"))?
             .to_string_lossy()
             .to_string();
-        Ok(GitOperations { repo, repo_path })
+        Ok(GitOperations {
+            repo,
+            repo_path,
+            pending_branch_writes: RefCell::new(Vec::new()),
+        })
     }
 
     pub fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
@@ -234,42 +277,6 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Create an orphan branch (a branch with no history)
-    ///
-    /// An orphan branch is a branch that starts with no commits and no history.
-    /// This is used for the hitch-metadata branch to store configuration separately
-    /// from the main project history.
-    ///
-    /// # Process
-    /// 1. Creates orphan branch with --orphan flag
-    /// 2. Removes all files from the working directory (since orphan branches start clean)
-    ///
-    /// # Arguments
-    /// - `branch_name`: Name of the orphan branch to create
-    ///
-    /// # Returns
-    /// - `Ok(())`: Orphan branch created and cleaned
-    /// - `Err(anyhow::Error)`: If git commands fail
-    pub fn create_orphan_branch(&self, branch_name: &str) -> Result<()> {
-        let output = self.run_git_command(&["checkout", "--orphan", branch_name])?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to create orphan branch '{}': {}",
-                branch_name,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        // Clean working directory after creating orphan branch
-        let _ = self.run_git_command(&["rm", "-rf", "."]).context(format!(
-            "Failed to clean working directory after creating orphan branch '{}'",
-            branch_name
-        ))?;
-
-        Ok(())
-    }
-
     pub fn add_and_commit(&self, files: &[&str], message: &str) -> Result<()> {
         // Add files (use -f to force-add files that might be ignored by .gitignore)
         for file in files {
@@ -347,7 +354,12 @@ impl GitOperations {
     }
 
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
-        use std::io::Write;
+        // Route into the scratch index of the innermost branch write in
+        // progress, if any, instead of the real working directory — see
+        // `begin_branch_write`.
+        if !self.pending_branch_writes.borrow().is_empty() {
+            return self.stage_file_in_pending_write(file, content);
+        }
 
         let file_path = std::path::Path::new(&self.repo_path).join(file);
         let dir = file_path.parent().ok_or_else(|| {
@@ -390,6 +402,233 @@ impl GitOperations {
         ))?;
 
         Ok(())
+    }
+
+    /// Resolve `branch` to its current commit SHA, or `None` if the branch
+    /// does not exist (rather than erroring, unlike `rev_parse`).
+    fn rev_parse_branch_opt(&self, branch: &str) -> Result<Option<String>> {
+        let output = self.run_git_command(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", branch),
+        ])?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(if sha.is_empty() { None } else { Some(sha) })
+    }
+
+    /// Run a git command against a scratch index file instead of the repo's
+    /// real index, so it can never touch the working directory or staging
+    /// area of whatever branch is currently checked out.
+    fn run_git_command_with_index(
+        &self,
+        index_path: &std::path::Path,
+        args: &[&str],
+    ) -> Result<std::process::Output> {
+        let mut cmd = Command::new("git");
+        cmd.args(args);
+        cmd.current_dir(&self.repo_path);
+        cmd.env("LC_ALL", "C");
+        cmd.env("LANG", "C");
+        cmd.env("GIT_INDEX_FILE", index_path);
+        cmd.output().context(format!(
+            "Failed to execute git command: git {} in repository at {}",
+            args.join(" "),
+            self.repo_path
+        ))
+    }
+
+    /// Begin staging file writes for `branch` into a scratch index, so
+    /// `write_file`/`commit_branch_write` can commit a new snapshot onto that
+    /// branch without ever touching the caller's working directory, real
+    /// index, or current branch — no checkout required, no matter what branch
+    /// is currently checked out.
+    ///
+    /// Seeds the scratch index from the branch's current tree if it already
+    /// exists; otherwise the write will create the branch as a root commit
+    /// (the orphan-branch bootstrap case). Safe to call while another branch
+    /// write is already open (e.g. a metadata-modifying closure that itself
+    /// triggers another metadata write) — this one is pushed on top and
+    /// becomes the active target for `write_file` until it commits or aborts.
+    pub fn begin_branch_write(&self, branch: &str) -> Result<()> {
+        let base_commit = self.rev_parse_branch_opt(branch)?;
+        let index_path = tempfile::Builder::new()
+            .prefix("hitch-index-")
+            .tempfile()
+            .context("Failed to create scratch index file")?
+            .into_temp_path();
+        // `git` only starts a fresh index when GIT_INDEX_FILE points to a path
+        // that doesn't exist — reserving the path via a real temp file (above)
+        // guarantees uniqueness, but the empty file it leaves behind reads as
+        // a corrupt index rather than "start fresh". Free the path again so
+        // the first `read-tree`/`update-index` call below creates it properly.
+        std::fs::remove_file(&index_path).context("Failed to free reserved scratch index path")?;
+
+        if let Some(commit) = &base_commit {
+            let output = self.run_git_command_with_index(
+                &index_path,
+                &["read-tree", &format!("{}^{{tree}}", commit)],
+            )?;
+            if !output.status.success() {
+                return Err(anyhow::anyhow!(
+                    "Failed to read tree for branch '{}': {}",
+                    branch,
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+
+        self.pending_branch_writes.borrow_mut().push(PendingBranchWrite {
+            branch: branch.to_string(),
+            base_commit,
+            index_path,
+        });
+
+        Ok(())
+    }
+
+    /// Stage `content` as `file` into the scratch index of the innermost
+    /// branch write in progress (see `begin_branch_write`). Writes the blob
+    /// straight into the object database via `git hash-object -w` — no
+    /// working-directory file is ever created.
+    fn stage_file_in_pending_write(&self, file: &str, content: &str) -> Result<()> {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(&self.repo_path)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn 'git hash-object'")?;
+
+        child
+            .stdin
+            .take()
+            .expect("stdin was configured as piped")
+            .write_all(content.as_bytes())
+            .context(format!("Failed to write '{}' content to git hash-object", file))?;
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to read output of 'git hash-object'")?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git hash-object failed for '{}': {}",
+                file,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let blob_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        let borrow = self.pending_branch_writes.borrow();
+        let pending = borrow
+            .last()
+            .expect("checked non-empty by write_file before calling this");
+        let cacheinfo = format!("100644,{},{}", blob_sha, file);
+        let update_output = self.run_git_command_with_index(
+            &pending.index_path,
+            &["update-index", "--add", "--cacheinfo", &cacheinfo],
+        )?;
+        if !update_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git update-index failed for '{}': {}",
+                file,
+                String::from_utf8_lossy(&update_output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Finalize the innermost branch write in progress: build the tree from
+    /// its scratch index, commit it, and advance the branch ref with a
+    /// compare-and-swap against the base commit captured by
+    /// `begin_branch_write`. If the ref moved for a reason this process
+    /// doesn't know about (an external concurrent writer), the update is
+    /// rejected instead of silently overwriting it.
+    ///
+    /// A no-op write (identical resulting tree) returns the existing commit
+    /// without creating an empty commit or touching the ref, mirroring
+    /// `add_and_commit`'s "nothing to commit" tolerance.
+    pub fn commit_branch_write(&self, message: &str) -> Result<String> {
+        let pending = self
+            .pending_branch_writes
+            .borrow_mut()
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("No branch write is in progress"))?;
+
+        let tree_output =
+            self.run_git_command_with_index(&pending.index_path, &["write-tree"])?;
+        if !tree_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git write-tree failed: {}",
+                String::from_utf8_lossy(&tree_output.stderr)
+            ));
+        }
+        let new_tree = String::from_utf8_lossy(&tree_output.stdout).trim().to_string();
+
+        if let Some(base_commit) = &pending.base_commit {
+            if let Ok(base_tree) = self.rev_parse(&format!("{}^{{tree}}", base_commit)) {
+                if base_tree == new_tree {
+                    return Ok(base_commit.clone());
+                }
+            }
+        }
+
+        let mut commit_args: Vec<&str> = vec!["commit-tree", &new_tree];
+        if let Some(base_commit) = &pending.base_commit {
+            commit_args.push("-p");
+            commit_args.push(base_commit);
+        }
+        commit_args.push("-m");
+        commit_args.push(message);
+
+        let commit_output = self.run_git_command(&commit_args)?;
+        if !commit_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git commit-tree failed: {}",
+                String::from_utf8_lossy(&commit_output.stderr)
+            ));
+        }
+        let new_commit = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+
+        let ref_name = format!("refs/heads/{}", pending.branch);
+        // All-zeros as the expected old value tells `update-ref` the ref must
+        // not currently exist — the compare-and-swap for the root-commit case.
+        let expected_old = pending.base_commit.clone().unwrap_or_else(|| "0".repeat(40));
+        let update_ref_output =
+            self.run_git_command(&["update-ref", &ref_name, &new_commit, &expected_old])?;
+        if !update_ref_output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to update '{}': branch was concurrently modified: {}",
+                pending.branch,
+                String::from_utf8_lossy(&update_ref_output.stderr)
+            ));
+        }
+
+        // Any still-open outer write for the same branch was seeded from the
+        // pre-commit tip; advance its expected-old-value to this commit so
+        // its own eventual CAS reflects this legitimate same-process nested
+        // change rather than mistaking it for an external race.
+        for other in self.pending_branch_writes.borrow_mut().iter_mut() {
+            if other.branch == pending.branch {
+                other.base_commit = Some(new_commit.clone());
+            }
+        }
+
+        Ok(new_commit)
+    }
+
+    /// Discard the innermost branch write in progress without committing, so
+    /// a failed operation never leaves a stale scratch index blocking the
+    /// next `commit_branch_write`/`begin_branch_write` call.
+    pub fn abort_branch_write(&self) {
+        self.pending_branch_writes.borrow_mut().pop();
     }
 
     /// Whether a failed `git fetch` stderr indicates a benign "no remote /

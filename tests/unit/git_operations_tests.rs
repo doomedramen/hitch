@@ -174,28 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_orphan_branch() -> Result<()> {
-        let framework = HitchTestFramework::new()?;
-
-        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
-            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
-
-            // Create orphan branch
-            git_ops.create_orphan_branch("orphan")?;
-
-            let current_branch = git_ops.get_current_branch()?;
-            assert_eq!(current_branch, "orphan");
-
-            // Working directory should be clean
-            assert!(git_ops.is_working_directory_clean()?);
-
-            Ok::<(), anyhow::Error>(())
-        });
-
-        Ok(())
-    }
-
-    #[test]
     fn test_create_branch_from() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 

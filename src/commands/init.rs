@@ -24,20 +24,12 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     }
     context.log_verbose("✓ hitch-metadata branch does not exist");
 
-    // Record the original branch before switching to the orphan branch
-    let original_branch = context.git().get_current_branch()?;
-    context.log_verbose(&format!("Original branch recorded: {}", original_branch));
-
-    // Step 3: Create orphan branch hitch-metadata
-    context.log_info("Creating hitch-metadata branch...");
-    context.git().create_orphan_branch("hitch-metadata")?;
-    context.log_verbose("✓ Created orphan hitch-metadata branch");
-
-    // Step 4: modify_metadata() - Create hitch.json skeleton and .gitignore
+    // Step 3: modify_metadata() - Create hitch-metadata as a root commit with a
+    // hitch.json skeleton and .gitignore. Since the branch doesn't exist yet,
+    // this stages straight into a scratch index and creates the branch via
+    // `git update-ref` — no orphan checkout, and the user's working directory
+    // and current branch are never touched.
     modify_metadata(context, |config: &mut HitchConfig| {
-        // Remove all files/folders except .git (this is already done by create_orphan_branch)
-        context.log_verbose("Cleaning hitch-metadata branch...");
-
         // Create .gitignore
         context.log_verbose("Creating .gitignore...");
         let gitignore_content = "*\n!.gitignore\n!hitch.json\n!hitch/\n!hitch/**\n";
@@ -77,19 +69,6 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
         }
     } else {
         context.log_verbose("Skipping push due to --no-push flag");
-    }
-
-    // Return to original branch
-    context.log_verbose(&format!(
-        "Switching back to original branch: {}",
-        original_branch
-    ));
-    if let Err(e) = context.git().checkout_branch(&original_branch) {
-        context.log_error(&format!(
-            "Failed to return to original branch '{}': {}",
-            original_branch, e
-        ));
-        context.log_warning("You may need to manually switch back to your original branch");
     }
 
     context.log_success("Hitch initialized successfully!");
