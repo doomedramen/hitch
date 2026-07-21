@@ -10,6 +10,7 @@ pub mod diff;
 pub mod guard;
 pub mod init;
 pub mod lock;
+pub mod pr;
 pub mod promote;
 pub mod rebuild;
 pub mod release;

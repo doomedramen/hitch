@@ -51,6 +51,8 @@ pub enum Commands {
     Lock(commands::lock::LockCommand),
     /// Unlock environment to allow deployments
     Unlock(commands::unlock::UnlockCommand),
+    /// Create or open a GitHub pull request for the current branch
+    Pr(commands::pr::PrCommand),
     /// Guard against direct commits to environment branches
     Guard(commands::guard::GuardCommand),
     /// Generate shell completion script

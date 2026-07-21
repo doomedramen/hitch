@@ -31,7 +31,8 @@ pub struct ReleaseCommand {
     #[arg(long)]
     pub no_rebuild_dependents: bool,
 
-    /// Use squash merges instead of merge commits (does NOT preserve ancestry for stacked branches)
+    /// Use squash merges instead of merge commits (does NOT preserve ancestry for stacked branches;
+    /// GitHub will NOT auto-detect merged PRs in squash mode — use --no-ff (default) for GitHub PR workflows)
     #[arg(long)]
     pub squash: bool,
 }

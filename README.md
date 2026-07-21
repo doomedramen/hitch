@@ -201,6 +201,56 @@ hitch approvals list --status pending
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed approval workflow documentation.
 
+## 🔀 GitHub Pull Requests with Hitch
+
+When `main` is production and environment branches (`dev`, `qa`) are rebuilt by Hitch, there's no obviously valid branch to target a GitHub PR against — environment branches are force-pushed on every rebuild, which invalidates any open PR.
+
+Hitch solves this by treating `hitch release` as the actual merge step, not GitHub's merge button:
+
+```bash
+hitch branch feature/foo main --to dev --to qa --pr  # creates branch, pushes, opens PR
+git push -u origin feature/foo                        # (done automatically with --pr)
+
+hitch promote feature/foo dev                         # rebuilds/deploys dev only
+hitch promote feature/foo qa                          # rebuilds/deploys qa only
+
+hitch release qa main                                 # one push to main, one prod deploy
+```
+
+### How it works
+
+1. **PRs target `main`.** Opening, reviewing, and approving a PR are read-only operations on GitHub's side — they never write to `main`. The merge button is disabled via a GitHub ruleset, so an approved PR cannot reach production through the GitHub UI.
+
+2. **`hitch release` does `--no-ff` merges** of each promoted branch into the target. When GitHub sees the PR's head commits become reachable from `main`, it automatically marks the PR as **Merged**. No webhooks, no API integration — the PR lifecycle becomes truthful for free.
+
+3. **The PR is open from day one** for code review. Testing and deployment gates (`hitch promote`, `hitch release`) run alongside, not instead of, the PR.
+
+### GitHub configuration
+
+Create a **ruleset on `main`** that restricts who can push, with the identity that runs `hitch release` (ideally a deploy bot) as the only bypass actor:
+
+- The merge button is disabled for everyone — an approved PR cannot reach production through GitHub.
+- Required approvals / required reviews can be layered on (they gate nothing hitch does but keep review discipline visible).
+- Do **not** enable "Require a pull request before merging" — that rule would reject `hitch release`'s own push to `main`.
+
+Hitch's existing environment gates (`requires_approval`, `min_approvals`, `lock`) remain the release-time authority, as today.
+
+### `hitch pr` command
+
+For existing branches that were not created via `hitch branch --pr`:
+
+```bash
+hitch pr                  # infers PR base from promotion targets, pushes, runs gh pr create
+hitch pr --title "Add login" --draft
+hitch pr --base develop   # override inferred base
+```
+
+The PR base is inferred from the shared `base` branch of all environments the branch is promoted to.
+
+### Squash releases
+
+`hitch release --squash` rewrites commits, so GitHub cannot auto-detect the merge. Use normal `--no-ff` merges (the default) when using GitHub PRs so the PR lifecycle stays accurate.
+
 ## 📦 Installation
 
 ### Cargo (Recommended)
