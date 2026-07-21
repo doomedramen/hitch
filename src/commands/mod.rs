@@ -7,6 +7,7 @@ pub mod cleanup;
 pub mod completion;
 pub mod demote;
 pub mod diff;
+pub mod doctor;
 pub mod guard;
 pub mod init;
 pub mod lock;

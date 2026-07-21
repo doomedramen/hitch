@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(_) => "lock",
         Commands::Unlock(_) => "unlock",
         Commands::Pr(_) => "pr",
+        Commands::Doctor(_) => "doctor",
         Commands::Guard(_) => "guard",
         Commands::Completion(_) => unreachable!("handled above before GlobalContext is created"),
         Commands::Approvals(_) => "approvals",
@@ -101,6 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
         Commands::Pr(args) => commands::pr::run(args, &context).map_err(|e| e.into()),
+        Commands::Doctor(args) => commands::doctor::run(args, &context).map_err(|e| e.into()),
         Commands::Guard(args) => commands::guard::run(args, &context).map_err(|e| e.into()),
         Commands::Completion(_) => unreachable!("handled above before GlobalContext is created"),
         Commands::Approvals(args) => commands::approvals::run(args, &context).map_err(|e| e.into()),
@@ -118,7 +120,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// function — it's handled in `main` before a `GlobalContext` even exists.
 fn command_is_mutating(command: &Commands) -> bool {
     match command {
-        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) => false,
+        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Doctor(_) => {
+            false
+        }
         Commands::Approvals(args) => args.is_mutating(),
         _ => true,
     }

@@ -102,7 +102,7 @@ pub(crate) fn run_gh_pr_create(
     body: Option<&str>,
     draft: bool,
 ) -> Result<()> {
-    let gh_path = match which_gh() {
+    let gh_path = match crate::utils::gh::find_gh() {
         Some(p) => p,
         None => {
             let cmd = build_gh_command(head, base, title, body, draft);
@@ -170,30 +170,3 @@ fn build_gh_command(
     parts.join(" ")
 }
 
-fn which_gh() -> Option<String> {
-    let output = Command::new("which")
-        .arg("gh")
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-
-    // Fallback: try running `gh --version` to see if it's available
-    let status = Command::new("gh")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-
-    if status.success() {
-        Some("gh".to_string())
-    } else {
-        None
-    }
-}

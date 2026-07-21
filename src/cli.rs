@@ -53,6 +53,8 @@ pub enum Commands {
     Unlock(commands::unlock::UnlockCommand),
     /// Create or open a GitHub pull request for the current branch
     Pr(commands::pr::PrCommand),
+    /// Check that 'gh' is installed, authenticated, and has the scopes 'hitch pr' needs
+    Doctor(commands::doctor::DoctorCommand),
     /// Guard against direct commits to environment branches
     Guard(commands::guard::GuardCommand),
     /// Generate shell completion script

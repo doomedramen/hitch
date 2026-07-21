@@ -5,6 +5,7 @@ pub mod confirm;
 pub mod conflict_report;
 pub mod diff;
 pub mod file_lock;
+pub mod gh;
 pub mod git_error;
 pub mod git_operations;
 pub mod hooks;

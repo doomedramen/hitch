@@ -102,6 +102,15 @@ The tradeoff is merge fixes. Because Hitch repeatedly composes branches against 
 # Create a new feature branch and set up promotion targets
 hitch branch feature/foo develop --to dev --to qa
 
+# Open a GitHub PR (infers base from promotion targets)
+hitch pr
+
+# Create branch, set targets, and open PR in one command
+hitch branch feature/foo main --to dev --to qa --pr
+
+# Diagnose gh setup for hitch pr
+hitch doctor
+
 # Promote/demote branches through environments
 hitch promote feature/new-api dev
 hitch demote feature/new-api dev
@@ -246,6 +255,20 @@ hitch pr --base develop   # override inferred base
 ```
 
 The PR base is inferred from the shared `base` branch of all environments the branch is promoted to.
+
+### `hitch doctor` command
+
+Verify that `gh` is installed, authenticated, and has the scopes `hitch pr` needs:
+
+```bash
+hitch doctor
+# gh found on PATH (/usr/bin/gh)
+# Authenticated to github.com as martin@example.com (active)
+#   Scopes: repo, workflow
+# All checks passed — 'hitch pr' should work.
+```
+
+`hitch doctor` checks for `gh` on PATH, authentication status against each GitHub host, and that the classic token carries the `repo` scope. It's safe to run anytime — it only reads, never writes.
 
 ### Squash releases
 
