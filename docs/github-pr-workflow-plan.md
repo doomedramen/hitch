@@ -1,6 +1,8 @@
 # Plan: GitHub PR workflow for hitch-managed repositories
 
-Status: **proposed** (design agreed, not yet implemented)
+Status: **implemented** — `hitch pr` / `hitch doctor` ship in this repo; the
+GitHub-side ruleset has been applied to a real repository (see "Reference
+implementation" below) as the template for adopting this on other repos.
 
 ## Problem
 
@@ -79,16 +81,47 @@ Abandoned feature: close the PR, `hitch demote`. No residue anywhere.
 
 ### Required GitHub configuration
 
-A **ruleset on `main`** that *restricts who can push*, with the deploy identity
-that runs `hitch release` (ideally a bot account or deploy key, not humans) as
-the only bypass actor.
+A **repository ruleset on `main`** (not classic branch protection — see below)
+with a rule that blocks all pushes except from a named bypass actor:
 
-- The merge button is disabled for everyone else — an approved PR cannot reach
-  production through GitHub.
-- Required approvals / required reviews can be layered on as desired; they
-  gate nothing hitch does, but keep review discipline visible.
-- Do **not** use "require a pull request before merging" — that rule would
-  reject `hitch release`'s own push to `main`.
+- **Rule: `update`** ("Restrict updates" in the UI) — blocks every push to
+  `main`, including PR-merge-button clicks (merging is a push), for anyone not
+  on the bypass list. Add `deletion` and `non_fast_forward` too for
+  belt-and-braces, though classic protection's force-push/deletion settings
+  already cover that if present.
+- **Bypass actor: a dedicated team** containing only the people/identities
+  allowed to run `hitch release`. Rulesets can't name one specific individual
+  directly as a bypass actor — only a role (org owner / repo admin), a team,
+  a GitHub App, or a deploy key — and role-based bypass readmits everyone with
+  that role. A small team scoped to exactly the intended people is the way to
+  get a precise allowlist.
+- Do **not** add the `pull_request` rule ("require a pull request before
+  merging") — that would let non-bypass actors merge via an approved PR
+  instead of being blocked outright, and would also reject `hitch release`'s
+  own push unless it's separately exempted.
+- Required approvals / required reviews (via classic protection, which layers
+  independently) can stay on as desired; they gate nothing hitch does, but
+  keep review discipline visible.
+
+**Why a ruleset and not classic branch protection's "Restrict who can push":**
+classic protection's admin bypass (`enforce_admins`) is a single all-or-nothing
+switch — if it's off, *every* repo admin/org owner bypasses the push
+restriction, not just the intended release identities; if it's on, admins also
+get blocked by `required_pull_request_reviews`, which breaks `hitch release`'s
+own direct push. Rulesets support an explicit bypass list independent of
+admin/owner role, which is the only way to name exactly the intended people.
+
+**Known residual gap:** GitHub cannot distinguish "pushed via `git push`" from
+"pushed by clicking the PR merge button" for the same identity — both are just
+a push. So bypass-listed humans can still technically click merge on an
+approved PR. Disabling the repo's PR merge methods entirely is *not* a fix for
+this: GitHub requires at least one merge method to stay enabled, and even if
+it didn't, disabling them wouldn't stop a bypass actor anyway (bypass exempts
+them from the same rule that would otherwise block the merge-button push).
+The only real fixes are (a) use a non-human bypass identity (bot/deploy key)
+so no human can ever merge via GitHub, or (b) accept it as a process-discipline
+risk among a small, aware set of people. Prefer (a) when practical; (b) is a
+reasonable interim choice for a small trusted team.
 
 Hitch's existing environment gates (`requires_approval`, `min_approvals`,
 `lock`) remain the release-time authority, as today.
@@ -117,10 +150,26 @@ Out of scope for now (revisit only if needed): syncing GitHub PR approvals
 into hitch's approval gate, blocking `hitch promote`/`release` on PR review
 state, or any GitHub API integration beyond shelling out to `gh`.
 
+## Reference implementation
+
+Applied to `Pikl-Insurance/qab` as the first real adoption of this design:
+
+- Org team `hitch-release`, members are the people who run `hitch release`
+  against that repo.
+- A repository ruleset on `main` (`deletion` + `non_fast_forward` + `update`
+  rules, bypass = the `hitch-release` team, no `pull_request` rule).
+- PR merge methods left as-is (GitHub won't allow disabling all of them, and
+  it wouldn't have closed the residual gap above regardless) — the team chose
+  process discipline for that residual risk over switching to a bot identity.
+
+Use this shape (team + ruleset) as the template when adopting the workflow on
+another hitch-managed repo; adjust the team's members and the repo/ruleset
+names per repo.
+
 ## Open questions
 
 - Is there an org/compliance policy that forbids PRs even *targeting* `main`?
   (That is the only scenario where a separate PR-target branch would be
   reconsidered.)
-- Which identity runs `hitch release` in practice (human release managers vs a
-  deploy bot), i.e. who goes on the ruleset bypass list?
+- For future repos: bot/deploy-key bypass identity, or a human-membership team
+  with accepted process-discipline risk (as chosen for qab)?

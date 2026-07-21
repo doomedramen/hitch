@@ -228,7 +228,7 @@ hitch release qa main                                 # one push to main, one pr
 
 ### How it works
 
-1. **PRs target `main`.** Opening, reviewing, and approving a PR are read-only operations on GitHub's side — they never write to `main`. The merge button is disabled via a GitHub ruleset, so an approved PR cannot reach production through the GitHub UI.
+1. **PRs target `main`.** Opening, reviewing, and approving a PR are read-only operations on GitHub's side — they never write to `main`. A GitHub ruleset blocks the push that clicking "Merge" would attempt, for anyone except the accounts allowed to run `hitch release` — so an approved PR can't reach production through the GitHub UI for anyone else.
 
 2. **`hitch release` does `--no-ff` merges** of each promoted branch into the target. When GitHub sees the PR's head commits become reachable from `main`, it automatically marks the PR as **Merged**. No webhooks, no API integration — the PR lifecycle becomes truthful for free.
 
@@ -236,11 +236,15 @@ hitch release qa main                                 # one push to main, one pr
 
 ### GitHub configuration
 
-Create a **ruleset on `main`** that restricts who can push, with the identity that runs `hitch release` (ideally a deploy bot) as the only bypass actor:
+Create a **repository ruleset on `main`** (not classic branch protection — see below) with an `update` rule (blocks all pushes, including merge-button clicks), bypassed only by the accounts allowed to run `hitch release`:
 
-- The merge button is disabled for everyone — an approved PR cannot reach production through GitHub.
-- Required approvals / required reviews can be layered on (they gate nothing hitch does but keep review discipline visible).
-- Do **not** enable "Require a pull request before merging" — that rule would reject `hitch release`'s own push to `main`.
+- Rulesets can't bypass one specific person directly — only a role (org owner / repo admin), a team, a GitHub App, or a deploy key, and role-based bypass readmits everyone with that role. Create a small dedicated team scoped to exactly the intended release identities and bypass that team.
+- Do **not** enable "Require a pull request before merging" — that rule lets non-bypass actors merge via an approved PR instead of being blocked outright, and would separately reject `hitch release`'s own push unless exempted.
+- Required approvals / required reviews (via classic protection, which layers independently) can stay on — they gate nothing hitch does but keep review discipline visible.
+
+**Why a ruleset, not classic branch protection's "Restrict who can push":** classic protection's admin bypass (`enforce_admins`) is all-or-nothing — off, and *every* repo admin/org owner bypasses the restriction, not just your intended release identities; on, and admins also get blocked by required PR reviews, breaking `hitch release`'s own push. Rulesets support an explicit bypass list independent of admin/owner role.
+
+**Residual gap:** GitHub can't tell "pushed via `git push`" apart from "pushed by clicking Merge" for the same identity — both are just a push. So bypass-listed accounts can still technically click merge on an approved PR; only non-bypass accounts are fully blocked. Disabling the repo's PR merge methods doesn't fix this (GitHub requires at least one enabled, and it wouldn't stop a bypass actor anyway). Use a bot/deploy-key bypass identity if no human should ever be able to merge via GitHub; otherwise this is a process-discipline tradeoff for whoever's on the bypass team.
 
 Hitch's existing environment gates (`requires_approval`, `min_approvals`, `lock`) remain the release-time authority, as today.
 
@@ -263,7 +267,7 @@ Verify that `gh` is installed, authenticated, and has the scopes `hitch pr` need
 ```bash
 hitch doctor
 # gh found on PATH (/usr/bin/gh)
-# Authenticated to github.com as martin@example.com (active)
+# Authenticated to github.com as your-github-username (active)
 #   Scopes: repo, workflow
 # All checks passed — 'hitch pr' should work.
 ```
