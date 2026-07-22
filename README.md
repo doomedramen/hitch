@@ -102,11 +102,11 @@ The tradeoff is merge fixes. Because Hitch repeatedly composes branches against 
 # Create a new feature branch and set up promotion targets
 hitch branch feature/foo develop --to dev --to qa
 
+# Create a branch and set up promotion targets
+hitch branch feature/foo main --to dev --to qa
+
 # Open a GitHub PR (infers base from promotion targets)
 hitch pr
-
-# Create branch, set targets, and open PR in one command
-hitch branch feature/foo main --to dev --to qa --pr
 
 # Diagnose gh setup for hitch pr
 hitch doctor
@@ -217,8 +217,9 @@ When `main` is production and environment branches (`dev`, `qa`) are rebuilt by 
 Hitch solves this by treating `hitch release` as the actual merge step, not GitHub's merge button:
 
 ```bash
-hitch branch feature/foo main --to dev --to qa --pr  # creates branch, pushes, opens PR
-git push -u origin feature/foo                        # (done automatically with --pr)
+git checkout -b feature/foo main                       # create branch
+hitch branch feature/foo main --to dev --to qa         # set promotion targets
+hitch pr                                               # push to origin and open PR
 
 hitch promote feature/foo dev                         # rebuilds/deploys dev only
 hitch promote feature/foo qa                          # rebuilds/deploys qa only
@@ -250,7 +251,7 @@ Hitch's existing environment gates (`requires_approval`, `min_approvals`, `lock`
 
 ### `hitch pr` command
 
-For existing branches that were not created via `hitch branch --pr`:
+Open a GitHub PR for the current branch:
 
 ```bash
 hitch pr                  # infers PR base from promotion targets, pushes, runs gh pr create
