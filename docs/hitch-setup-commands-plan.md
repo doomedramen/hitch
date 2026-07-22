@@ -9,142 +9,236 @@ Onboarding a new repo onto hitch's GitHub PR workflow (see
 human doing a sequence of `gh api` calls by hand: work out which branches need
 protecting, discover that a single person can't be a ruleset bypass actor,
 create a team, build a ruleset in the right shape, sanity-check it, then flip
-it live. That's exactly what happened setting this up for `Pikl-Insurance/qab`
-in practice — a careful, correct, but entirely manual GitHub-CLI session.
+it live.
 
-`hitch setup` is a namespace for interactive commands that do this kind of
-one-time repo configuration, discovering what they can from the repo's actual
-state and asking for the parts that are genuinely a human decision. The qab
-session is the worked example / informal spec for the first one.
+`hitch setup` automates this — plus, with a public GitHub App, closes the
+residual gap where bypass-listed humans could still click "Merge" in the UI.
 
-First command: **`hitch setup rules`** — configure the GitHub-side push
-restriction that makes the PR workflow safe.
+## Architecture: public GitHub App "Hitch"
 
-## What `hitch setup rules` does
+**One public GitHub App, installed per-repo, reused by all hitch users.**
 
-Modeled directly on the manual qab sequence, in the same order:
+- **App identity**: a public GitHub App called "Hitch", created once and
+  installed on any repo via the GitHub apps directory or direct install URL.
+- **Permissions**: Contents: Write, Metadata: Read — the minimum needed to
+  push to protected branches.
+- **Client ID**: public, compiled into the hitch binary.
+- **Private key**: held by a minimal backend service (Cloudflare Worker or
+  similar). Never distributed — the CLI never sees it.
+- **Bypass**: the ruleset on `main` (and any other protected branches) bypasses
+  the Hitch GitHub App. Since the app is a non-human identity and only
+  `hitch release` pushes as the app, no human can click merge in the UI — the
+  residual gap is closed.
 
-1. **Preconditions.** Hitch is initialized (`hitch-metadata` exists). `gh` is
-   installed, authenticated, and has the scopes needed to manage rulesets and
-   teams — reuse `hitch doctor`'s checks here rather than duplicating them;
-   extend `hitch doctor` if it needs a scope check beyond `repo` (managing
-   rulesets/teams needs `admin:org` and repo-admin access, which `gh auth
-   status` scopes alone won't fully capture — see Open Questions).
+### Token flow
 
-2. **Discover candidate branches.** Read `hitch.json` and collect the distinct
-   `base` values across all environments (e.g. `main`). These are the
-   branches that PRs will eventually need to land on and that must stay
-   "hitch-release-only." Present them as a checklist — don't assume every base
-   needs protecting (e.g. a base that's itself another hitch environment's
-   branch, if nesting is ever supported, would already be force-pushed by
-   hitch and shouldn't get this treatment).
+```
+hitch setup                              hitch release
+    │                                        │
+    ├─ OAuth device flow ──────────────────► │
+    │  (GitHub authorizes user)              │
+    │                                        │
+    ├─ Open browser: install app on repo ──► │
+    │                                        │
+    ├─ Exchange OAuth token ──► Backend ──►  ├─ Request installation token ──► Backend
+    │  for setup config         (Worker)     │  (identifies self via setup config)
+    │  ◄── setup config (signed)              │  ◄── installation token (1hr, JWT-signed)
+    │                                        │
+    ├─ Store config locally                  ├─ GIT_ASKPASS="hitch askpass"
+    │  (~/.config/hitch/<repo>.json)         │  git push ──► uses token
+    │                                        │
+    ├─ Create ruleset (gh api)               │
+    │  bypass: Hitch GitHub App              │
+    └─ Activate                              └─
+```
 
-3. **Check existing GitHub state before proposing anything.**
-   - Existing classic branch protection on the target branch: surface it
-     (required reviews, status checks, `enforce_admins`). Rulesets layer with
-     classic protection — most restrictive combination wins — so silently
-     adding a ruleset on top without showing what's already there risks
-     confusing double-enforcement (e.g. review counts stacking).
-   - Existing rulesets targeting the branch: if one already looks like this
-     pattern, offer to view/adjust it rather than create a duplicate.
-   - Existing teams that look like a bypass team for this repo (naming
-     convention TBD, e.g. `<repo>-release` or a hitch-authored marker in the
-     team description) — offer to reuse rather than create a new one on every
-     re-run.
+### Token backend
 
-4. **Ask who bypasses — never infer this.** This is the one genuinely human
-   decision: which accounts are allowed to run `hitch release` against this
-   branch. Do not guess it from commit history, existing admin lists, or
-   anything else — org/repo admin status is not the same thing as "should be
-   allowed to release," as the qab session's own admin audit showed (7 repo
-   admins, 3 org owners, but only 3 people who should actually bypass).
-   Offer:
-   - Select an existing team (list org teams).
-   - Create a new team, prompting for a name and member logins.
-   - Note (don't auto-configure): a GitHub App or deploy key is also a valid
-     bypass actor and is the only way to fully close the "bypass actor can
-     still click merge" gap (see step 6) — point at this as an option for
-     teams that want it, without building bot/App provisioning in v1.
+Single endpoint on a serverless function (e.g. Cloudflare Worker):
 
-5. **Build the ruleset, disabled, and show it before touching enforcement.**
-   Same shape learned from qab:
-   - `target: branch`, conditions matching the chosen branch(es).
-   - Rules: `update` (the actual push restriction — blocks direct pushes
-     *and* merge-button clicks for non-bypass actors), plus `deletion` and
-     `non_fast_forward` for completeness.
-   - Bypass: the team/actor chosen in step 4, `bypass_mode: always`.
-   - Explicitly **not** the `pull_request` ("require a pull request before
-     merging") rule — that would let non-bypass actors merge via an approved
-     PR instead of being blocked, and would separately fight `hitch release`'s
-     own push unless bypassed too.
-   - Create with `enforcement: disabled`, print the equivalent of `gh ruleset
-     view` for confirmation, and require an explicit confirm before a second
-     call flips it to `active`. Never create directly into `active` — this
-     two-step create-then-activate is the safety property that mattered most
-     in the manual session (it's what let the exact rule/bypass JSON get
-     eyeballed before it did anything).
+```
+POST /token
+  Body: { "setup_token": "<signed-setup-payload>" }
+  → Verifies the setup token is valid (HMAC-signed by the same backend)
+  → Signs a JWT with the Hitch app's private key
+  → POST /app/installations/{id}/access_tokens (GitHub API)
+  → Returns { "token": "<installation-access-token>", "expires_at": "..." }
+```
 
-6. **Disclose the residual gap, don't silently accept or silently fix it.**
-   Print, plainly: bypass-listed accounts can still technically click "Merge"
-   in the GitHub UI, because GitHub can't distinguish a CLI push from a
-   merge-button push for the same identity. This is not something the command
-   should try to paper over (disabling all PR merge methods isn't even
-   possible — GitHub requires at least one enabled, and it wouldn't help
-   bypass actors anyway). State the two real mitigations (bot/deploy-key
-   bypass identity vs. accepted process discipline) and let the user decide,
-   the same choice that came up for qab.
+The setup token is what the CLI stores locally after `hitch setup` completes.
+It contains the installation ID and repo identity, signed by the backend so it
+can't be forged. The CLI sends it to the backend on every `hitch release` to get
+a fresh installation token.
+
+No user data is stored on the backend. It's stateless — every request carries
+its own proof. The only persistent state is the GitHub App's private key
+(environment variable in the Worker).
+
+## `hitch setup` command
+
+Top-level namespace for one-time repo configuration:
+
+```
+hitch setup
+```
+
+Interactive, single command (no subcommands for v1):
+
+### 1. Preconditions
+
+- Hitch is initialized (`hitch-metadata` exists).
+- `gh` is installed and authenticated (reuse `hitch doctor` checks).
+
+### 2. Discover and select branches to protect
+
+- Read `hitch.json`. Collect distinct `base` values across all environments
+  (e.g. `main`). These are pre-checked.
+- List all branches in the repo. Pre-checked bases appear at the top.
+- User can check/uncheck any branch to protect.
+- All checked branches get the same ruleset (block all pushes, bypass = Hitch app).
+
+### 3. GitHub App authentication
+
+- Open browser to the Hitch app's installation URL:
+  `https://github.com/apps/hitch/installations/new`
+- User installs the app on the repo (or selects repos if org-wide).
+- After installation, redirect to a hitch-owned page that displays a one-time
+  setup code.
+- User pastes the setup code back into the CLI.
+- CLI exchanges the code for a signed setup token via the backend.
+- CLI stores the setup token in `~/.config/hitch/<repo-hash>.json`.
+
+(Alternative: OAuth device flow. CLI starts device flow, user opens URL and
+enters code, then installs the app. Backend correlates the OAuth grant with
+the app installation. Simpler UX but requires the backend to track pending
+authorizations for a short window. TBD which flow is cleaner — both are
+standard GitHub patterns.)
+
+### 4. Check existing GitHub state
+
+- Existing classic branch protection on each selected branch: surface it.
+- Existing rulesets targeting the branch: if one already looks like this
+  pattern, offer to view/adjust rather than create a duplicate.
+
+### 5. Build the ruleset, disabled
+
+- `target: branch`, conditions matching the checked branch(es).
+- Rules: `update` (blocks all pushes including merge-button clicks), plus
+  `deletion` and `non_fast_forward`.
+- Bypass: the Hitch GitHub App, `bypass_mode: always`.
+- No `pull_request` rule.
+- Create with `enforcement: disabled`. Print for confirmation.
+- On explicit confirm, flip to `active`.
+
+### 6. No residual gap
+
+Since the bypass actor is a non-human GitHub App, and only `hitch release`
+pushes as the app, no human can click merge in the UI. No caveat to disclose.
+
+## `hitch release` changes
+
+When pushing to a protected branch, `hitch release` authenticates as the
+Hitch GitHub App:
+
+1. Read setup token from `~/.config/hitch/<repo-hash>.json`.
+2. POST to the token backend to get a fresh installation token.
+3. Set `GIT_ASKPASS` to a hitch-provided helper that prints the token.
+4. Push as normal (`git push origin <branch>`).
+5. If the push URL is SSH, rewrite it to HTTPS for this push (the token only
+   works over HTTPS).
+
+Token caching: the installation token is valid for 1 hour. `hitch release` could
+cache it in memory for the session, but since `hitch release` is a single
+invocation, the simplest thing is to fetch a fresh token each time. The backend
+call is a single HTTP round-trip.
+
+Fallback: if the backend is unreachable or no setup token exists, fall back to
+the user's normal git credentials (with a warning that the push may be blocked
+by the ruleset).
+
+## `hitch pr` changes
+
+No changes needed. `hitch pr` creates PRs targeting protected branches, which
+is a read-only operation (zero risk). It continues to use the user's `gh` CLI
+auth.
 
 ## Idempotency
 
-Re-running `hitch setup rules` on an already-configured repo should detect
-the existing team + ruleset and offer to review/adjust rather than duplicate.
-This matters for onboarding UX specifically — someone re-running it to add a
-teammate to the bypass list, or to point it at a second base branch, shouldn't
-end up with two rulesets fighting each other via layering.
+Re-running `hitch setup` on an already-configured repo should:
+- Detect existing rulesets targeting the same branches.
+- Offer to view/adjust rather than create duplicates.
+- Re-authenticate if the setup token is missing or expired.
+- Add/remove protected branches without recreating the ruleset from scratch.
 
-## Implementation notes
+## Implementation plan
 
-- **No new GitHub API dependency.** Everything here is achievable by shelling
-  out to `gh api`, exactly as this session did by hand and as `hitch pr` /
-  `hitch doctor` already do (`src/utils/gh.rs`). Extend that module with
-  small typed helpers (list org teams, create team, add member, list/create/
-  update rulesets, get branch protection) rather than pulling in an HTTP
-  client + auth-token management for a second, parallel path to the same API.
-- **Interactivity.** The existing `Confirm` trait (`src/utils/confirm.rs`) is
-  narrowly scoped to one yes/no prompt (`confirm_force_push_rebuild`) and is
-  mockable in tests (`AlwaysYesConfirm`/`AlwaysNoConfirm`). `hitch setup rules`
-  needs several distinct confirmations and a "pick from a list" prompt (team
-  selection, branch selection) — generalize `Confirm` into a small prompt
-  utility (`confirm(prompt) -> bool`, `select(prompt, options) -> usize`)
-  rather than adding more single-purpose methods to the existing trait, and
-  keep it mockable the same way for tests.
-- **Command shape.** `Commands::Setup(SetupCommand)` with its own
-  `#[command(subcommand)]` enum (`Rules(...)`, room for more later). Read-only
-  discovery steps (listing branches, teams, existing rulesets) don't need the
-  repo-wide lock; the actual create/activate calls are the mutating part.
-- **Testability.** The GitHub-side calls should go through a small trait
-  (like `GitOperations` already does for git) so command logic can be unit
-  tested against a fake, rather than only integration-tested against a real
-  `gh`/GitHub API.
+### Phase 1: GitHub App + backend (me, outside this repo)
 
-## Non-goals for v1
+- Create the Hitch GitHub App in my GitHub account / org.
+  - Name: "Hitch"
+  - Callback URL: `https://hitch.dev/callback` (or similar)
+  - Permissions: Contents: Write, Metadata: Read
+  - Webhook: none (no events needed)
+  - Request user authorization (OAuth) during installation: yes
+- Deploy the token backend (Cloudflare Worker).
+  - `/token` — exchanges setup code/token for installation token.
+  - `/setup` — handles the OAuth callback, correlates installation, returns
+    setup code to user.
+- Test end-to-end with a test repo.
 
-- Bot account / GitHub App / deploy-key *provisioning* — offer it as a bypass
-  option if the user already has one, don't create one.
-- Org-wide rulesets across many repos (Enterprise-only feature).
-- Automatically touching repo-level PR merge-method settings.
-- Custom repository roles as a bypass mechanism (Enterprise-only; not
-  available on GitHub Team, which is what qab is on).
+### Phase 2: `hitch setup` (CLI changes)
+
+- [ ] `Commands::Setup(SetupCommand)` in `src/cli.rs`.
+- [ ] `src/commands/setup.rs` — main setup logic.
+- [ ] `src/utils/setup.rs` — shared helpers (config store, token exchange, etc.).
+- [ ] Branch discovery from `hitch.json` + `git branch`.
+- [ ] Interactive branch selection (extend `src/utils/confirm.rs`).
+- [ ] OAuth / installation flow (open browser, accept pasted code).
+- [ ] Store setup token locally (`~/.config/hitch/`).
+- [ ] Ruleset creation via `gh api` (extend `src/utils/gh.rs`).
+- [ ] Ruleset activation (two-step: create disabled, then activate on confirm).
+- [ ] Idempotency: detect existing setup, offer to adjust.
+
+### Phase 3: `hitch release` changes
+
+- [ ] Load setup token from local config.
+- [ ] Call backend for installation token.
+- [ ] Build `GIT_ASKPASS` helper (or `git -c credential.helper=`).
+- [ ] Handle SSH → HTTPS URL rewrite for the push.
+- [ ] Fallback to user credentials if backend is down.
+- [ ] Warn if pushing to a protected branch without setup (will be blocked).
+
+### Phase 4: polish
+
+- [ ] `hitch doctor` — add checks for setup token validity, backend reachability,
+  ruleset existence.
+- [ ] `hitch setup --check` — non-interactive mode that verifies the current
+  setup is correct (for CI / onboarding scripts).
+- [ ] `hitch setup --remove` — tear down rulesets and remove local config.
+
+## Out of scope for v1
+
+- Self-hosted backend (for users who want to run their own token service).
+- Enterprise GitHub Server support.
+- Deploy key or user-team as alternative bypass actors (the app covers it).
+- Multi-repo / org-level setup in one command.
 
 ## Open questions
 
-- Exact `gh` OAuth scopes needed to manage teams and rulesets via `gh api`
-  (beyond `repo`) — `hitch doctor` may need a second check specific to
-  `hitch setup rules`, separate from the `hitch pr` check it already does.
-- Naming convention for the auto-created bypass team, so re-runs can reliably
-  recognize "this is hitch's team for this repo" versus an unrelated
-  similarly-named team.
-- Whether `hitch setup rules` should also read/write anything into
-  `hitch.json` (e.g. recording the ruleset id it created) so `hitch doctor`
-  could later verify the GitHub-side state matches, not just the local `gh`
-  setup.
+- **OAuth device flow vs. web callback flow**: Device flow is simpler (user
+  enters code from terminal into browser), but GitHub App installation is
+  typically a web redirect flow. Can we chain them? Device flow authorizes the
+  OAuth app → backend gets user token → backend checks if the app is installed →
+  if not, redirects user to installation page → after install, backend
+  correlates via the in-progress device flow session.
+- **Token storage location**: `~/.config/hitch/<sha256(repo-url)>.json` —
+  portable, no dependency on keychain crates. Or use the OS keychain via
+  `security` (macOS), `secret-tool` (Linux), etc. — more secure but platform-
+  specific.
+- **Setup token expiry**: Should it expire? If so, the user re-runs `hitch setup`
+  to get a new one. The installation itself doesn't expire. TTL of 90 days?
+  Infinite? Trade-off between security (token theft window) and UX (re-auth
+  friction).
+- **Backend domain**: Need a domain for the OAuth callback + token endpoint.
+  `hitch.dev`? Hosted on the same gh-pages as the hitch site, with the Worker
+  at `api.hitch.dev`?

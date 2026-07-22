@@ -17,6 +17,7 @@ pub mod rebuild;
 pub mod release;
 pub mod remove;
 pub mod set;
+pub mod setup;
 pub mod status;
 pub mod tree;
 pub mod unlock;

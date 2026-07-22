@@ -4,6 +4,7 @@ use crate::utils::command_helpers::{
     logging::validation_success,
 };
 use crate::utils::prelude::access_metadata_read_only;
+use crate::utils::setup;
 use crate::utils::validation::validate_name;
 use anyhow::Result;
 use clap::Args;
@@ -291,7 +292,15 @@ fn perform_release_core(
         // to publish it manually instead.
         if context.should_push() {
             context.log_info("Pushing release to remote...");
-            if let Err(e) = context.git().push_branch(target_branch) {
+
+            let push_url = resolve_push_url(context, target_branch);
+
+            let branch_result = match &push_url {
+                Ok(Some(url)) => context.git().push_branch_to_url(url, target_branch),
+                _ => context.git().push_branch(target_branch),
+            };
+
+            if let Err(e) = branch_result {
                 context.log_warning(&format!(
                     "Release was applied to the local '{}' branch, but pushing to origin failed: {}",
                     target_branch, e
@@ -300,17 +309,24 @@ fn perform_release_core(
                     "Publish it manually with: git push origin {}",
                     target_branch
                 ));
-            } else if let Err(e) = context.git().push_tag(&tag_name) {
-                context.log_warning(&format!(
-                    "Pushed '{}', but failed to push the release tag '{}': {}",
-                    target_branch, tag_name, e
-                ));
-                context.log_warning(&format!(
-                    "Push the tag manually with: git push origin {}",
-                    tag_name
-                ));
             } else {
-                context.log_verbose("✓ Pushed release and tag to remote");
+                let tag_result = match &push_url {
+                    Ok(Some(url)) => context.git().push_tag_to_url(url, &tag_name),
+                    _ => context.git().push_tag(&tag_name),
+                };
+
+                if let Err(e) = tag_result {
+                    context.log_warning(&format!(
+                        "Pushed '{}', but failed to push the release tag '{}': {}",
+                        target_branch, tag_name, e
+                    ));
+                    context.log_warning(&format!(
+                        "Push the tag manually with: git push origin {}",
+                        tag_name
+                    ));
+                } else {
+                    context.log_verbose("✓ Pushed release and tag to remote");
+                }
             }
         }
 
@@ -778,4 +794,28 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
 
     context.log_info("User confirmed release - proceeding...");
     Ok(true)
+}
+
+fn resolve_push_url(context: &GlobalContext, _target_branch: &str) -> Result<Option<String>> {
+    let remote_url = match context.git().get_remote_url() {
+        Ok(url) => url,
+        Err(_) => return Ok(None),
+    };
+
+    let repo_url = match setup::repo_url_from_remote(&remote_url) {
+        Ok(url) => url,
+        Err(_) => return Ok(None),
+    };
+
+    let config = match setup::load_setup_config(&repo_url) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    context.log_verbose("Pushing with Hitch GitHub App authentication...");
+
+    let token = setup::fetch_installation_token(&config.setup_token)?;
+    let push_url = setup::build_token_url(&remote_url, &token)?;
+
+    Ok(Some(push_url))
 }

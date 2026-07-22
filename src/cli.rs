@@ -63,6 +63,8 @@ pub enum Commands {
     Approvals(commands::approvals::ApprovalsCommand),
     /// Create a new branch and set promotion targets
     Branch(commands::branch::BranchCommand),
+    /// Configure branch protection for hitch PR workflow
+    Setup(commands::setup::SetupCommand),
     /// Remove local branches that are no longer promoted to any environment
     Cleanup(commands::cleanup::CleanupCommand),
     /// Preview the commits each promoted branch would add on rebuild

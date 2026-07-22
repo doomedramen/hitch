@@ -64,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Diff(_) => "diff",
         Commands::Set(_) => "set",
         Commands::Branch(_) => "branch",
+        Commands::Setup(_) => "setup",
     };
 
     // Create a new logger configured for this command
@@ -110,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Diff(args) => commands::diff::run(args, &context).map_err(|e| e.into()),
         Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),
         Commands::Branch(args) => commands::branch::run(args, &context).map_err(|e| e.into()),
+        Commands::Setup(args) => commands::setup::run(args, &context).map_err(|e| e.into()),
     }
 }
 
@@ -120,7 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// function — it's handled in `main` before a `GlobalContext` even exists.
 fn command_is_mutating(command: &Commands) -> bool {
     match command {
-        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Doctor(_) => {
+        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Doctor(_)
+        | Commands::Setup(_) => {
             false
         }
         Commands::Approvals(args) => args.is_mutating(),

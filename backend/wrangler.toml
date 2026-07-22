@@ -1,0 +1,12 @@
+name = "hitch-token-backend"
+main = "src/index.ts"
+compatibility_date = "2025-03-03"
+
+[vars]
+HITCH_APP_ID = ""
+HITCH_CLIENT_ID = ""
+HITCH_CLIENT_SECRET = ""
+HITCH_SETUP_SECRET = ""
+
+# ── Secrets (set via `wrangler secret put`) ──
+# HITCH_PRIVATE_KEY  — the GitHub App's PEM private key

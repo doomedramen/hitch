@@ -1,9 +1,14 @@
 //! Shared helpers for locating and inspecting the GitHub CLI (`gh`).
 //!
-//! Used by both `hitch pr` (which shells out to `gh pr create`) and
-//! `hitch doctor` (which diagnoses whether that shell-out is likely to work).
+//! Used by `hitch pr` (which shells out to `gh pr create`), `hitch doctor`
+//! (which diagnoses whether that shell-out is likely to work), and
+//! `hitch setup` (which manages rulesets via `gh api`).
 
+use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::process::Command;
+
+// ── gh binary discovery ────────────────────────────────────────────
 
 /// Locate the `gh` binary. Returns `None` if it isn't on PATH / runnable.
 pub fn find_gh() -> Option<String> {
@@ -31,6 +36,8 @@ pub fn find_gh() -> Option<String> {
         None
     }
 }
+
+// ── auth status parsing ────────────────────────────────────────────
 
 /// One authenticated account as reported by `gh auth status` (one host can
 /// have more than one logged-in account).
@@ -136,6 +143,198 @@ fn parse_auth_status(raw: &str) -> Vec<GhAuthAccount> {
     accounts
 }
 
+// ── gh api helpers ─────────────────────────────────────────────────
+
+/// Run `gh api <endpoint>` and return the raw JSON output.
+fn gh_api(endpoint: &str, flags: &[&str]) -> Result<String> {
+    let gh = find_gh().context("gh CLI not found on PATH")?;
+    let mut cmd = Command::new(&gh);
+    cmd.arg("api");
+    cmd.arg(endpoint);
+    for flag in flags {
+        cmd.arg(flag);
+    }
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run 'gh api {}'", endpoint))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!(
+            "gh api {} failed: {}",
+            endpoint,
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Run `gh api` with a JSON body via stdin.
+fn gh_api_post(endpoint: &str, body: &str, flags: &[&str]) -> Result<String> {
+    let gh = find_gh().context("gh CLI not found on PATH")?;
+    let mut cmd = Command::new(&gh);
+    cmd.arg("api");
+    cmd.arg(endpoint);
+    cmd.arg("--input").arg("-");
+    for flag in flags {
+        cmd.arg(flag);
+    }
+    cmd.arg("-X").arg("POST");
+
+    use std::process::Stdio;
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to spawn 'gh api {}'", endpoint))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(body.as_bytes())
+            .context("Failed to write request body to gh api")?;
+    }
+
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!(
+            "gh api {} failed: {}",
+            endpoint,
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ── repo info ──────────────────────────────────────────────────────
+
+/// Extract owner/repo from a git remote URL.
+pub fn owner_repo_from_remote() -> Result<(String, String)> {
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .context("Failed to get origin remote URL")?;
+
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Handle HTTPS: https://github.com/owner/repo.git
+    // Handle SSH:   git@github.com:owner/repo.git
+    let path = if let Some(rest) = url.strip_prefix("https://github.com/") {
+        rest.to_string()
+    } else if let Some(rest) = url.strip_prefix("git@github.com:") {
+        rest.to_string()
+    } else {
+        return Err(anyhow::anyhow!(
+            "Could not parse owner/repo from remote URL: {}",
+            url
+        ));
+    };
+
+    let path = path.trim_end_matches(".git");
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() < 2 {
+        return Err(anyhow::anyhow!(
+            "Could not parse owner/repo from remote URL: {}",
+            url
+        ));
+    }
+
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+// ── branch listing ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct GhBranch {
+    pub name: String,
+}
+
+/// List branches via `gh api`.
+pub fn list_remote_branches(owner: &str, repo: &str) -> Result<Vec<GhBranch>> {
+    let endpoint = format!("/repos/{}/{}/branches?per_page=100", owner, repo);
+    let output = gh_api(&endpoint, &["--jq", ".[].name"])?;
+
+    Ok(output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .map(|name| GhBranch { name })
+        .collect())
+}
+
+// ── rulesets ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct GhRuleset {
+    pub id: u64,
+    pub name: String,
+    pub enforcement: String,
+    pub bypass_actors: Option<Vec<serde_json::Value>>,
+    pub rules: Option<Vec<serde_json::Value>>,
+    pub conditions: Option<serde_json::Value>,
+}
+
+/// List rulesets for a repo.
+pub fn list_rulesets(owner: &str, repo: &str) -> Result<Vec<GhRuleset>> {
+    let endpoint = format!("/repos/{}/{}/rulesets?per_page=100", owner, repo);
+    let output = gh_api(&endpoint, &[])?;
+    let rulesets: Vec<GhRuleset> = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse rulesets: {}", output))?;
+    Ok(rulesets)
+}
+
+/// Get a single ruleset by ID.
+pub fn get_ruleset(owner: &str, repo: &str, ruleset_id: u64) -> Result<GhRuleset> {
+    let endpoint = format!("/repos/{}/{}/rulesets/{}", owner, repo, ruleset_id);
+    let output = gh_api(&endpoint, &[])?;
+    let ruleset: GhRuleset = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse ruleset: {}", output))?;
+    Ok(ruleset)
+}
+
+/// Create a ruleset with the given JSON body.
+pub fn create_ruleset_raw(owner: &str, repo: &str, body: &str) -> Result<u64> {
+    let endpoint = format!("/repos/{}/{}/rulesets", owner, repo);
+    let output = gh_api_post(&endpoint, body, &[])?;
+
+    let created: serde_json::Value = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse created ruleset: {}", output))?;
+
+    created
+        .get("id")
+        .and_then(|id| id.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("Created ruleset has no id in response: {}", output))
+}
+
+/// Activate a ruleset (set enforcement to "active").
+pub fn activate_ruleset(owner: &str, repo: &str, ruleset_id: u64) -> Result<()> {
+    let body = serde_json::json!({
+        "enforcement": "active",
+    });
+    let body_str = serde_json::to_string_pretty(&body)?;
+
+    let endpoint = format!("/repos/{}/{}/rulesets/{}", owner, repo, ruleset_id);
+    gh_api_post(&endpoint, &body_str, &["-X", "PUT"])?;
+
+    Ok(())
+}
+
+/// Delete a ruleset.
+pub fn delete_ruleset(owner: &str, repo: &str, ruleset_id: u64) -> Result<()> {
+    let endpoint = format!("/repos/{}/{}/rulesets/{}", owner, repo, ruleset_id);
+    gh_api(&endpoint, &["-X", "DELETE"])?;
+    Ok(())
+}
+
+// ── tests ──────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +363,33 @@ mod tests {
     fn parses_not_logged_in_output() {
         let raw = "You are not logged into any GitHub hosts. Run gh auth login to authenticate.\n";
         assert!(parse_auth_status(raw).is_empty());
+    }
+
+    #[test]
+    fn parses_owner_repo_from_https_url() {
+        let result = parse_remote_url("https://github.com/doomedramen/hitch.git");
+        assert_eq!(result, Some(("doomedramen".to_string(), "hitch".to_string())));
+    }
+
+    #[test]
+    fn parses_owner_repo_from_ssh_url() {
+        let result = parse_remote_url("git@github.com:doomedramen/hitch.git");
+        assert_eq!(result, Some(("doomedramen".to_string(), "hitch".to_string())));
+    }
+
+    fn parse_remote_url(url: &str) -> Option<(String, String)> {
+        let path = if let Some(rest) = url.strip_prefix("https://github.com/") {
+            rest.to_string()
+        } else if let Some(rest) = url.strip_prefix("git@github.com:") {
+            rest.to_string()
+        } else {
+            return None;
+        };
+        let path = path.trim_end_matches(".git");
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+        Some((parts[0].to_string(), parts[1].to_string()))
     }
 }

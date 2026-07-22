@@ -17,5 +17,6 @@ pub mod progress;
 pub mod rebuild_lock;
 pub mod repo_lock;
 pub mod rollback;
+pub mod setup;
 pub mod snapshot;
 pub mod validation;
