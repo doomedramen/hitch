@@ -699,48 +699,6 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Push a branch to an explicit URL (used for token-authenticated pushes).
-    pub fn push_branch_to_url(&self, url: &str, branch: &str) -> Result<()> {
-        let output = self.run_git_command(&["push", url, branch])?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to push branch '{}': {}",
-                branch,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Push a tag to an explicit URL.
-    pub fn push_tag_to_url(&self, url: &str, tag_name: &str) -> Result<()> {
-        let output = self.run_git_command(&["push", url, tag_name])?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to push tag '{}': {}",
-                tag_name,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Get the origin remote URL.
-    pub fn get_remote_url(&self) -> Result<String> {
-        let output = self.run_git_command(&["remote", "get-url", "origin"])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to get origin remote URL: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    }
-
     pub fn force_push_branch(&self, branch: &str) -> Result<()> {
         let output =
             self.run_git_command(&["push", "origin", branch, "--force", "--set-upstream"])?;

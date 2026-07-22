@@ -171,8 +171,9 @@ fn gh_api(endpoint: &str, flags: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Run `gh api` with a JSON body via stdin.
-fn gh_api_post(endpoint: &str, body: &str, flags: &[&str]) -> Result<String> {
+/// Run `gh api` with a JSON body via stdin. Adds `-X POST` unless the
+/// caller already provides a method override in flags.
+fn gh_api_with_body(endpoint: &str, body: &str, flags: &[&str], default_method: &str) -> Result<String> {
     let gh = find_gh().context("gh CLI not found on PATH")?;
     let mut cmd = Command::new(&gh);
     cmd.arg("api");
@@ -181,7 +182,11 @@ fn gh_api_post(endpoint: &str, body: &str, flags: &[&str]) -> Result<String> {
     for flag in flags {
         cmd.arg(flag);
     }
-    cmd.arg("-X").arg("POST");
+
+    let has_method = flags.windows(2).any(|w| w[0] == "-X");
+    if !has_method {
+        cmd.arg("-X").arg(default_method);
+    }
 
     use std::process::Stdio;
     cmd.stdin(Stdio::piped());
@@ -302,7 +307,7 @@ pub fn get_ruleset(owner: &str, repo: &str, ruleset_id: u64) -> Result<GhRuleset
 /// Create a ruleset with the given JSON body.
 pub fn create_ruleset_raw(owner: &str, repo: &str, body: &str) -> Result<u64> {
     let endpoint = format!("/repos/{}/{}/rulesets", owner, repo);
-    let output = gh_api_post(&endpoint, body, &[])?;
+    let output = gh_api_with_body(&endpoint, body, &[], "POST")?;
 
     let created: serde_json::Value = serde_json::from_str(&output)
         .with_context(|| format!("Failed to parse created ruleset: {}", output))?;
@@ -321,7 +326,7 @@ pub fn activate_ruleset(owner: &str, repo: &str, ruleset_id: u64) -> Result<()> 
     let body_str = serde_json::to_string_pretty(&body)?;
 
     let endpoint = format!("/repos/{}/{}/rulesets/{}", owner, repo, ruleset_id);
-    gh_api_post(&endpoint, &body_str, &["-X", "PUT"])?;
+    gh_api_with_body(&endpoint, &body_str, &["-X", "PUT"], "POST")?;
 
     Ok(())
 }

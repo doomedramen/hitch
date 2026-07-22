@@ -50,17 +50,8 @@ tokio = { version = "1.49", features = ["full"] }
 # for atomic, crash-safe repo/rebuild locks.
 fs4 = "1"
 
-# Lightweight HTTP client for OAuth and token exchange
-ureq = { version = "3", features = ["json"] }
-
-# JWT signing for GitHub App installation tokens
-jsonwebtoken = "9"
-
 # Interactive terminal prompts for setup
 inquire = "0.7"
-
-# SHA-256 hashing for repo URL → config filename mapping
-sha2 = "0.10"
 
 # Temporary files (used in git_operations scratch-index)
 tempfile = "3.25"
@@ -68,6 +59,7 @@ tempfile = "3.25"
 [dev-dependencies]
 tempfile = "3.25"
 parking_lot = "0.12"
+sha2 = "0.10"
 
 [features]
 default = []

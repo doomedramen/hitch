@@ -5,7 +5,6 @@ use crate::utils::setup;
 use anyhow::{Context, Result};
 use clap::Args;
 use inquire::{Confirm, MultiSelect};
-use std::io::Write;
 
 #[derive(Args)]
 pub struct SetupCommand {}
@@ -14,7 +13,6 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     context.log_info("Hitch setup — configure GitHub branch protection for PR workflow\n");
 
     let (owner, repo) = gh::owner_repo_from_remote()?;
-    let repo_url = format!("https://github.com/{}/{}", owner, repo);
     context.log_info(&format!("Repository: {}/{}", owner, repo));
 
     let gh_path = gh::find_gh()
@@ -26,6 +24,8 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
             "gh is not authenticated. Run 'gh auth login' first."
         ));
     }
+
+    // ── Branch selection ────────────────────────────────────────────
 
     let (branches, pre_selected) = discover_branches(context, &owner, &repo)?;
 
@@ -47,10 +47,35 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
         return Ok(());
     }
 
-    context.log_info(&format!(
-        "\nProtecting: {}\n",
-        selected.join(", ")
-    ));
+    context.log_info(&format!("\nProtecting: {}\n", selected.join(", ")));
+
+    // ── Deploy key setup ────────────────────────────────────────────
+
+    let key_path = setup::key_path(&owner, &repo);
+
+    if setup::is_setup(&owner, &repo) {
+        context.log_info(&format!(
+            "Found existing deploy key at {}",
+            key_path.display()
+        ));
+    } else {
+        context.log_info("Generating deploy key for bot-authenticated pushes...");
+        setup::generate_deploy_key(&owner, &repo)?;
+        context.log_success(&format!(
+            "Generated SSH key at {}",
+            key_path.display()
+        ));
+
+        context.log_info("Adding deploy key to repository...");
+        setup::add_deploy_key_to_repo(&owner, &repo, &gh_path)?;
+        context.log_success("Deploy key added to repository.");
+
+        context.log_info("Configuring git to use deploy key...");
+        setup::configure_git_ssh(&owner, &repo)?;
+        context.log_success("Git configured to use deploy key for this repository.");
+    }
+
+    // ── Ruleset ─────────────────────────────────────────────────────
 
     let existing = gh::list_rulesets(&owner, &repo).unwrap_or_default();
     let hitch_ruleset = existing.iter().find(|r| r.name == "hitch-protection");
@@ -70,21 +95,12 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
         }
     }
 
-    let config = match setup::load_setup_config(&repo_url) {
-        Some(config) => {
-            context.log_info("Found existing Hitch setup. Reusing authentication.");
-            config
-        }
-        None => authenticate_with_hitch_app(context, &repo_url)?,
-    };
-
     let body = serde_json::json!({
         "name": "hitch-protection",
         "target": "branch",
         "enforcement": "disabled",
         "bypass_actors": [{
-            "actor_id": config.installation_id,
-            "actor_type": "Integration",
+            "actor_type": "DeployKey",
             "bypass_mode": "always"
         }],
         "conditions": {
@@ -101,25 +117,36 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     });
 
     let body_str = serde_json::to_string_pretty(&body)?;
-    context.log_verbose(&format!("\nRuleset to create:\n{}\n", body_str));
+    context.log_verbose(&format!("\nRuleset:\n{}\n", body_str));
 
     context.log_info("Creating ruleset (disabled)...");
-    let ruleset_id = gh::create_ruleset_raw(&owner, &repo, &body_str)?;
-    context.log_success(&format!("Created ruleset (id: {})", ruleset_id));
+
+    let ruleset_id = if let Some(rs) = hitch_ruleset {
+        // Update existing ruleset
+        let endpoint = format!("/repos/{}/{}/rulesets/{}", owner, repo, rs.id);
+        let _ = gh_put(&gh_path, &endpoint, &body_str)?;
+        context.log_success(&format!("Updated ruleset (id: {})", rs.id));
+        rs.id
+    } else {
+        gh::create_ruleset_raw(&owner, &repo, &body_str)?
+    };
+
+    if hitch_ruleset.is_none() {
+        context.log_success(&format!("Created ruleset (id: {})", ruleset_id));
+    }
 
     context.log_info("\nRuleset details:");
     context.log_info(&format!("  Name: hitch-protection"));
     context.log_info(&format!("  Branches: {}", selected.join(", ")));
     context.log_info("  Rules: update, deletion, non_fast_forward");
-    context.log_info(&format!(
-        "  Bypass: Hitch GitHub App (installation #{})",
-        config.installation_id
-    ));
+    context.log_info("  Bypass: All deploy keys");
 
-    let activate = Confirm::new("Activate this ruleset? (This will block all direct pushes and PR merges to the protected branches)")
-        .with_default(false)
-        .prompt()
-        .context("Confirmation cancelled")?;
+    let activate = Confirm::new(
+        "Activate this ruleset? (This will block all direct pushes and PR merges to the protected branches)"
+    )
+    .with_default(false)
+    .prompt()
+    .context("Confirmation cancelled")?;
 
     if !activate {
         context.log_info(&format!(
@@ -131,8 +158,13 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
 
     gh::activate_ruleset(&owner, &repo, ruleset_id)?;
     context.log_success("Ruleset activated.\n");
+
+    context.log_info(&format!(
+        "SSH key: {}",
+        key_path.display()
+    ));
     context.log_success(
-        "Setup complete! Protected branches can now only receive pushes via 'hitch release'.",
+        "Setup complete! Protected branches can now only receive pushes via 'hitch release' (which uses the deploy key).",
     );
 
     Ok(())
@@ -174,57 +206,28 @@ fn discover_branches(
     Ok((ordered, pre_selected))
 }
 
-fn authenticate_with_hitch_app(
-    context: &GlobalContext,
-    repo_url: &str,
-) -> Result<setup::SetupConfig> {
-    context.log_info("\nAuthenticating with Hitch GitHub App...\n");
+fn gh_put(gh_path: &str, endpoint: &str, body: &str) -> Result<String> {
+    let mut child = std::process::Command::new(gh_path)
+        .args(["api", endpoint, "--input", "-", "-X", "PUT"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Failed to run gh api PATCH")?;
 
-    let device = setup::start_device_flow()?;
-
-    println!("  ┌─────────────────────────────────────────┐");
-    println!("  │  Open this URL in your browser:          │");
-    println!(
-        "  │  {:<43}│",
-        device.verification_uri
-    );
-    println!("  │                                         │");
-    println!("  │  Then enter this code:                   │");
-    println!(
-        "  │    > {} <{:<35}│",
-        device.user_code,
-        ""
-    );
-    println!("  └─────────────────────────────────────────┘");
-    println!();
-
-    context.log_info("Waiting for authorization...");
-
-    let interval = device.interval.max(1);
-    let mut token = None;
-
-    for attempt in 0..60 {
-        std::thread::sleep(std::time::Duration::from_secs(interval));
-        match setup::poll_for_token(&device.device_code)? {
-            Some(t) => {
-                token = Some(t);
-                break;
-            }
-            None => {
-                if attempt % 5 == 4 {
-                    let _ = std::io::stderr()
-                        .write_all(format!("  Still waiting (attempt {})...\r", attempt + 1).as_bytes());
-                }
-            }
-        }
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(body.as_bytes())
+            .context("Failed to write body to gh api")?;
     }
 
-    let token = token.ok_or_else(|| {
-        anyhow::anyhow!("Timed out waiting for authorization. Try 'hitch setup' again.")
-    })?;
+    let output = child.wait_with_output()
+        .context("Failed to wait for gh api")?;
 
-    context.log_success("Authorization received!");
-    context.log_info("Exchanging token for setup configuration...");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("gh api {} failed: {}", endpoint, stderr.trim()));
+    }
 
-    setup::exchange_token_for_setup(&token.access_token, repo_url)
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
