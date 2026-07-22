@@ -156,6 +156,8 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     gh::activate_ruleset(&owner, &repo, ruleset_id)?;
     context.log_success("Ruleset activated.\n");
 
+    setup::save_protection_cache(&owner, &repo, &selected, ruleset_id)?;
+
     context.log_info(&format!("SSH key: {}", key_path.display()));
     context.log_success(
         "Setup complete! Protected branches can now only receive pushes via 'hitch release' (which uses the deploy key).",
@@ -179,15 +181,19 @@ fn discover_branches(
     base_branches.sort_unstable();
     base_branches.dedup();
 
+    let mut env_branches: Vec<String> = config.environments.keys().cloned().collect();
+    env_branches.sort_unstable();
+
     let all_branches = gh::list_remote_branches(owner, repo).unwrap_or_default();
 
     let mut ordered: Vec<String> = Vec::new();
     let mut pre_selected: Vec<usize> = Vec::new();
 
-    for base in &base_branches {
-        if all_branches.iter().any(|b| b.name == *base) && !ordered.contains(base) {
+    // Pre-check env branches and base branches that exist on remote
+    for branch in env_branches.iter().chain(base_branches.iter()) {
+        if all_branches.iter().any(|b| b.name == *branch) && !ordered.contains(branch) {
             pre_selected.push(ordered.len());
-            ordered.push(base.clone());
+            ordered.push(branch.clone());
         }
     }
 

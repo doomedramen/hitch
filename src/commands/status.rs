@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig};
 use crate::utils::prelude::access_metadata_read_only;
+use crate::utils::setup;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Args;
@@ -66,6 +67,9 @@ fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 
     // Display summary at the end
     display_status_summary(context, config)?;
+
+    display_protection_status(context, config);
+
     Ok(())
 }
 
@@ -571,4 +575,33 @@ fn display_diff(context: &GlobalContext) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn display_protection_status(context: &GlobalContext, config: &HitchConfig) {
+    let (owner, repo) = match crate::utils::gh::owner_repo_from_remote() {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+
+    let cache = match setup::load_protection_cache(&owner, &repo) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let env_names: Vec<String> = config.environments.keys().cloned().collect();
+    let base_names: Vec<String> = config
+        .environments
+        .values()
+        .map(|env| env.base.clone())
+        .collect();
+
+    let unprotected = setup::get_unprotected_branches(&owner, &repo, &env_names, &base_names);
+
+    if !unprotected.is_empty() {
+        println!();
+        context.log_warning(&format!("Unprotected branches: {}", unprotected.join(", ")));
+        context.log_info("Run 'hitch setup' to add them to the protection ruleset.");
+    }
+
+    let _ = cache;
 }
