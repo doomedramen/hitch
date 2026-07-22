@@ -22,16 +22,19 @@ pub fn generate_deploy_key(owner: &str, repo: &str) -> Result<()> {
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .context("Failed to create .ssh directory")?;
+        std::fs::create_dir_all(parent).context("Failed to create .ssh directory")?;
     }
 
     let status = Command::new("ssh-keygen")
         .args([
-            "-t", "ed25519",
-            "-C", &comment,
-            "-f", &path.to_string_lossy(),
-            "-N", "",
+            "-t",
+            "ed25519",
+            "-C",
+            &comment,
+            "-f",
+            &path.to_string_lossy(),
+            "-N",
+            "",
             "-q",
         ])
         .status()
@@ -44,11 +47,7 @@ pub fn generate_deploy_key(owner: &str, repo: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn add_deploy_key_to_repo(
-    owner: &str,
-    repo: &str,
-    gh_path: &str,
-) -> Result<()> {
+pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<()> {
     let path = key_path(owner, repo);
     let pubkey_path = format!("{}.pub", path.display());
     let pubkey = std::fs::read_to_string(&pubkey_path)
@@ -69,9 +68,12 @@ pub fn add_deploy_key_to_repo(
         .args([
             "api",
             &format!("/repos/{}/{}/keys", owner, repo),
-            "--input", "-",
-            "-X", "POST",
-            "-H", "Accept: application/vnd.github+json",
+            "--input",
+            "-",
+            "-X",
+            "POST",
+            "-H",
+            "Accept: application/vnd.github+json",
         ])
         .arg("--silent")
         .stdin(std::process::Stdio::piped())
@@ -93,9 +95,12 @@ pub fn add_deploy_key_to_repo(
             .args([
                 "api",
                 &format!("/repos/{}/{}/keys", owner, repo),
-                "-f", &format!("title={}", title),
-                "-f", &format!("key={}", pubkey),
-                "-f", "read_only=false",
+                "-f",
+                &format!("title={}", title),
+                "-f",
+                &format!("key={}", pubkey),
+                "-f",
+                "read_only=false",
                 "--silent",
             ])
             .status()
@@ -107,7 +112,8 @@ pub fn add_deploy_key_to_repo(
         return Ok(());
     }
 
-    let result = output.wait_with_output()
+    let result = output
+        .wait_with_output()
         .context("Failed to wait for gh api")?;
 
     if !result.status.success() {

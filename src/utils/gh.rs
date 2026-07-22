@@ -173,7 +173,12 @@ fn gh_api(endpoint: &str, flags: &[&str]) -> Result<String> {
 
 /// Run `gh api` with a JSON body via stdin. Adds `-X POST` unless the
 /// caller already provides a method override in flags.
-fn gh_api_with_body(endpoint: &str, body: &str, flags: &[&str], default_method: &str) -> Result<String> {
+fn gh_api_with_body(
+    endpoint: &str,
+    body: &str,
+    flags: &[&str],
+    default_method: &str,
+) -> Result<String> {
     let gh = find_gh().context("gh CLI not found on PATH")?;
     let mut cmd = Command::new(&gh);
     cmd.arg("api");
@@ -353,10 +358,7 @@ mod tests {
         assert_eq!(acc.host, "github.com");
         assert_eq!(acc.account.as_deref(), Some("doomedramen"));
         assert!(acc.active);
-        assert_eq!(
-            acc.scopes,
-            vec!["gist", "read:org", "repo", "workflow"]
-        );
+        assert_eq!(acc.scopes, vec!["gist", "read:org", "repo", "workflow"]);
     }
 
     #[test]
@@ -373,13 +375,19 @@ mod tests {
     #[test]
     fn parses_owner_repo_from_https_url() {
         let result = parse_remote_url("https://github.com/doomedramen/hitch.git");
-        assert_eq!(result, Some(("doomedramen".to_string(), "hitch".to_string())));
+        assert_eq!(
+            result,
+            Some(("doomedramen".to_string(), "hitch".to_string()))
+        );
     }
 
     #[test]
     fn parses_owner_repo_from_ssh_url() {
         let result = parse_remote_url("git@github.com:doomedramen/hitch.git");
-        assert_eq!(result, Some(("doomedramen".to_string(), "hitch".to_string())));
+        assert_eq!(
+            result,
+            Some(("doomedramen".to_string(), "hitch".to_string()))
+        );
     }
 
     fn parse_remote_url(url: &str) -> Option<(String, String)> {

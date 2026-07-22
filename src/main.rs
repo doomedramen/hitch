@@ -122,10 +122,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// function — it's handled in `main` before a `GlobalContext` even exists.
 fn command_is_mutating(command: &Commands) -> bool {
     match command {
-        Commands::Status(_) | Commands::Tree(_) | Commands::Diff(_) | Commands::Doctor(_)
-        | Commands::Setup(_) => {
-            false
-        }
+        Commands::Status(_)
+        | Commands::Tree(_)
+        | Commands::Diff(_)
+        | Commands::Doctor(_)
+        | Commands::Setup(_) => false,
         Commands::Approvals(args) => args.is_mutating(),
         _ => true,
     }

@@ -44,7 +44,13 @@ pub fn run(args: PrCommand, context: &GlobalContext) -> Result<()> {
         }
     }
 
-    run_gh_pr_create(&current_branch, &base, args.title.as_deref(), args.body.as_deref(), args.draft)
+    run_gh_pr_create(
+        &current_branch,
+        &base,
+        args.title.as_deref(),
+        args.body.as_deref(),
+        args.draft,
+    )
 }
 
 pub(crate) fn infer_pr_base(context: &GlobalContext, branch: &str) -> Result<String> {
@@ -63,7 +69,8 @@ pub(crate) fn infer_pr_base(context: &GlobalContext, branch: &str) -> Result<Str
              Cannot infer the PR target base.\n\
              Either specify --base <target> or promote to an environment first:\n\
                hitch promote {} <env>",
-            branch, branch
+            branch,
+            branch
         ));
     }
 
@@ -80,14 +87,19 @@ pub(crate) fn infer_pr_base(context: &GlobalContext, branch: &str) -> Result<Str
                 details.push_str(&format!(
                     "    base '{}': {}\n",
                     _b,
-                    names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    names
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             return Err(anyhow::anyhow!(
                 "Branch '{}' is promoted to environments with different base branches.\n\
                  Cannot choose a PR target automatically.\n\
                  Environments and their bases:\n{}",
-                branch, details
+                branch,
+                details
             ));
         }
     }
@@ -169,4 +181,3 @@ fn build_gh_command(
     }
     parts.join(" ")
 }
-
