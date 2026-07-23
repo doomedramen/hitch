@@ -648,8 +648,23 @@ fn rebuild_dependent_environments(
         };
 
         match rebuild_res {
-            Ok(()) => {
-                context.log_success(&format!("✓ Rebuilt '{}'", env_name));
+            Ok(outcome) => {
+                if outcome.held.is_empty() {
+                    context.log_success(&format!("✓ Rebuilt '{}'", env_name));
+                } else {
+                    context.log_warning(&format!(
+                        "✓ Rebuilt '{}' with {} branch{} held: {}",
+                        env_name,
+                        outcome.held.len(),
+                        if outcome.held.len() == 1 { "" } else { "es" },
+                        outcome
+                            .held
+                            .iter()
+                            .map(|c| c.branch.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
                 rebuild_ok.insert(env_name.clone(), true);
             }
             Err(e) => {

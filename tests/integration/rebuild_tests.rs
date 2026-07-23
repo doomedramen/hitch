@@ -315,53 +315,146 @@ mod tests {
         Ok(())
     }
 
+    /// Set up two branches promoted to `dev` where the second conflicts with
+    /// the first: both modify `shared.txt` incompatibly, after diverging from
+    /// a common `main`. Shared by the eject-default and halt-override tests
+    /// below.
+    fn setup_two_conflicting_branches(env: &TestEnvironment) -> anyhow::Result<()> {
+        env.hitch
+            .run()
+            .args(&["add", "dev"])
+            .execute()?
+            .assert_success();
+
+        // Create a base file on main
+        env.fs.write_file("shared.txt", "base content\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git.run(&["commit", "-m", "Add shared.txt"])?;
+
+        // branch-a modifies shared.txt
+        env.git.run(&["checkout", "-b", "branch-a"])?;
+        env.fs.write_file("shared.txt", "from branch-a\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git
+            .run(&["commit", "-m", "branch-a: update shared.txt"])?;
+        env.git.run(&["checkout", "main"])?;
+
+        // branch-b modifies shared.txt in an incompatible way
+        env.git.run(&["checkout", "-b", "branch-b"])?;
+        env.fs.write_file("shared.txt", "from branch-b\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git
+            .run(&["commit", "-m", "branch-b: update shared.txt"])?;
+        env.git.run(&["checkout", "main"])?;
+
+        // Inject conflicting branches into metadata (bypass promote gating)
+        inject_branches_into_metadata(env, "dev", &["branch-a", "branch-b"])?;
+
+        Ok(())
+    }
+
     #[test]
-    fn test_hitch_rebuild_with_conflicts() -> anyhow::Result<()> {
+    fn test_hitch_rebuild_ejects_conflicting_branch_by_default() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            env.hitch
-                .run()
-                .args(&["add", "dev"])
-                .execute()?
-                .assert_success();
+            setup_two_conflicting_branches(env)?;
 
-            // Create a base file on main
-            env.fs.write_file("shared.txt", "base content\n")?;
-            env.git.run(&["add", "-f", "shared.txt"])?;
-            env.git.run(&["commit", "-m", "Add shared.txt"])?;
-
-            // branch-a modifies shared.txt
-            env.git.run(&["checkout", "-b", "branch-a"])?;
-            env.fs.write_file("shared.txt", "from branch-a\n")?;
-            env.git.run(&["add", "-f", "shared.txt"])?;
-            env.git
-                .run(&["commit", "-m", "branch-a: update shared.txt"])?;
-            env.git.run(&["checkout", "main"])?;
-
-            // branch-b modifies shared.txt in an incompatible way
-            env.git.run(&["checkout", "-b", "branch-b"])?;
-            env.fs.write_file("shared.txt", "from branch-b\n")?;
-            env.git.run(&["add", "-f", "shared.txt"])?;
-            env.git
-                .run(&["commit", "-m", "branch-b: update shared.txt"])?;
-            env.git.run(&["checkout", "main"])?;
-
-            // Inject conflicting branches into metadata (bypass promote gating)
-            inject_branches_into_metadata(env, "dev", &["branch-a", "branch-b"])?;
-
-            // Rebuild should refuse before creating any temp branch
+            // Default policy is eject: the rebuild succeeds, excluding only
+            // the conflicting branch, instead of blocking on it.
             let result = env
                 .hitch
                 .run()
                 .args(&["--no-push", "rebuild", "dev"])
                 .execute()?;
             result
-                .assert_failure()
-                .assert_stderr_contains("Cannot rebuild 'dev' — compatibility check failed")
+                .assert_success()
+                .assert_stdout_contains("held")
                 // branch-a composes cleanly first, so branch-b's conflict is
                 // attributed to branch-a (the branch it actually collides
                 // with), not to main.
+                .assert_stdout_contains("branch-b conflicts with branch-a")
+                .assert_stdout_contains("shared.txt");
+
+            // dev was built from branch-a alone
+            let dev_content = env.git.run(&["show", "dev:shared.txt"])?;
+            assert_eq!(dev_content.stdout().trim(), "from branch-a");
+
+            // No hitch-tmp-* branch leaked
+            let branches = env.git.run(&["branch", "--list", "hitch-tmp-*"])?;
+            assert!(
+                branches.stdout().trim().is_empty(),
+                "expected no hitch-tmp-* branches, got '{}'",
+                branches.stdout().trim()
+            );
+
+            // No worktree leaked
+            let worktrees = env.git.run(&["worktree", "list"])?;
+            assert_eq!(
+                worktrees.stdout().lines().count(),
+                1,
+                "expected only the main worktree, got:\n{}",
+                worktrees.stdout()
+            );
+
+            // User remains on main
+            let branch_out = env.git.run(&["branch", "--show-current"])?;
+            assert_eq!(branch_out.stdout().trim(), "main");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_rebuild_dry_run_reports_held_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_two_conflicting_branches(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev", "--dry-run"])
+                .execute()?;
+            result
+                .assert_success()
+                .assert_stdout_contains("branch-b conflicts with branch-a")
+                .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
+
+            // Dry run must not build or publish anything
+            let dev_exists = env
+                .git
+                .run(&["show-ref", "--verify", "--quiet", "refs/heads/dev"])?
+                .success();
+            assert!(!dev_exists, "dry-run must not create the 'dev' branch");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_rebuild_on_conflict_halt_flag_restores_all_or_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_two_conflicting_branches(env)?;
+
+            // --on-conflict halt overrides the eject default: the rebuild
+            // refuses entirely, before creating any temp branch or worktree,
+            // exactly like the original all-or-nothing behavior.
+            let result = env
+                .hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev", "--on-conflict", "halt"])
+                .execute()?;
+            result
+                .assert_failure()
+                .assert_stderr_contains("Cannot rebuild 'dev' — compatibility check failed")
                 .assert_stderr_contains("branch-b conflicts with branch-a")
                 .assert_stderr_contains("shared.txt");
 
@@ -371,6 +464,16 @@ mod tests {
                 branches.stdout().trim().is_empty(),
                 "expected no hitch-tmp-* branches, got '{}'",
                 branches.stdout().trim()
+            );
+
+            // dev was never built
+            let dev_exists = env
+                .git
+                .run(&["show-ref", "--verify", "--quiet", "refs/heads/dev"])?
+                .success();
+            assert!(
+                !dev_exists,
+                "halted rebuild must not create the 'dev' branch"
             );
 
             // User remains on main

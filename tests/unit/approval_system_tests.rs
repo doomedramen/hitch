@@ -42,6 +42,7 @@ mod tests {
                 "carol@example.com".to_string(),
             ],
             min_approvals: 2,
+            on_conflict: OnConflict::default(),
         }
     }
 
@@ -174,6 +175,7 @@ mod tests {
                 "bob@example.com".to_string(),
             ],
             min_approvals: 2,
+            on_conflict: OnConflict::default(),
         };
         assert!(valid_env.validate_approval_config().is_ok());
 

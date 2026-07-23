@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::types::OnConflict;
 use crate::utils::command_helpers::{ensure_environment_exists, environment::get_locked_by_user};
 use crate::utils::validation::{validate_base_branch_exists, validate_name};
 use anyhow::Result;
@@ -33,6 +34,11 @@ pub struct SetCommand {
     /// Set the complete list of approvers (replaces existing)
     #[arg(long)]
     pub set_approvers: Vec<String>,
+
+    /// How a conflicting promoted branch is handled during rebuild: eject it
+    /// and continue with the rest (default), or halt the whole rebuild
+    #[arg(long)]
+    pub on_conflict: Option<OnConflict>,
 }
 
 pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
@@ -74,6 +80,7 @@ fn has_changes(args: &SetCommand) -> bool {
         || !args.add_approver.is_empty()
         || !args.remove_approver.is_empty()
         || !args.set_approvers.is_empty()
+        || args.on_conflict.is_some()
 }
 
 /// Validate that environment is ready for update
@@ -152,6 +159,10 @@ fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> R
             environment.approvers.join(", ")
         }
     ));
+    context.log_info(&format!(
+        "  Current on_conflict: {:?}",
+        environment.on_conflict
+    ));
 
     context.log_info("\n📝 Changes:");
 
@@ -191,6 +202,13 @@ fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> R
         context.log_info(&format!(
             "  • Set approvers: [{}]",
             args.set_approvers.join(", ")
+        ));
+    }
+
+    if let Some(on_conflict) = args.on_conflict {
+        context.log_info(&format!(
+            "  • on_conflict: {:?} → {:?}",
+            environment.on_conflict, on_conflict
         ));
     }
 
@@ -303,6 +321,12 @@ fn apply_changes(context: &GlobalContext, args: &SetCommand) -> Result<()> {
                 "  ✓ Set approvers to [{}]",
                 environment.approvers.join(", ")
             ));
+        }
+
+        // Update on_conflict policy
+        if let Some(on_conflict) = args.on_conflict {
+            environment.on_conflict = on_conflict;
+            context.log_verbose(&format!("  ✓ Updated on_conflict to {:?}", on_conflict));
         }
 
         // Validate the updated environment AFTER all changes are applied

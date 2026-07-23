@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::types::HitchConfig;
+use crate::types::{HitchConfig, OnConflict};
 use crate::utils::conflict_report::format_conflict_report;
 use crate::utils::git_operations::GitOperations;
 use crate::utils::progress::StepLogger;
@@ -582,6 +582,13 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
     })
 }
 
+/// What a rebuild actually did, beyond publishing the environment branch.
+pub struct RebuildOutcome {
+    /// Branches that were excluded from this build because they conflicted
+    /// (only ever non-empty under `OnConflict::Eject`).
+    pub held: Vec<CompatibilityConflict>,
+}
+
 /// Rebuild an environment by composing its promoted branches into a new
 /// environment branch, in an isolated worktree.
 ///
@@ -602,7 +609,12 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
 ///   branch untouched or the new one fully published, never in between.
 /// - Automatic rollback on any failure (the worktree is torn down; the real
 ///   environment branch is never mutated unless the whole build succeeded).
-pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
+/// - A branch that conflicts is handled per the environment's `on_conflict`
+///   policy (phase 3): `Eject` (the default) excludes it from the
+///   composition and keeps going — matching the eject-and-continue policy
+///   every merge queue surveyed converges on — while `Halt` aborts the whole
+///   rebuild on the first conflict, as phase 1 always did.
+pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
         env_name
@@ -682,9 +694,15 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         }
     };
 
-    // Step 2..N: compose the promoted branches, in order, in the worktree.
+    // Step 2..N: compose the promoted branches, in order, in the worktree. A
+    // branch that conflicts is either ejected — skipped, recorded as held,
+    // with later branches checked against what actually accumulated without
+    // it, so nine healthy branches are never blocked by one broken one — or
+    // the whole rebuild halts, per the environment's `on_conflict` policy.
+    let mut held: Vec<CompatibilityConflict> = Vec::new();
     let build_result = (|| -> Result<String> {
         let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
+        let mut last_composed = environment.base.clone();
 
         for (branch, sha) in &pinned_branches {
             logger.step(format!("Merging '{}'", branch));
@@ -693,22 +711,49 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
             match worktree_git.squash_merge(sha, &merge_message) {
                 Ok(()) => {
                     context.log_verbose(&format!("✓ Squash merged '{}' into worktree", branch));
+                    last_composed = branch.clone();
                 }
                 Err(e) => {
                     // Distinguish a genuine merge conflict (report it clearly) from
                     // any other failure (propagate as-is).
                     if worktree_git.has_merge_conflicts().unwrap_or(false) {
                         let conflict_result = worktree_git.current_conflict_result(branch)?;
-                        let conflict_report = format_conflict_report(
-                            branch,
-                            &conflict_result.target_branch,
-                            &environment.base,
-                            env_name,
-                            &conflict_result.conflicted_files,
-                            conflict_result.merge_base.as_ref(),
-                        );
+
+                        if environment.on_conflict == OnConflict::Halt {
+                            let conflict_report = format_conflict_report(
+                                branch,
+                                &conflict_result.target_branch,
+                                &environment.base,
+                                env_name,
+                                &conflict_result.conflicted_files,
+                                conflict_result.merge_base.as_ref(),
+                            );
+                            let _ = worktree_git.abort_merge_and_clean();
+                            return Err(anyhow::anyhow!("{}", conflict_report));
+                        }
+
+                        // Eject: undo the failed attempt (leaving the worktree
+                        // exactly where the last successful merge left it),
+                        // record the hold, and keep going without this branch.
+                        let conflicted_paths: Vec<String> = conflict_result
+                            .conflicted_files
+                            .iter()
+                            .map(|f| f.path.clone())
+                            .collect();
                         let _ = worktree_git.abort_merge_and_clean();
-                        return Err(anyhow::anyhow!("{}", conflict_report));
+                        context.log_warning(&format!(
+                            "⛔ Held '{}' — conflicts with '{}' ({} file{})",
+                            branch,
+                            last_composed,
+                            conflicted_paths.len(),
+                            if conflicted_paths.len() == 1 { "" } else { "s" }
+                        ));
+                        held.push(CompatibilityConflict {
+                            branch: branch.clone(),
+                            conflicts_with: last_composed.clone(),
+                            conflicted_files: conflicted_paths,
+                        });
+                        continue;
                     }
 
                     return Err(e);
@@ -835,7 +880,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
         "✓ Rebuild process completed for environment '{}'",
         env_name
     ));
-    Ok(())
+    Ok(RebuildOutcome { held })
 }
 
 /// Choose a filesystem path for the disposable worktree a rebuild composes

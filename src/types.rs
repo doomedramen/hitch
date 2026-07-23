@@ -2,6 +2,23 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// How `hitch rebuild` handles a promoted branch that conflicts (with the
+/// base branch, or with a branch promoted ahead of it).
+///
+/// See docs/merge-conflict-handling-plan.md — every merge queue surveyed
+/// (GitHub, bors, Mergify, Zuul, GitLab trains) defaults to ejecting the
+/// conflicting item rather than blocking the whole set, so `Eject` is the
+/// default here too. `Halt` restores the original all-or-nothing behavior
+/// for environments where every composition must be human-sanctioned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+pub enum OnConflict {
+    #[default]
+    Eject,
+    Halt,
+}
+
 /// Environment configuration as defined in hitch.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
@@ -37,6 +54,10 @@ pub struct Environment {
     /// Minimum number of approvals required
     #[serde(default = "default_min_approvals")]
     pub min_approvals: usize,
+
+    /// How a conflicting promoted branch is handled during rebuild.
+    #[serde(default)]
+    pub on_conflict: OnConflict,
 }
 
 impl Environment {
@@ -52,6 +73,7 @@ impl Environment {
             requires_approval: false,
             approvers: Vec::new(),
             min_approvals: 1,
+            on_conflict: OnConflict::default(),
         }
     }
 
