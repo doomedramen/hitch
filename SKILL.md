@@ -106,13 +106,23 @@ hitch approvals cancel <request-id>
 ### Maintenance
 ```bash
 hitch guard                             # Guard env branches from direct commits
-hitch cleanup                             # Remove local branches no longer promoted
+hitch cleanup                             # Show local branches no longer promoted (dry-run)
+hitch cleanup --apply                     # Actually delete them
 hitch completion bash > /etc/bash_completion.d/hitch  # Shell completions
 ```
 
 ## Global Flags
 - `--verbose` - Print detailed step-by-step logs
-- `--no-push` - Skip automatic pushes when metadata is committed
+- `--no-push` - Never touch the remote (skips metadata pushes and remote branch replacement)
+- `--yes` / `-y` - Answer "yes" to every confirmation prompt (also `HITCH_YES=1`)
+
+Non-interactive sessions (CI, scripts, AI agents) have no terminal to answer
+prompts, so any command that would confirm a destructive action fails fast with
+a "no interactive terminal" error unless `--yes` is passed.
+
+Per-command `--force` means only "override a lock / approval / safety guard" —
+it never skips a confirmation prompt. `hitch cleanup` uses `--apply` to leave
+dry-run mode.
 
 ## Approval Workflow
 

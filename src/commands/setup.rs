@@ -5,11 +5,20 @@ use crate::utils::setup;
 use anyhow::{Context, Result};
 use clap::Args;
 use inquire::{Confirm, MultiSelect};
+use std::io::IsTerminal;
 
 #[derive(Args)]
 pub struct SetupCommand {}
 
 pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
+    // `setup` is a wizard: branch selection has no sensible non-interactive
+    // default, so --yes cannot stand in for a terminal here.
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow::anyhow!(
+            "'hitch setup' is an interactive wizard and needs a terminal (branch selection has no non-interactive default).\n  Run it yourself in a shell, or configure the ruleset directly with 'gh api'."
+        ));
+    }
+
     context.log_info("Hitch setup — configure GitHub branch protection for PR workflow\n");
 
     let (owner, repo) = gh::owner_repo_from_remote()?;

@@ -53,6 +53,7 @@ pub struct HitchCommandBuilder<'a> {
     args: Vec<String>,
     verbose: bool,
     no_push: bool,
+    yes: bool,
     current_dir: Option<std::path::PathBuf>,
     env: Vec<(String, String)>,
 }
@@ -64,6 +65,7 @@ impl<'a> HitchCommandBuilder<'a> {
             args: Vec::new(),
             verbose: false,
             no_push: true, // Always use --no-push in tests to avoid remote pushes
+            yes: true,     // Tests have no TTY, so auto-confirm prompts by default
             current_dir: None,
             env: Vec::new(),
         }
@@ -105,6 +107,14 @@ impl<'a> HitchCommandBuilder<'a> {
         self
     }
 
+    /// Control whether `--yes` is injected at execution time.
+    ///
+    /// Set to `false` to assert the non-interactive refusal behaviour.
+    pub fn with_yes(mut self, yes: bool) -> Self {
+        self.yes = yes;
+        self
+    }
+
     /// Set working directory for command
     pub fn current_dir(mut self, dir: &Path) -> Self {
         self.current_dir = Some(dir.to_path_buf());
@@ -125,6 +135,15 @@ impl<'a> HitchCommandBuilder<'a> {
         // Add --no-push flag if enabled (default for tests to avoid remote pushes)
         if self.no_push {
             cmd.arg("--no-push");
+        }
+
+        // Add --yes flag (default for tests: no TTY is available to answer prompts)
+        if self.yes {
+            cmd.arg("--yes");
+        } else {
+            // Make sure an inherited HITCH_YES from the developer's shell can't
+            // silently re-enable auto-confirmation.
+            cmd.env_remove("HITCH_YES");
         }
 
         if let Some(dir) = &self.current_dir {

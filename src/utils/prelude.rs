@@ -1029,7 +1029,7 @@ fn safe_replace_environment_branch_for_rebuild(
         ));
         context.log_warning("This action cannot be undone.");
 
-        if context.confirm.confirm_force_push_rebuild(env_name)? {
+        if context.confirm("Do you want to proceed?")? {
             context.log_info(&format!(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name

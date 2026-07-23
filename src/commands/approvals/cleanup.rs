@@ -18,10 +18,6 @@ pub struct CleanupArgs {
     /// Dry run - show what would be deleted without actually deleting
     #[arg(long)]
     pub dry_run: bool,
-
-    /// Skip confirmation prompt
-    #[arg(long)]
-    pub force: bool,
 }
 
 pub fn run(args: CleanupArgs, context: &GlobalContext) -> Result<()> {
@@ -50,8 +46,8 @@ pub fn run(args: CleanupArgs, context: &GlobalContext) -> Result<()> {
     // Show what will be deleted
     display_cleanup_summary(context, &to_delete, args.older_than, total_count)?;
 
-    // Confirm deletion unless --force or --dry-run
-    if !args.force && !args.dry_run && !confirm_cleanup(context, to_delete.len())? {
+    // Confirm deletion unless --dry-run (the global --yes auto-confirms)
+    if !args.dry_run && !confirm_cleanup(context, to_delete.len())? {
         context.log_info("Cleanup cancelled.");
         return Ok(());
     }
@@ -159,23 +155,10 @@ fn display_cleanup_summary(
 }
 
 fn confirm_cleanup(context: &GlobalContext, count: usize) -> Result<bool> {
-    use std::io::{self, Write};
-
     context.log_info("");
     context.log_info("⚠️  This action cannot be undone!");
-    println!();
-    println!(
-        "Type 'yes' to confirm cleanup of {} requests, or anything else to abort:",
-        count
-    );
 
-    // Read user input from stdin
-    let mut input = String::new();
-    print!("> ");
-    io::stdout().flush()?;
-    io::stdin().read_line(&mut input)?;
-
-    Ok(matches!(input.trim().to_lowercase().as_str(), "yes" | "y"))
+    context.confirm(&format!("Confirm cleanup of {} requests?", count))
 }
 
 fn perform_cleanup(context: &GlobalContext, to_delete: &[String]) -> Result<usize> {

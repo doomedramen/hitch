@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logger = Arc::new(Logger::for_command(command_name, cli.verbose));
 
     // Create global context with flags
-    let context = GlobalContext::new(cli.verbose, cli.no_push, logger)?;
+    let context = GlobalContext::new(cli.verbose, cli.no_push, cli.yes, logger)?;
 
     // Acquire a repository-wide lock for mutating commands so two concurrent
     // Hitch operations on the same repo can't clobber each other's branch

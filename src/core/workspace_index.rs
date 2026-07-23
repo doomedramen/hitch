@@ -203,7 +203,7 @@ mod tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(repo.to_str().unwrap(), false, true, logger).unwrap();
+            GlobalContext::new_at_path(repo.to_str().unwrap(), false, true, true, logger).unwrap();
 
         let index = build_workspace_index_model(&context).expect("index");
 

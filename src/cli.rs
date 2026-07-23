@@ -19,9 +19,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub verbose: bool,
 
-    /// Skip automatic pushes when metadata is committed
+    /// Never touch the remote: skip metadata pushes and remote branch replacement
     #[arg(long, global = true)]
     pub no_push: bool,
+
+    /// Answer "yes" to every confirmation prompt (required for non-interactive
+    /// sessions such as CI or an AI agent; also settable via HITCH_YES=1)
+    #[arg(long, short = 'y', global = true, env = "HITCH_YES")]
+    pub yes: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,

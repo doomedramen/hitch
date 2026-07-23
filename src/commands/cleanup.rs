@@ -7,7 +7,7 @@ pub struct CleanupCommand {
     /// Actually delete the candidate branches.
     /// Without this flag the command only shows what would be deleted (dry-run).
     #[arg(long)]
-    pub force: bool,
+    pub apply: bool,
 
     /// Limit candidates to branches not promoted to this specific environment.
     /// Without this option the command considers all environments.
@@ -61,7 +61,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
         return Ok(());
     }
 
-    if args.force {
+    if args.apply {
         context.log_info(&format!("Deleting {} branch(es)...", candidates.len()));
         let mut deleted = 0;
         let mut skipped = 0;
@@ -87,7 +87,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
     } else {
         context.log_info(&format!(
             "Found {} branch(es) not currently promoted{}. \
-             Run 'hitch cleanup --force' to delete them:",
+             Run 'hitch cleanup --apply' to delete them:",
             candidates.len(),
             args.env
                 .as_deref()

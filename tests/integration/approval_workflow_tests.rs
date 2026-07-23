@@ -498,7 +498,7 @@ mod tests {
             let cleanup_result = env
                 .hitch
                 .run()
-                .args(&["approvals", "cleanup", "--older-than", "90", "--force"])
+                .args(&["approvals", "cleanup", "--older-than", "90"])
                 .execute()?;
             cleanup_result
                 .assert_success()
@@ -557,7 +557,7 @@ mod tests {
             let cleanup_no_pending = env
                 .hitch
                 .run()
-                .args(&["approvals", "cleanup", "--older-than", "90", "--force"])
+                .args(&["approvals", "cleanup", "--older-than", "90"])
                 .execute()?;
             cleanup_no_pending
                 .assert_success()
@@ -573,7 +573,6 @@ mod tests {
                     "--older-than",
                     "90",
                     "--include-pending",
-                    "--force",
                 ])
                 .execute()?;
             cleanup_with_pending

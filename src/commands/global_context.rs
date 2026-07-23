@@ -1,4 +1,4 @@
-use crate::utils::confirm::{Confirm, StdinConfirm};
+use crate::utils::confirm::{AlwaysYesConfirm, Confirm, StdinConfirm};
 use crate::utils::git_operations::GitOperations;
 use crate::utils::logging::Logger;
 use crate::utils::output::{ConsoleOutputSink, OutputLevel, OutputSink};
@@ -10,6 +10,8 @@ use std::sync::Arc;
 pub struct GlobalContext {
     pub verbose: bool,
     pub no_push: bool,
+    /// Answer every confirmation prompt with "yes" (global `--yes` / `HITCH_YES=1`).
+    pub assume_yes: bool,
     pub git_ops: Rc<GitOperations>,
     pub logger: Arc<Logger>,
     pub output: Arc<dyn OutputSink>,
@@ -21,16 +23,18 @@ impl GlobalContext {
     pub fn new(
         verbose: bool,
         no_push: bool,
+        assume_yes: bool,
         logger: Arc<Logger>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let git_ops = Rc::new(GitOperations::new()?);
         Ok(GlobalContext {
             verbose,
             no_push,
+            assume_yes,
             git_ops,
             logger,
             output: Arc::new(ConsoleOutputSink),
-            confirm: Arc::new(StdinConfirm),
+            confirm: default_confirm(assume_yes),
         })
     }
 
@@ -38,16 +42,18 @@ impl GlobalContext {
         repo_path: &str,
         verbose: bool,
         no_push: bool,
+        assume_yes: bool,
         logger: Arc<Logger>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let git_ops = Rc::new(GitOperations::new_at_path(repo_path)?);
         Ok(GlobalContext {
             verbose,
             no_push,
+            assume_yes,
             git_ops,
             logger,
             output: Arc::new(ConsoleOutputSink),
-            confirm: Arc::new(StdinConfirm),
+            confirm: default_confirm(assume_yes),
         })
     }
 
@@ -65,7 +71,7 @@ impl GlobalContext {
     #[cfg(test)]
     pub fn new_test(verbose: bool, no_push: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let logger = Arc::new(Logger::for_command("test", verbose));
-        Self::new(verbose, no_push, logger)
+        Self::new(verbose, no_push, false, logger)
     }
 
     pub fn git(&self) -> &GitOperations {
@@ -96,5 +102,21 @@ impl GlobalContext {
 
     pub fn should_push(&self) -> bool {
         !self.no_push
+    }
+
+    /// Ask the user to confirm a destructive action.
+    ///
+    /// Returns `Ok(true)` when the action may proceed. With `--yes` this never
+    /// prompts; without a terminal it errors instead of blocking on stdin.
+    pub fn confirm(&self, prompt: &str) -> Result<bool, anyhow::Error> {
+        self.confirm.confirm(prompt)
+    }
+}
+
+fn default_confirm(assume_yes: bool) -> Arc<dyn Confirm> {
+    if assume_yes {
+        Arc::new(AlwaysYesConfirm)
+    } else {
+        Arc::new(StdinConfirm)
     }
 }

@@ -8,10 +8,6 @@ use clap::Args;
 pub struct CancelArgs {
     /// Approval request ID
     pub request_id: String,
-
-    /// Skip confirmation prompt
-    #[arg(long)]
-    pub force: bool,
 }
 
 pub fn run(args: CancelArgs, context: &GlobalContext) -> Result<()> {
@@ -26,10 +22,8 @@ pub fn run(args: CancelArgs, context: &GlobalContext) -> Result<()> {
     // Step 3: Validate cancellation authorization
     validate_cancellation_authorization(context, &request)?;
 
-    // Step 4: Show request details and ask for confirmation (unless --force)
-    if !args.force {
-        show_cancellation_confirmation(context, &request)?;
-    }
+    // Step 4: Show request details and ask for confirmation (skip with --yes)
+    show_cancellation_confirmation(context, &request)?;
 
     // Step 5: Process the cancellation
     process_cancellation(context, &args)?;
@@ -97,26 +91,12 @@ fn show_cancellation_confirmation(
     context.log_info("⚠️  Are you sure you want to cancel this request?");
     context.log_info("  This action cannot be undone.");
 
-    // Simple confirmation - in a real implementation, you might want a more sophisticated prompt
-    println!();
-    println!("Type 'yes' to confirm cancellation, or anything else to abort:");
-
-    // Read user input from stdin
-    use std::io::{self, Write};
-    let mut input = String::new();
-    print!("> ");
-    io::stdout().flush()?;
-    io::stdin().read_line(&mut input)?;
-
-    match input.trim().to_lowercase().as_str() {
-        "yes" | "y" => {
-            context.log_info("Cancellation confirmed.");
-            Ok(())
-        }
-        _ => {
-            context.log_info("Cancellation aborted.");
-            Err(anyhow::anyhow!("Operation cancelled by user"))
-        }
+    if context.confirm("Confirm cancellation of this request?")? {
+        context.log_info("Cancellation confirmed.");
+        Ok(())
+    } else {
+        context.log_info("Cancellation aborted.");
+        Err(anyhow::anyhow!("Operation cancelled by user"))
     }
 }
 

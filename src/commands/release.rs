@@ -19,7 +19,8 @@ pub struct ReleaseCommand {
     #[arg()]
     pub target_branch: Option<String>,
 
-    /// Force release even if the environment is locked or requires approval
+    /// Override the environment lock and approval requirements.
+    /// This does NOT skip the confirmation prompt — use the global --yes for that.
     #[arg(long)]
     pub force: bool,
 
@@ -46,8 +47,8 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
     // Step 2: Resolve target branch
     let target_branch = resolve_target_branch(context, &args.env_name, args.target_branch)?;
 
-    // Step 3: User confirmation (skip with --force)
-    if !args.force && !confirm_release(context, &args.env_name, &target_branch)? {
+    // Step 3: User confirmation (skip with the global --yes)
+    if !confirm_release(context, &args.env_name, &target_branch)? {
         context.log_info("Release cancelled by user.");
         return Ok(());
     }
@@ -726,8 +727,6 @@ fn topological_environment_order(config: &crate::types::HitchConfig) -> Vec<Stri
 ///
 /// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
 fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str) -> Result<bool> {
-    use std::io::{self, Write};
-
     // Get environment details to show user what will be released
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = config.environments.get(env_name).ok_or_else(|| {
@@ -765,14 +764,7 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
     }
 
     // Prompt for confirmation
-    print!("\nDo you want to continue? [y/N] ");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    let input = input.trim().to_lowercase();
-    if input != "y" && input != "yes" {
+    if !context.confirm("Do you want to continue?")? {
         return Ok(false);
     }
 

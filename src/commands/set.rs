@@ -33,10 +33,6 @@ pub struct SetCommand {
     /// Set the complete list of approvers (replaces existing)
     #[arg(long)]
     pub set_approvers: Vec<String>,
-
-    /// Skip confirmation prompt
-    #[arg(long)]
-    pub force: bool,
 }
 
 pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
@@ -55,7 +51,7 @@ pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
     }
 
     // Step 4: Show what will change and confirm
-    if !args.force && !show_changes(context, &args.env_name, &args)? {
+    if !show_changes(context, &args.env_name, &args)? {
         context.log_info("Update cancelled by user.");
         return Ok(());
     }
@@ -133,8 +129,6 @@ fn validate_preconditions(
 ///
 /// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
 fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> Result<bool> {
-    use std::io::{self, Write};
-
     let config =
         crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = &config.environments[env_name];
@@ -209,14 +203,7 @@ fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> R
     }
 
     // Prompt for confirmation
-    print!("\nDo you want to apply these changes? [y/N] ");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    let input = input.trim().to_lowercase();
-    if input != "y" && input != "yes" {
+    if !context.confirm("Do you want to apply these changes?")? {
         return Ok(false);
     }
 

@@ -25,7 +25,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["set", "dev", "--base", "develop", "--force"])
+                .args(&["set", "dev", "--base", "develop"])
                 .execute()?;
             result
                 .assert_success()
@@ -65,7 +65,6 @@ mod tests {
                     "true",
                     "--add-approver",
                     "alice@example.com",
-                    "--force",
                 ])
                 .execute()?;
             result
@@ -106,7 +105,6 @@ mod tests {
                     "alice@example.com",
                     "--add-approver",
                     "bob@example.com",
-                    "--force",
                 ])
                 .execute()?
                 .assert_success();
@@ -115,7 +113,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["set", "production", "--min-approvals", "2", "--force"])
+                .args(&["set", "production", "--min-approvals", "2"])
                 .execute()?;
             result
                 .assert_success()
@@ -152,7 +150,6 @@ mod tests {
                     "true",
                     "--add-approver",
                     "initial@example.com",
-                    "--force",
                 ])
                 .execute()?
                 .assert_success();
@@ -168,7 +165,6 @@ mod tests {
                     "alice@example.com",
                     "--add-approver",
                     "bob@example.com",
-                    "--force",
                 ])
                 .execute()?;
             result
@@ -215,7 +211,6 @@ mod tests {
                     "alice@example.com",
                     "--add-approver",
                     "bob@example.com",
-                    "--force",
                 ])
                 .execute()?
                 .assert_success();
@@ -224,13 +219,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&[
-                    "set",
-                    "production",
-                    "--remove-approver",
-                    "bob@example.com",
-                    "--force",
-                ])
+                .args(&["set", "production", "--remove-approver", "bob@example.com"])
                 .execute()?;
             result
                 .assert_success()
@@ -273,7 +262,6 @@ mod tests {
                     "1",
                     "--set-approvers",
                     "alice@example.com",
-                    "--force",
                 ])
                 .execute()?
                 .assert_success();
@@ -289,7 +277,6 @@ mod tests {
                     "charlie@example.com",
                     "--set-approvers",
                     "dave@example.com",
-                    "--force",
                 ])
                 .execute()?;
             result
@@ -327,7 +314,7 @@ mod tests {
                 .assert_success();
 
             // Try to set without any changes
-            let result = env.hitch.run().args(&["set", "dev", "--force"]).execute()?;
+            let result = env.hitch.run().args(&["set", "dev"]).execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("No changes specified");
@@ -347,7 +334,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["set", "nonexistent", "--base", "main", "--force"])
+                .args(&["set", "nonexistent", "--base", "main"])
                 .execute()?;
             result
                 .assert_failure()
@@ -375,7 +362,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["set", "dev", "--base", "nonexistent", "--force"])
+                .args(&["set", "dev", "--base", "nonexistent"])
                 .execute()?;
             result
                 .assert_failure()
@@ -403,13 +390,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&[
-                    "set",
-                    "production",
-                    "--add-approver",
-                    "invalid-email",
-                    "--force",
-                ])
+                .args(&["set", "production", "--add-approver", "invalid-email"])
                 .execute()?;
             result
                 .assert_failure()
@@ -437,7 +418,7 @@ mod tests {
             let result = env
                 .hitch
                 .run()
-                .args(&["set", "production", "--min-approvals", "0", "--force"])
+                .args(&["set", "production", "--min-approvals", "0"])
                 .execute()?;
             result
                 .assert_failure()
@@ -480,7 +461,6 @@ mod tests {
                     "1",
                     "--add-approver",
                     "alice@example.com",
-                    "--force",
                 ])
                 .execute()?;
             result
@@ -528,7 +508,6 @@ mod tests {
                     "alice@example.com",
                     "--add-approver",
                     "bob@example.com",
-                    "--force",
                 ])
                 .execute()?
                 .assert_success();

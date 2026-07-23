@@ -56,7 +56,7 @@ mod tests {
         Ok(())
     }
 
-    /// `--force` deletes branches that are fully merged and not promoted.
+    /// `--apply` deletes branches that are fully merged and not promoted.
     #[test]
     fn test_cleanup_force_deletes_merged_branch() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -79,7 +79,7 @@ mod tests {
                 .run(&["merge", "--no-ff", "feat-merged", "-m", "Merge feat-merged"])?;
 
             // It was never promoted, so cleanup should offer it
-            let result = env.hitch.run().args(&["cleanup", "--force"]).execute()?;
+            let result = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("Deleted 'feat-merged'");
@@ -88,7 +88,7 @@ mod tests {
             let branch_list = env.git.run(&["branch", "--list", "feat-merged"])?;
             assert!(
                 branch_list.stdout().trim().is_empty(),
-                "feat-merged should be deleted after --force, but branch still exists"
+                "feat-merged should be deleted after --apply, but branch still exists"
             );
 
             Ok::<(), anyhow::Error>(())

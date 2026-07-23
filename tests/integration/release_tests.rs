@@ -37,7 +37,7 @@ mod tests {
                 result.assert_success();
             }
 
-            // Release the dev environment to main (use --force to skip confirmation in tests)
+            // Release the dev environment to main (--yes is injected by the test runner)
             let result = env
                 .hitch
                 .run()
@@ -46,6 +46,36 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hitch_release_without_yes_refuses_to_prompt() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // No TTY and no --yes: the command must fail fast instead of
+            // blocking forever on stdin.
+            let result = env
+                .hitch
+                .run()
+                .with_yes(false)
+                .args(&["release", "dev", "main"])
+                .execute()?;
+            result
+                .assert_failure()
+                .assert_stderr_contains("no interactive terminal")
+                .assert_stderr_contains("--yes");
 
             Ok::<(), anyhow::Error>(())
         });

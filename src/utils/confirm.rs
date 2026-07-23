@@ -1,15 +1,31 @@
 use anyhow::{Context, Result};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
+/// Abstraction over "ask the user to confirm a destructive action".
+///
+/// Every interactive prompt in Hitch goes through this trait so that a single
+/// global `--yes` (or a non-interactive session) is handled in one place
+/// instead of each command re-implementing a `read_line` loop.
 pub trait Confirm: Send + Sync {
-    fn confirm_force_push_rebuild(&self, env_name: &str) -> Result<bool>;
+    /// Ask `prompt` and return whether the user agreed.
+    ///
+    /// Implementations must never block forever: when there is no terminal to
+    /// read from they return an error telling the caller to pass `--yes`.
+    fn confirm(&self, prompt: &str) -> Result<bool>;
 }
 
 pub struct StdinConfirm;
 
 impl Confirm for StdinConfirm {
-    fn confirm_force_push_rebuild(&self, _env_name: &str) -> Result<bool> {
-        print!("Do you want to proceed? [y/N]: ");
+    fn confirm(&self, prompt: &str) -> Result<bool> {
+        if !io::stdin().is_terminal() {
+            return Err(anyhow::anyhow!(
+                "Refusing to prompt for confirmation: no interactive terminal.\n  Prompt was: {}\n  Re-run with --yes (or set HITCH_YES=1) to confirm automatically.",
+                prompt
+            ));
+        }
+
+        print!("{} [y/N]: ", prompt);
         io::stdout()
             .flush()
             .context("Failed to flush stdout for user prompt")?;
@@ -26,7 +42,7 @@ impl Confirm for StdinConfirm {
 pub struct AlwaysYesConfirm;
 
 impl Confirm for AlwaysYesConfirm {
-    fn confirm_force_push_rebuild(&self, _env_name: &str) -> Result<bool> {
+    fn confirm(&self, _prompt: &str) -> Result<bool> {
         Ok(true)
     }
 }
@@ -35,7 +51,7 @@ pub struct AlwaysNoConfirm;
 
 #[allow(dead_code)]
 impl Confirm for AlwaysNoConfirm {
-    fn confirm_force_push_rebuild(&self, _env_name: &str) -> Result<bool> {
+    fn confirm(&self, _prompt: &str) -> Result<bool> {
         Ok(false)
     }
 }
