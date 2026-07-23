@@ -2,6 +2,29 @@
 
 Instructions for AI coding agents working in this repository.
 
+## Keep this file up to date
+
+This file goes stale the moment it stops matching the code. When your work
+changes something it documents — command registration steps, architecture,
+conventions, dead-code status, gotchas — update the relevant section in the
+same change, not as a follow-up. Concretely:
+
+- Added/removed/renamed a module, command, or major function this file
+  names? Fix the reference.
+- Found a new sharp edge the hard way (a bug class, a footgun, a "this looks
+  right but isn't")? Add it under a gotcha section, the way the merge-base
+  bug below is recorded — future agents shouldn't have to rediscover it.
+- Revived something listed as dead/aspirational code? Move it out of that
+  section.
+- Noticed an existing line is already wrong or misleading? Fix it on sight,
+  regardless of whether it's related to your task.
+
+Stale docs are worse than no docs — they cost the next agent (or human) more
+time than they save. Keep entries terse and specific; don't let this file
+grow into prose. If a claim can go stale silently (a file path, a test
+count, a "currently"), prefer phrasing that's cheap to verify over phrasing
+that's easy to trust blindly.
+
 ## What this is
 
 Hitch is a Rust CLI (`src/main.rs`, library crate `src/lib.rs`) for Git
