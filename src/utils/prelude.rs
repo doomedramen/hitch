@@ -1135,6 +1135,64 @@ pub fn preflight_compatibility_report(
     Ok(conflicts)
 }
 
+/// Local-only variant of `preflight_compatibility_report`, for callers like
+/// `hitch status`/`hitch tree` that display per-branch state on every
+/// invocation and must stay fast and offline — unlike `rebuild --dry-run` and
+/// `hitch conflicts`, this never fetches. It works only from whatever is
+/// already resolvable locally (existing local branches or remote-tracking
+/// refs); a branch that isn't resolvable is silently skipped rather than
+/// erroring, matching the `.unwrap_or(false)` best-effort style the rest of
+/// `hitch status`'s per-branch checks already use — that branch's other
+/// state (missing, stale, etc.) is what should explain it to the user, not
+/// this function.
+pub fn preflight_compatibility_report_local(
+    context: &GlobalContext,
+    base_branch: &str,
+    branches_in_order: &[String],
+) -> Vec<CompatibilityConflict> {
+    let mut conflicts = Vec::new();
+    if branches_in_order.is_empty() {
+        return conflicts;
+    }
+
+    let Ok(base_commit) = context.git().rev_parse(base_branch) else {
+        return conflicts;
+    };
+    let Ok(mut current_tree) = context
+        .git()
+        .rev_parse(&format!("{}^{{tree}}", base_branch))
+    else {
+        return conflicts;
+    };
+    let mut last_composed = base_branch.to_string();
+
+    for branch in branches_in_order {
+        let Ok(their_tree) = context.git().rev_parse(&format!("{}^{{tree}}", branch)) else {
+            continue;
+        };
+        let Ok(res) =
+            context
+                .git()
+                .merge_tree_write_tree_name_only(&base_commit, &current_tree, &their_tree)
+        else {
+            continue;
+        };
+
+        if res.conflicted_files.is_empty() {
+            current_tree = res.tree_oid;
+            last_composed = branch.clone();
+        } else {
+            conflicts.push(CompatibilityConflict {
+                branch: branch.clone(),
+                conflicts_with: last_composed.clone(),
+                conflicted_files: res.conflicted_files,
+            });
+        }
+    }
+
+    conflicts
+}
+
 // =============================================================================
 // Pre-promote Conflict Checking
 // =============================================================================

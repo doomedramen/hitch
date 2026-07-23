@@ -10,10 +10,11 @@ pass. This document is the merged result with all mandatory hardening folded in.
 - ✅ **Phase 1** — worktree-isolated rebuild, OID pinning, CAS publish, timestamped backup refs.
 - ✅ **Phase 2** — exhaustive pair attribution (`preflight_compatibility_report`), `hitch rebuild --dry-run`.
 - ✅ **Phase 3 (core policy)** — `Environment.on_conflict` (eject default / halt), live eject-and-continue in `rebuild_environment`, `--on-conflict` override, `hitch set --on-conflict`, `hitch conflicts <env>` standup command.
-- ⬜ **Phase 3 (deferred visibility)** — not yet done, still owed:
-  - `hitch status` / `hitch tree` ⛔ glyph for held branches (today only `hitch conflicts <env>` and rebuild's own output surface holds; status/tree don't run the preflight so they stay fast, but this means they can't show holds without either accepting that cost or caching results in a ref)
-  - PR comment integration (upserted comment per held branch via `gh`, flip to "re-included" on heal)
-  - Exit-code taxonomy (0 clean / 2 rebuilt-with-holds / 3 halted / 1 error) — `hitch rebuild` currently just returns success/failure; a held rebuild exits 0 today
+- ✅ **Phase 3 (exit codes)** — `hitch rebuild` exits 0 clean / 2 succeeded-with-holds / 1 halted-or-error (simplified from the original 4-way 0/2/3/1 sketch: halt and generic error both exit 1, since in practice a CI script treats "the rebuild didn't happen" the same either way — the taxonomy that actually matters for automation is "did anything get held", which 0 vs 2 covers).
+- ✅ **Phase 3 (status glyph)** — `hitch status` shows a ⛔ glyph and "(conflicts with X — held on rebuild)" for a branch that would be held, via a new local-only, no-fetch `preflight_compatibility_report_local` so status stays fast and offline.
+- ⬜ **Phase 3 (still deferred)** — not yet done, still owed:
+  - `hitch tree` doesn't show holds — unlike status, tree currently does zero git calls (pure metadata view); adding this means threading `GlobalContext` through its recursive display, a bigger structural change than status's addition, so it was left out of this pass.
+  - PR comment integration (upserted comment per held branch via `gh`, flip to "re-included" on heal) — needs a live GitHub repo to verify properly.
 - ⬜ **Phase 4** — `hitch resolve` guided Mode A/B (base-conflict rebase flow, peer-conflict worktree resolve).
 - ⬜ **Phase 5** — shared rerere-backed resolutions + all red-team-mandated hardening (review-gate-bypass and stale-replay mitigations, ephemeral rr-cache hydration, debt SLA). Do not ship any part of this without the hardening — see the red-team findings below.
 

@@ -232,6 +232,15 @@ fn display_environment_status(
             }
         }
 
+        // Local-only, no-fetch compatibility check so a branch that would be
+        // held on the next rebuild (see docs/merge-conflict-handling-plan.md)
+        // shows up here too, without slowing status down with a network fetch.
+        let held = crate::utils::prelude::preflight_compatibility_report_local(
+            context,
+            &env.base,
+            &env.branches,
+        );
+
         for (i, branch) in env.branches.iter().enumerate() {
             // Check if branch exists locally or remotely
             let branch_exists = context
@@ -256,8 +265,12 @@ fn display_environment_status(
                         .is_some_and(|ts| ts > rebuilt_at)
                 });
 
+            let held_conflict = held.iter().find(|c| &c.branch == branch);
+
             let branch_status = if !branch_exists {
                 "❌".bright_red().to_string()
+            } else if held_conflict.is_some() {
+                "⛔".red().to_string()
             } else if is_in_source {
                 "⚠️ ".bright_yellow().to_string()
             } else if is_stale {
@@ -280,12 +293,21 @@ fn display_environment_status(
                 "".to_string()
             };
 
+            let held_warning = if let Some(c) = held_conflict {
+                format!(" (conflicts with {} — held on rebuild)", c.conflicts_with)
+                    .red()
+                    .to_string()
+            } else {
+                "".to_string()
+            };
+
             println!(
-                "│  {} {}{}{}",
+                "│  {} {}{}{}{}",
                 branch_status,
                 format!("{}. {}", i + 1, branch).bright_white(),
                 source_warning.normal(),
-                stale_warning
+                stale_warning,
+                held_warning
             );
         }
     }
