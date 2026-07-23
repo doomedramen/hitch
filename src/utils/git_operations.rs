@@ -1672,6 +1672,35 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Rebase the current branch onto `onto`.
+    ///
+    /// Returns `Ok(true)` on a clean rebase. Returns `Ok(false)` if git left
+    /// the rebase paused for conflicts — deliberately NOT auto-aborted: a
+    /// paused rebase is a normal, well-understood Git state, and the whole
+    /// point of guiding a user into one (see `hitch resolve`'s base-conflict
+    /// mode) is to hand them off to plain `git add` / `git rebase --continue`
+    /// / `git rebase --abort`, not to invent a parallel resolution flow for
+    /// something Git already does well. Any other failure is a real `Err`.
+    pub fn rebase_onto(&self, onto: &str) -> Result<bool> {
+        let output = self.run_git_command(&["rebase", onto])?;
+        if output.status.success() {
+            return Ok(true);
+        }
+
+        let git_dir = self.repo.path();
+        let rebase_in_progress =
+            git_dir.join("rebase-apply").exists() || git_dir.join("rebase-merge").exists();
+        if rebase_in_progress {
+            return Ok(false);
+        }
+
+        Err(anyhow::anyhow!(
+            "git rebase {} failed: {}",
+            onto,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+
     /// Hard-reset the currently checked-out branch (and working tree) to `reference`.
     ///
     /// Used to roll a branch back to a previously captured commit — e.g. to undo

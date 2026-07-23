@@ -776,16 +776,58 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
         }
     };
 
-    // Publish: back up the current environment ref (if any), then swap it to
-    // the newly built commit with a single compare-and-swap. This is the only
-    // instruction that mutates `refs/heads/<env>` — nothing about it is
-    // observable as changed until this call succeeds.
+    // Publish, push, and record the timestamp — shared with `hitch resolve`'s
+    // Mode B, which produces a build the exact same way but from a
+    // hand-resolved worktree instead of a straight-through one. The worktree
+    // (and its temp branch, which is what keeps `new_sha` reachable) is only
+    // torn down *after* publish is attempted, so the new commit stays
+    // reachable via some ref for the whole window until `refs/heads/<env>`
+    // itself takes over that job.
     logger.step(format!("Publishing '{}'", env_name));
+    let publish_result = publish_environment_build(
+        context,
+        env_name,
+        &new_sha,
+        &timestamp,
+        &remote_env_sha_before,
+    );
+    cleanup_worktree();
+    publish_result?;
+
+    logger.complete();
+
+    context.log_verbose(&format!(
+        "✓ Rebuild process completed for environment '{}'",
+        env_name
+    ));
+    Ok(RebuildOutcome { held })
+}
+
+/// Publish `new_sha` as environment `env_name`'s new content: back up the
+/// current ref (if any) under a timestamped backup ref, then swap
+/// `refs/heads/<env_name>` to `new_sha` with a single compare-and-swap —
+/// the only instruction that mutates it, so nothing is observable as
+/// changed until this call succeeds. Then, if pushing is enabled, offers a
+/// confirmed `--force-with-lease` push against `remote_sha_before` (the
+/// remote SHA observed before the caller started building, so a concurrent
+/// push elsewhere is detected instead of silently clobbered), and finally
+/// records the environment's `rebuilt_at` timestamp.
+///
+/// Shared by `rebuild_environment` and `hitch resolve`'s Mode B — both
+/// produce a new environment-branch commit and need to land it the same
+/// way; only how the commit was built differs.
+pub(crate) fn publish_environment_build(
+    context: &GlobalContext,
+    env_name: &str,
+    new_sha: &str,
+    backup_timestamp: &str,
+    remote_sha_before: &Option<String>,
+) -> Result<()> {
     let env_ref = format!("refs/heads/{}", env_name);
     let old_env_sha = context.git().rev_parse_opt(&env_ref)?;
 
     if let Some(ref old_sha) = old_env_sha {
-        let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, timestamp);
+        let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp);
         context.git().update_ref(&backup_ref, old_sha)?;
         context.log_verbose(&format!(
             "✓ Backed up previous '{}' ({}) to '{}'",
@@ -795,26 +837,20 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
 
     if let Err(e) = context
         .git()
-        .update_ref_cas(&env_ref, &new_sha, old_env_sha.as_deref())
+        .update_ref_cas(&env_ref, new_sha, old_env_sha.as_deref())
     {
-        cleanup_worktree();
         return Err(anyhow::anyhow!(
-            "Failed to publish rebuilt '{}' branch: {}. The build itself succeeded but could \
-             not be published — this usually means another rebuild landed first. Fetch and \
-             re-run 'hitch rebuild {}'.",
+            "Failed to publish '{}': {}. The build itself succeeded but could not be \
+             published — this usually means another rebuild landed first. Fetch and re-run \
+             'hitch rebuild {}'.",
             env_name,
             e,
             env_name
         ));
     }
 
-    cleanup_worktree();
-    context.log_verbose(&format!(
-        "✓ Published rebuilt '{}' branch ({})",
-        env_name, new_sha
-    ));
+    context.log_verbose(&format!("✓ Published '{}' ({})", env_name, new_sha));
 
-    // Handle remote replacement - prompt/confirm when push is enabled
     if context.should_push() {
         context.log_warning(&format!(
             "Ready to force push the rebuilt '{}' branch to 'origin/{}'.",
@@ -833,7 +869,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
             ));
             match context
                 .git()
-                .force_push_with_lease(env_name, remote_env_sha_before.as_deref())
+                .force_push_with_lease(env_name, remote_sha_before.as_deref())
             {
                 Ok(()) => {
                     context.log_success(&format!(
@@ -871,16 +907,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
         ));
     }
 
-    // Update rebuiltAt timestamp on success
     update_rebuilt_timestamp_for_rebuild(context, env_name)?;
-
-    logger.complete();
-
-    context.log_verbose(&format!(
-        "✓ Rebuild process completed for environment '{}'",
-        env_name
-    ));
-    Ok(RebuildOutcome { held })
+    Ok(())
 }
 
 /// Choose a filesystem path for the disposable worktree a rebuild composes
@@ -1045,8 +1073,19 @@ pub fn preflight_compatibility_merge_tree(
 
     for branch in branches_in_order {
         let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
+        // The true common ancestor of `base_branch` and `branch` — NOT
+        // `base_branch`'s own current tip. Passing the tip as `--merge-base`
+        // makes `git merge-tree` believe "our" side (the accumulated
+        // composition) has zero changes since the merge-base, so it silently
+        // fast-forwards to `branch`'s content instead of reporting a real
+        // conflict — the exact scenario where `branch` conflicts with `base`
+        // because base moved on independently after `branch` diverged.
+        let merge_base = context
+            .git()
+            .get_merge_base(base_branch, branch)?
+            .unwrap_or_else(|| base_commit.clone());
         let res = context.git().merge_tree_write_tree_name_only(
-            &base_commit,
+            &merge_base,
             &current_tree,
             &their_tree,
         )?;
@@ -1114,8 +1153,16 @@ pub fn preflight_compatibility_report(
 
     for branch in branches_in_order {
         let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
+        // See the comment in `preflight_compatibility_merge_tree` — this
+        // must be the true common ancestor of `base_branch` and `branch`,
+        // not `base_branch`'s current tip, or a branch that conflicts with
+        // base (because base moved on after it diverged) is missed entirely.
+        let merge_base = context
+            .git()
+            .get_merge_base(base_branch, branch)?
+            .unwrap_or_else(|| base_commit.clone());
         let res = context.git().merge_tree_write_tree_name_only(
-            &base_commit,
+            &merge_base,
             &current_tree,
             &their_tree,
         )?;
@@ -1170,10 +1217,18 @@ pub fn preflight_compatibility_report_local(
         let Ok(their_tree) = context.git().rev_parse(&format!("{}^{{tree}}", branch)) else {
             continue;
         };
+        // See the comment in `preflight_compatibility_merge_tree` — must be
+        // the true common ancestor, not `base_branch`'s current tip.
+        let merge_base = context
+            .git()
+            .get_merge_base(base_branch, branch)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| base_commit.clone());
         let Ok(res) =
             context
                 .git()
-                .merge_tree_write_tree_name_only(&base_commit, &current_tree, &their_tree)
+                .merge_tree_write_tree_name_only(&merge_base, &current_tree, &their_tree)
         else {
             continue;
         };

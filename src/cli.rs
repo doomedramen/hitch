@@ -78,4 +78,7 @@ pub enum Commands {
     Set(commands::set::SetCommand),
     /// Show which promoted branches currently conflict, without rebuilding
     Conflicts(commands::conflicts::ConflictsCommand),
+    /// Guided resolution for a held branch (rebase for base conflicts,
+    /// worktree resolve for peer conflicts)
+    Resolve(commands::resolve::ResolveCommand),
 }

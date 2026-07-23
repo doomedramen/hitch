@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Branch(_) => "branch",
         Commands::Setup(_) => "setup",
         Commands::Conflicts(_) => "conflicts",
+        Commands::Resolve(_) => "resolve",
     };
 
     // Create a new logger configured for this command
@@ -131,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Branch(args) => commands::branch::run(args, &context).map_err(|e| e.into()),
         Commands::Setup(args) => commands::setup::run(args, &context).map_err(|e| e.into()),
         Commands::Conflicts(args) => commands::conflicts::run(args, &context).map_err(|e| e.into()),
+        Commands::Resolve(args) => commands::resolve::run(args, &context).map_err(|e| e.into()),
     }
 }
 
