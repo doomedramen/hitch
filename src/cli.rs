@@ -76,4 +76,6 @@ pub enum Commands {
     Diff(commands::diff::DiffCommand),
     /// Update environment configuration (e.g., change base branch)
     Set(commands::set::SetCommand),
+    /// Show which promoted branches currently conflict, without rebuilding
+    Conflicts(commands::conflicts::ConflictsCommand),
 }

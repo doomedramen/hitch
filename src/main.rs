@@ -65,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Set(_) => "set",
         Commands::Branch(_) => "branch",
         Commands::Setup(_) => "setup",
+        Commands::Conflicts(_) => "conflicts",
     };
 
     // Create a new logger configured for this command
@@ -112,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Set(args) => commands::set::run(args, &context).map_err(|e| e.into()),
         Commands::Branch(args) => commands::branch::run(args, &context).map_err(|e| e.into()),
         Commands::Setup(args) => commands::setup::run(args, &context).map_err(|e| e.into()),
+        Commands::Conflicts(args) => commands::conflicts::run(args, &context).map_err(|e| e.into()),
     }
 }
 
@@ -126,7 +128,8 @@ fn command_is_mutating(command: &Commands) -> bool {
         | Commands::Tree(_)
         | Commands::Diff(_)
         | Commands::Doctor(_)
-        | Commands::Setup(_) => false,
+        | Commands::Setup(_)
+        | Commands::Conflicts(_) => false,
         Commands::Approvals(args) => args.is_mutating(),
         _ => true,
     }

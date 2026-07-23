@@ -67,6 +67,9 @@ hitch demote feature/auth dev           # Remove branch from environment
 ### Rebuild & Release
 ```bash
 hitch rebuild production                # Rebuild environment from promoted branches
+hitch rebuild production --dry-run      # Preview what a rebuild would do (no build)
+hitch rebuild production --on-conflict halt  # Override policy for this run
+hitch conflicts production              # Show which promoted branches currently conflict
 hitch release production main           # Release environment to target branch
 hitch diff                              # Preview commits each branch would add
 ```
@@ -174,7 +177,8 @@ Hitch stores configuration in `hitch.json` on the `hitch-metadata` branch:
 - Locked environments reject all promotion/demotion attempts
 - After `hitch release`, promoted branches may already be merged — use `hitch cleanup` to remove them
 - Use `hitch diff` before rebuild to preview what commits would be added
-- `hitch rebuild` is all-or-nothing: it preflights compatibility first and refuses (cleanly) if a promoted branch can’t be assembled
+- Use `hitch rebuild <env> --dry-run` or `hitch conflicts <env>` to preview conflicts without building
+- `hitch rebuild` composes in an isolated worktree (your checkout is never touched) and by default *ejects* a conflicting branch — excludes it and keeps building the rest — instead of failing the whole rebuild; set `on_conflict: halt` (`hitch set <env> --on-conflict halt`) for the old all-or-nothing behavior
 - Fix guidance: `git checkout <branch> && git rebase <base>`
 - `hitch rebuild` requires a clean working tree (commit or stash first)
 - Document Hitch as explicit branch stacking, not as a required release process or as a replacement for conflict management. The main downside is repeated merge fixes across environments unless resolved changes are carried back into the feature branch.

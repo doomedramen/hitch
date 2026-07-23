@@ -85,7 +85,7 @@ When you promote or demote, Hitch rebuilds the environment by squashing all prom
   <img src="docs/hitch-vs-git-merge.png" alt="Ordinary Git environment branches accumulate merge history, while Hitch stores desired contents and regenerates the branch.">
 </p>
 
-Rebuild is a read-only assembly check first: if any promoted branch can't be composed cleanly (in order) on top of the base, `hitch rebuild` refuses and tells you exactly which branch and files to fix.
+Rebuild composes branches in an isolated worktree — your own checkout is never touched — and always tells you exactly which branch and files conflict. By default a conflicting branch is *held*: it's excluded from this build (named, with what it collides with) while the rest still compose and publish, so one broken branch never blocks the others. Set `on_conflict: halt` (`hitch set <env> --on-conflict halt`, or `--on-conflict halt` for one run) to go back to refusing the whole rebuild until every branch composes cleanly. `hitch conflicts <env>` and `hitch rebuild <env> --dry-run` show what would happen without building anything.
 
 ### Release and Merge Fixes
 
@@ -116,7 +116,14 @@ hitch promote feature/new-api dev
 hitch demote feature/new-api dev
 
 # Rebuild environment with all promoted branches
+# (conflicting branches are held/excluded by default — see hitch conflicts)
 hitch rebuild production
+
+# See what a rebuild would do without building anything
+hitch rebuild production --dry-run
+
+# See which promoted branches currently conflict
+hitch conflicts production
 
 # Lock/unlock environments (freeze promotions)
 hitch lock production
@@ -139,6 +146,7 @@ hitch set dev --base main           # Change base branch
 hitch set production --requires-approval true
 hitch set production --min-approvals 2
 hitch set production --add-approver alice@example.com
+hitch set production --on-conflict halt   # refuse the whole rebuild on any conflict
 ```
 
 ## 🖥️ Desktop GUI (`hitch-desktop`)

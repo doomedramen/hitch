@@ -5,6 +5,7 @@ pub mod approvals;
 pub mod branch;
 pub mod cleanup;
 pub mod completion;
+pub mod conflicts;
 pub mod demote;
 pub mod diff;
 pub mod doctor;

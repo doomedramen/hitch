@@ -1,9 +1,21 @@
 # Plan: merge-conflict handling for environment rebuilds
 
-Status: **proposed** — design synthesized from a five-design panel (git-native,
+Status: **in progress** — design synthesized from a five-design panel (git-native,
 merge-queue, interactive-UX, state-machine, and team-product lenses), scored by
 three independent judges (unanimous winner) and stress-tested by a red-team
 pass. This document is the merged result with all mandatory hardening folded in.
+
+## Implementation status
+
+- ✅ **Phase 1** — worktree-isolated rebuild, OID pinning, CAS publish, timestamped backup refs.
+- ✅ **Phase 2** — exhaustive pair attribution (`preflight_compatibility_report`), `hitch rebuild --dry-run`.
+- ✅ **Phase 3 (core policy)** — `Environment.on_conflict` (eject default / halt), live eject-and-continue in `rebuild_environment`, `--on-conflict` override, `hitch set --on-conflict`, `hitch conflicts <env>` standup command.
+- ⬜ **Phase 3 (deferred visibility)** — not yet done, still owed:
+  - `hitch status` / `hitch tree` ⛔ glyph for held branches (today only `hitch conflicts <env>` and rebuild's own output surface holds; status/tree don't run the preflight so they stay fast, but this means they can't show holds without either accepting that cost or caching results in a ref)
+  - PR comment integration (upserted comment per held branch via `gh`, flip to "re-included" on heal)
+  - Exit-code taxonomy (0 clean / 2 rebuilt-with-holds / 3 halted / 1 error) — `hitch rebuild` currently just returns success/failure; a held rebuild exits 0 today
+- ⬜ **Phase 4** — `hitch resolve` guided Mode A/B (base-conflict rebase flow, peer-conflict worktree resolve).
+- ⬜ **Phase 5** — shared rerere-backed resolutions + all red-team-mandated hardening (review-gate-bypass and stale-replay mitigations, ephemeral rr-cache hydration, debt SLA). Do not ship any part of this without the hardening — see the red-team findings below.
 
 ## Problem
 
