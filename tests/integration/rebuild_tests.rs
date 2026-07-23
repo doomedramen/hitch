@@ -359,7 +359,10 @@ mod tests {
             result
                 .assert_failure()
                 .assert_stderr_contains("Cannot rebuild 'dev' — compatibility check failed")
-                .assert_stderr_contains("branch-b conflicts with main")
+                // branch-a composes cleanly first, so branch-b's conflict is
+                // attributed to branch-a (the branch it actually collides
+                // with), not to main.
+                .assert_stderr_contains("branch-b conflicts with branch-a")
                 .assert_stderr_contains("shared.txt");
 
             // No hitch-tmp-* branch created

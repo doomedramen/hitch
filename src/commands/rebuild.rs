@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::utils::prelude::{
-    access_metadata_read_only, preflight_compatibility_merge_tree, with_locked_env,
+    access_metadata_read_only, preflight_compatibility_report, with_locked_env,
+    CompatibilityConflict,
 };
 use anyhow::Result;
 use clap::Args;
@@ -14,6 +15,12 @@ pub struct RebuildCommand {
     /// Force rebuild even if environment is locked
     #[arg(long)]
     pub force: bool,
+
+    /// Show every branch that would compose cleanly and every branch that
+    /// would conflict (and with what), without building, locking, or
+    /// publishing anything
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
@@ -37,14 +44,32 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
         promoted_branches.len()
     ));
 
-    if let Some(failure) =
-        preflight_compatibility_merge_tree(context, &base_branch, &promoted_branches)?
-    {
-        return Err(anyhow::anyhow!(format_compatibility_failure_for_rebuild(
+    let conflicts = preflight_compatibility_report(context, &base_branch, &promoted_branches)?;
+
+    if args.dry_run {
+        if conflicts.is_empty() {
+            context.log_success(&format!(
+                "'{}' would rebuild cleanly ({} branch{}).",
+                args.env_name,
+                promoted_branches.len(),
+                if promoted_branches.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+            return Ok(());
+        }
+        return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
             &args.env_name,
-            &failure.blocking_branch,
-            &failure.base_branch,
-            &failure.conflicted_files
+            &conflicts
+        )));
+    }
+
+    if !conflicts.is_empty() {
+        return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
+            &args.env_name,
+            &conflicts
         )));
     }
 
@@ -68,30 +93,46 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
-fn format_compatibility_failure_for_rebuild(
+fn format_compatibility_report_for_rebuild(
     env_name: &str,
-    blocking_branch: &str,
-    base_branch: &str,
-    conflicted_files: &[String],
+    conflicts: &[CompatibilityConflict],
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "✗ Cannot rebuild '{}' — compatibility check failed\n\n",
         env_name
     ));
-    out.push_str(&format!(
-        "  {} conflicts with {}\n",
-        blocking_branch, base_branch
-    ));
-    for f in conflicted_files {
-        out.push_str(&format!("    {}\n", f));
+
+    for c in conflicts {
+        out.push_str(&format!(
+            "  {} conflicts with {}\n",
+            c.branch, c.conflicts_with
+        ));
+        for f in &c.conflicted_files {
+            out.push_str(&format!("    {}\n", f));
+        }
+        out.push('\n');
     }
-    out.push('\n');
-    out.push_str(&format!("Fix {} first:\n", blocking_branch));
-    out.push_str(&format!(
-        "  git checkout {} && git rebase {}\n",
-        blocking_branch, base_branch
-    ));
+
+    if let [only] = conflicts {
+        out.push_str(&format!("Fix {} first:\n", only.branch));
+        out.push_str(&format!(
+            "  git checkout {} && git rebase {}\n",
+            only.branch, only.conflicts_with
+        ));
+    } else {
+        out.push_str(&format!(
+            "Fix each of the {} branches above, then retry:\n",
+            conflicts.len()
+        ));
+        for c in conflicts {
+            out.push_str(&format!(
+                "  git checkout {} && git rebase {}\n",
+                c.branch, c.conflicts_with
+            ));
+        }
+    }
+
     out
 }
 

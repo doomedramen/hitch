@@ -1020,6 +1020,76 @@ pub fn preflight_compatibility_merge_tree(
     Ok(None)
 }
 
+/// One branch's conflict, as found by `preflight_compatibility_report`.
+#[derive(Debug, Clone)]
+pub struct CompatibilityConflict {
+    /// The branch that could not be folded into the composition.
+    pub branch: String,
+    /// What it conflicts with: the environment's base branch if this is the
+    /// first branch (or every earlier branch was also skipped), or the last
+    /// branch that composed successfully ahead of it otherwise. Distinguishing
+    /// the two matters because the fix differs — rebase onto base, or resolve
+    /// against the specific peer.
+    pub conflicts_with: String,
+    pub conflicted_files: Vec<String>,
+}
+
+/// Simulate composing `branches_in_order` onto `base_branch`, in the same
+/// order and with the same read-only `git merge-tree` primitive as
+/// `preflight_compatibility_merge_tree`, but reporting *every* branch that
+/// cannot be folded in rather than stopping at the first one.
+///
+/// A conflicting branch is excluded from the running composition (not
+/// merged, its tree left out) and later branches are checked against what
+/// actually accumulated without it — so one preflight names every branch
+/// that needs attention, instead of the caller re-running rebuild once per
+/// conflict to discover the next one. This does not build or mutate
+/// anything; it is the same kind of simulation as
+/// `preflight_compatibility_merge_tree`, just exhaustive.
+pub fn preflight_compatibility_report(
+    context: &GlobalContext,
+    base_branch: &str,
+    branches_in_order: &[String],
+) -> Result<Vec<CompatibilityConflict>> {
+    let mut conflicts = Vec::new();
+    if branches_in_order.is_empty() {
+        return Ok(conflicts);
+    }
+
+    let mut all = Vec::with_capacity(branches_in_order.len() + 1);
+    all.push(base_branch.to_string());
+    all.extend(branches_in_order.iter().cloned());
+    context.git().synchronize_branches(&all)?;
+
+    let base_commit = context.git().rev_parse(base_branch)?;
+    let mut current_tree = context
+        .git()
+        .rev_parse(&format!("{}^{{tree}}", base_branch))?;
+    let mut last_composed = base_branch.to_string();
+
+    for branch in branches_in_order {
+        let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
+        let res = context.git().merge_tree_write_tree_name_only(
+            &base_commit,
+            &current_tree,
+            &their_tree,
+        )?;
+
+        if res.conflicted_files.is_empty() {
+            current_tree = res.tree_oid;
+            last_composed = branch.clone();
+        } else {
+            conflicts.push(CompatibilityConflict {
+                branch: branch.clone(),
+                conflicts_with: last_composed.clone(),
+                conflicted_files: res.conflicted_files,
+            });
+        }
+    }
+
+    Ok(conflicts)
+}
+
 // =============================================================================
 // Pre-promote Conflict Checking
 // =============================================================================
