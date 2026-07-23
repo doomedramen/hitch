@@ -28,6 +28,13 @@ pub struct RebuildCommand {
     /// the whole rebuild on the first conflict
     #[arg(long)]
     pub on_conflict: Option<OnConflict>,
+
+    /// Report each promoted branch's held/re-included status as a comment
+    /// on its GitHub PR (best-effort: silently does nothing without `gh`,
+    /// auth, or an open PR — never fails the rebuild). Off by default so a
+    /// plain rebuild never depends on GitHub.
+    #[arg(long)]
+    pub pr_comments: bool,
 }
 
 /// Runs the rebuild. Returns `Ok(true)` if it succeeded but held one or more
@@ -118,6 +125,15 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             crate::utils::prelude::rebuild_environment(context, &args.env_name)
         })?
     };
+
+    if args.pr_comments {
+        crate::utils::pr_status::report_held_status(
+            context,
+            &args.env_name,
+            &promoted_branches,
+            &outcome.held,
+        );
+    }
 
     if outcome.held.is_empty() {
         context.log_success(&format!(

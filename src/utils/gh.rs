@@ -279,6 +279,70 @@ pub fn list_remote_branches(owner: &str, repo: &str) -> Result<Vec<GhBranch>> {
         .collect())
 }
 
+// ── pull requests & comments ──────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct GhPullRequest {
+    pub number: u64,
+}
+
+/// Find the open PR whose head branch is `branch`, if any. Used to locate
+/// where to post a held/re-included status comment for a promoted branch —
+/// returns `None` (not an error) when there simply isn't one.
+pub fn find_open_pr_for_branch(owner: &str, repo: &str, branch: &str) -> Result<Option<u64>> {
+    let endpoint = format!(
+        "/repos/{}/{}/pulls?head={}:{}&state=open",
+        owner, repo, owner, branch
+    );
+    let output = gh_api(&endpoint, &[])?;
+    let prs: Vec<GhPullRequest> = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse PR list: {}", output))?;
+    Ok(prs.into_iter().next().map(|p| p.number))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GhIssueComment {
+    pub id: u64,
+    pub body: String,
+}
+
+/// List a PR's comments (PRs are issues, so this is the issue-comments
+/// endpoint — the same one `gh pr comment` uses).
+pub fn list_pr_comments(owner: &str, repo: &str, pr_number: u64) -> Result<Vec<GhIssueComment>> {
+    let endpoint = format!(
+        "/repos/{}/{}/issues/{}/comments?per_page=100",
+        owner, repo, pr_number
+    );
+    let output = gh_api(&endpoint, &[])?;
+    let comments: Vec<GhIssueComment> = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse PR comments: {}", output))?;
+    Ok(comments)
+}
+
+/// Create a new PR comment. Returns the new comment's id.
+pub fn create_pr_comment(owner: &str, repo: &str, pr_number: u64, body: &str) -> Result<u64> {
+    let endpoint = format!("/repos/{}/{}/issues/{}/comments", owner, repo, pr_number);
+    let payload = serde_json::json!({ "body": body });
+    let body_str = serde_json::to_string(&payload)?;
+    let output = gh_api_with_body(&endpoint, &body_str, &[], "POST")?;
+
+    let created: serde_json::Value = serde_json::from_str(&output)
+        .with_context(|| format!("Failed to parse created comment: {}", output))?;
+    created
+        .get("id")
+        .and_then(|id| id.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("Created comment has no id in response: {}", output))
+}
+
+/// Update an existing PR comment's body in place.
+pub fn update_pr_comment(owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
+    let endpoint = format!("/repos/{}/{}/issues/comments/{}", owner, repo, comment_id);
+    let payload = serde_json::json!({ "body": body });
+    let body_str = serde_json::to_string(&payload)?;
+    gh_api_with_body(&endpoint, &body_str, &["-X", "PATCH"], "POST")?;
+    Ok(())
+}
+
 // ── rulesets ───────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
