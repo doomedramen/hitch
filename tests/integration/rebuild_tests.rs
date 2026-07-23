@@ -367,8 +367,10 @@ mod tests {
                 .run()
                 .args(&["--no-push", "rebuild", "dev"])
                 .execute()?;
+            // Exit code 2: succeeded, but held a conflicting branch — not a
+            // plain 0 success, and not a failure either.
             result
-                .assert_success()
+                .assert_exit_code(2)
                 .assert_stdout_contains("held")
                 // branch-a composes cleanly first, so branch-b's conflict is
                 // attributed to branch-a (the branch it actually collides
@@ -420,7 +422,7 @@ mod tests {
                 .args(&["--no-push", "rebuild", "dev", "--dry-run"])
                 .execute()?;
             result
-                .assert_success()
+                .assert_exit_code(2)
                 .assert_stdout_contains("branch-b conflicts with branch-a")
                 .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
 

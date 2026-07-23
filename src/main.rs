@@ -97,7 +97,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Remove(args) => commands::remove::run(args, &context).map_err(|e| e.into()),
         Commands::Promote(args) => commands::promote::run(args, &context).map_err(|e| e.into()),
         Commands::Demote(args) => commands::demote::run(args, &context).map_err(|e| e.into()),
-        Commands::Rebuild(args) => commands::rebuild::run(args, &context).map_err(|e| e.into()),
+        Commands::Rebuild(args) => {
+            // hitch rebuild distinguishes a fully clean rebuild (exit 0) from
+            // one that succeeded but held a conflicting branch (exit 2), so
+            // CI can warn on holds without failing the build. A halt-policy
+            // refusal or any other failure both take the normal Err path
+            // below (exit 1), same as every other command.
+            let held = commands::rebuild::run(args, &context)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            if held {
+                use std::io::Write;
+                // process::exit skips normal shutdown (which is what flushes
+                // stdout on a plain `return` from main), so flush explicitly
+                // or buffered output can be lost when stdout isn't a TTY.
+                let _ = std::io::stdout().flush();
+                std::process::exit(2);
+            }
+            Ok(())
+        }
         Commands::Release(args) => commands::release::run(args, &context).map_err(|e| e.into()),
         Commands::Status(args) => commands::status::run(args, &context).map_err(|e| e.into()),
         Commands::Tree(args) => commands::tree::run(args, &context).map_err(|e| e.into()),

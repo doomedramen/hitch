@@ -30,7 +30,13 @@ pub struct RebuildCommand {
     pub on_conflict: Option<OnConflict>,
 }
 
-pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
+/// Runs the rebuild. Returns `Ok(true)` if it succeeded but held one or more
+/// conflicting branches (or, under `--dry-run`, would have) — the caller
+/// uses this to choose a distinct "succeeded with holds" exit code (2)
+/// instead of the plain-success 0, so CI can warn without failing the build.
+/// `Ok(false)` is a fully clean success; `Err` covers both a halt-policy
+/// refusal and any other failure (both exit 1, matching prior behavior).
+pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     context.log_info(&format!("Rebuilding environment '{}'...", args.env_name));
 
     // Step 1: Precondition checks (require clean working tree)
@@ -65,6 +71,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
                     "s"
                 }
             ));
+            return Ok(false);
         } else if on_conflict == OnConflict::Halt {
             return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
                 &args.env_name,
@@ -79,8 +86,8 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
                 promoted_branches.len(),
                 conflicts.len()
             ));
+            return Ok(true);
         }
-        return Ok(());
     }
 
     // Halt policy refuses up front, before locking or creating anything, if
@@ -117,6 +124,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
             "Environment '{}' rebuilt successfully!",
             args.env_name
         ));
+        Ok(false)
     } else {
         context.log_warning(&format_held_report(&args.env_name, &outcome.held));
         context.log_success(&format!(
@@ -125,8 +133,8 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<()> {
             outcome.held.len(),
             if outcome.held.len() == 1 { "" } else { "es" }
         ));
+        Ok(true)
     }
-    Ok(())
 }
 
 /// Format the branches excluded from a build under `OnConflict::Eject` — a

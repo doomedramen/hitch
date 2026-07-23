@@ -224,6 +224,23 @@ impl HitchCommandResult {
         self
     }
 
+    /// Assert an exact exit code — for commands with more than a plain
+    /// success/failure result, e.g. `hitch rebuild`'s 0 (clean) / 2
+    /// (succeeded with held branches) / 1 (failed) taxonomy.
+    pub fn assert_exit_code(self, code: i32) -> Self {
+        if self.exit_code() != Some(code) {
+            panic!(
+                "Expected exit code {}, got {:?}: {:?}\nstdout: {}\nstderr: {}",
+                code,
+                self.exit_code(),
+                self.args,
+                self.stdout(),
+                self.stderr()
+            );
+        }
+        self
+    }
+
     /// Assert stdout contains specific text
     pub fn assert_stdout_contains(self, text: &str) -> Self {
         if !self.stdout().contains(text) {
