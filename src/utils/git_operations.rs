@@ -127,7 +127,13 @@ impl GitOperations {
         self.repo.path().to_string_lossy().to_string()
     }
 
-    #[allow(dead_code)]
+    /// Return the working directory this instance operates in — the main
+    /// checkout's root for `new()`, or the linked worktree's own directory
+    /// for an instance created with `new_at_path`.
+    pub fn workdir(&self) -> &str {
+        &self.repo_path
+    }
+
     pub fn new_at_path(path: &str) -> Result<Self> {
         // Open the repository at the exact path to avoid discovering parent repositories
         let repo = Repository::open(path).context("Not in a git repository")?;
@@ -1137,6 +1143,153 @@ impl GitOperations {
                 "Failed to delete branch '{}': {}",
                 branch,
                 stderr
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Add a linked worktree at `path`, checked out on a new branch `new_branch`
+    /// created from `source_commit` (a branch name or SHA).
+    ///
+    /// Used to compose an environment rebuild off to the side of the user's
+    /// own checkout: the worktree has its own working directory and HEAD but
+    /// shares this repository's object store and refs, so branches created or
+    /// merged there are immediately visible here too.
+    pub fn add_worktree(&self, path: &str, new_branch: &str, source_commit: &str) -> Result<()> {
+        let output =
+            self.run_git_command(&["worktree", "add", "-b", new_branch, path, source_commit])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create worktree at '{}' from '{}': {}",
+                path,
+                source_commit,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Remove a linked worktree previously created with `add_worktree`.
+    ///
+    /// `force` discards any uncommitted changes left inside it. If the
+    /// worktree's directory is already gone (e.g. a crashed process removed
+    /// it before deregistering it), this prunes the stale admin entry instead
+    /// of failing.
+    pub fn remove_worktree(&self, path: &str, force: bool) -> Result<()> {
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(path);
+
+        let output = self.run_git_command(&args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !std::path::Path::new(path).exists() || stderr.contains("is not a working tree") {
+                let _ = self.run_git_command(&["worktree", "prune"]);
+                return Ok(());
+            }
+            return Err(anyhow::anyhow!(
+                "Failed to remove worktree at '{}': {}",
+                path,
+                stderr
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Resolve `reference` to its commit OID, or `None` if it does not exist.
+    ///
+    /// Unlike `rev_parse`, a missing reference is not an error — this is the
+    /// primary way to ask "does this ref exist, and if so what does it point
+    /// at" in one call (e.g. an environment branch that hasn't been built yet).
+    pub fn rev_parse_opt(&self, reference: &str) -> Result<Option<String>> {
+        let output = self.run_git_command(&["rev-parse", "--verify", "--quiet", reference])?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(if sha.is_empty() { None } else { Some(sha) })
+    }
+
+    /// Atomically set `refname` to `new_oid`, using a compare-and-swap against
+    /// its current value.
+    ///
+    /// `expected_old_oid` must match the ref's current value exactly, or the
+    /// update is rejected — pass `None` to require that the ref does not
+    /// already exist. This is the single mutation point used to publish a
+    /// rebuilt environment branch: nothing about the ref is observable as
+    /// changed until this one call succeeds, and a concurrent rebuild that
+    /// raced us to publish first is detected instead of silently overwritten.
+    pub fn update_ref_cas(
+        &self,
+        refname: &str,
+        new_oid: &str,
+        expected_old_oid: Option<&str>,
+    ) -> Result<()> {
+        let old = expected_old_oid.unwrap_or("0000000000000000000000000000000000000000");
+        let output = self.run_git_command(&["update-ref", refname, new_oid, old])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to update '{}' to {} (expected current value {}): {}",
+                refname,
+                new_oid,
+                old,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
+    /// Set `refname` to `new_oid` unconditionally, creating it if needed.
+    ///
+    /// Only safe for refs whose content is derived/disposable, where
+    /// last-writer-wins cannot lose real work — e.g. a timestamped rebuild
+    /// backup ref. Anything that could clobber someone's own state should use
+    /// `update_ref_cas` instead.
+    pub fn update_ref(&self, refname: &str, new_oid: &str) -> Result<()> {
+        let output = self.run_git_command(&["update-ref", refname, new_oid])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to update '{}' to {}: {}",
+                refname,
+                new_oid,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(())
+    }
+
+    /// Force-push `branch` to origin, but only if the remote ref still equals
+    /// `expected_remote_oid` (`git push --force-with-lease`) — a compare-and-swap
+    /// over the network. Pass `None` when the branch is believed not to exist
+    /// on the remote yet; the push is rejected if it turns out to already be
+    /// there. Fails loudly instead of silently clobbering a concurrent push
+    /// (e.g. CI and a developer rebuilding the same environment at once).
+    pub fn force_push_with_lease(
+        &self,
+        branch: &str,
+        expected_remote_oid: Option<&str>,
+    ) -> Result<()> {
+        let refname = format!("refs/heads/{}", branch);
+        let expect = expected_remote_oid.unwrap_or("");
+        let lease = format!("--force-with-lease={}:{}", refname, expect);
+        let output = self.run_git_command(&["push", "origin", branch, &lease])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to force-push '{}' (lease against {}): {}",
+                branch,
+                if expect.is_empty() {
+                    "no remote branch"
+                } else {
+                    expect
+                },
+                String::from_utf8_lossy(&output.stderr)
             ));
         }
 

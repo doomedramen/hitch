@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::HitchConfig;
 use crate::utils::conflict_report::format_conflict_report;
+use crate::utils::git_operations::GitOperations;
 use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
 
@@ -581,17 +582,26 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
     })
 }
 
-/// Rebuild an environment by merging its promoted branches into a new environment branch
+/// Rebuild an environment by composing its promoted branches into a new
+/// environment branch, in an isolated worktree.
 ///
-/// This is the core reusable rebuild function that can be called by promote, demote, or rebuild commands
+/// This is the core reusable rebuild function that can be called by promote,
+/// demote, or rebuild commands.
 ///
-/// According to SPEC.md:
-/// - Step 1: Lock the environment (handled by caller using with_locked_env)
-/// - Step 2: Prepare temp branch
-/// - Step 3: Merge branches into temp branch
-/// - Step 4: Merge temp branch into real environment branch
-/// - Step 5: Update rebuiltAt timestamp (handled automatically on success)
-/// - Automatic rollback on any failure
+/// Design (see docs/merge-conflict-handling-plan.md, phase 1):
+/// - Composition happens in a disposable linked worktree, never in the
+///   user's own checkout — the user's working tree is not touched.
+/// - Base and every promoted branch are resolved to concrete SHAs once, right
+///   after synchronizing; the worktree is built from, and every merge
+///   consumes, those pinned SHAs. This closes the old TOCTOU window where a
+///   passing preflight could still conflict during the real merge because
+///   refs moved in between.
+/// - Publishing the rebuilt branch is a single compare-and-swap `update-ref`,
+///   preceded by writing a timestamped backup ref. There is no
+///   rename-to-backup-then-recreate window; a crash either leaves the old
+///   branch untouched or the new one fully published, never in between.
+/// - Automatic rollback on any failure (the worktree is torn down; the real
+///   environment branch is never mutated unless the whole build succeeded).
 pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
@@ -603,369 +613,101 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<()
     let git_dir = std::path::PathBuf::from(context.git().get_git_dir());
     let _rebuild_lock = crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
 
-    // Record original branch for cleanup - this is the branch the user was on when we started
-    // We always return users to their original branch, even if the rebuild fails
-    let user_original_branch = context.git().get_current_branch()?;
-    context.log_verbose(&format!(
-        "Recorded user's original branch: {}",
-        user_original_branch
-    ));
-    let mut cleanup_needed = false;
-
     // Get environment configuration to understand how to rebuild
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let environment = config
         .environments
         .get(env_name)
-        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?;
+        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?
+        .clone();
 
-    // Set up step logging
-    let base_steps = 4; // Initialize, create temp, merge/replace, cleanup
-    let merge_steps = if environment.branches.is_empty() {
-        1
-    } else {
-        environment.branches.len()
-    };
-    let total_steps = base_steps + merge_steps;
+    // Set up step logging: sync+pin, one step per branch to merge, publish.
+    let merge_steps = environment.branches.len().max(1);
+    let total_steps = 2 + merge_steps;
     let mut logger = StepLogger::new_with_output(
         format!("Rebuilding environment '{}'", env_name),
         total_steps,
         context.output.clone(),
     );
 
-    // Step 1: Initialize
-    logger.step("Initializing rebuild".to_string());
-
-    // Step 2: Prepare temp branch with timestamp to avoid conflicts
-    // The temp branch allows us to build the new environment state without affecting the real branch
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let temp_branch = format!("hitch-tmp-{}-{}", environment.base, timestamp);
-
-    // Use a closure to ensure proper cleanup even if an error occurs
-    let result = (|| -> Result<()> {
-        logger.step(format!(
-            "Creating temporary branch from '{}'",
+    // Step 1: synchronize base + every promoted branch once, then pin each to
+    // the concrete SHA we will actually build from. Everything below — the
+    // worktree's starting point, every squash merge — uses these pinned
+    // values instead of the mutable branch names, so a ref moving mid-build
+    // (another push, a concurrent rebuild) cannot change what we compose.
+    logger.step("Synchronizing branches".to_string());
+    if !context.git().branch_exists_anywhere(&environment.base)? {
+        return Err(anyhow::anyhow!(
+            "Base branch '{}' does not exist",
             environment.base
         ));
-        create_temp_branch_for_rebuild(context, &temp_branch, &environment.base)?;
-        cleanup_needed = true; // Mark that we have something to clean up
+    }
+    let mut all_branches = vec![environment.base.clone()];
+    all_branches.extend(environment.branches.iter().cloned());
+    context.git().synchronize_branches(&all_branches)?;
 
-        // Step 3: Merge all promoted branches into temp branch using squash merges
-        // Squash merges combine all changes without creating merge commits, keeping history clean
-        if !environment.branches.is_empty() {
-            logger.step(format!(
-                "Merging {} promoted branches",
-                environment.branches.len()
-            ));
-            context.log_verbose(&format!("Branches to merge: {:?}", environment.branches));
-            perform_squash_merges_for_rebuild(
-                context,
-                &temp_branch,
-                &environment.branches,
-                &environment.base,
-                env_name,
-            )?;
-        } else {
-            logger.step("No promoted branches to merge".to_string());
-        }
-
-        // Step 4: Replace the real environment branch with our rebuilt temp branch
-        // This creates a backup first, then atomically replaces the branch
-        logger.step(format!(
-            "Replacing '{}' branch with rebuilt content",
-            env_name
-        ));
-        let backup_branch =
-            safe_replace_environment_branch_for_rebuild(context, env_name, &temp_branch)?;
-
-        // Update rebuiltAt timestamp on success
-        update_rebuilt_timestamp_for_rebuild(context, env_name)?;
-
-        // Cleanup Step 1: Delete backup branch (it was created as a safety net during replacement)
-        // We use force delete since the backup might have been merged or have other references
-        let mut cleanup_errors = Vec::new();
-        if context.git().branch_exists(&backup_branch)? {
-            logger.step(format!("Cleaning up backup branch '{}'", backup_branch));
-            if let Err(e) = context.git().delete_branch(&backup_branch, true) {
-                let error_msg =
-                    format!("Failed to delete backup branch '{}': {}", backup_branch, e);
-                context.log_warning(&error_msg);
-                cleanup_errors.push(error_msg);
-            }
-        } else {
-            context.log_verbose(&format!(
-                "No backup branch '{}' to clean up (first rebuild)",
-                backup_branch
+    let base_sha = context.git().get_branch_commit_sha(&environment.base)?;
+    let mut pinned_branches = Vec::with_capacity(environment.branches.len());
+    for branch in &environment.branches {
+        if !context.git().branch_exists(branch)? {
+            return Err(anyhow::anyhow!(
+                "Branch '{}' does not exist locally after synchronization",
+                branch
             ));
         }
-
-        // Cleanup Step 2: Delete the temporary branch we used for rebuilding
-        // Try regular delete first (if branch is fully merged), then force delete if needed
-        logger.step(format!("Cleaning up temporary branch '{}'", temp_branch));
-        if let Err(_e) = context.git().delete_branch(&temp_branch, false) {
-            // Regular delete failed, likely because branch wasn't merged
-            // Try force delete to remove it anyway
-            context.log_verbose(&format!(
-                "Regular delete failed, trying force delete for '{}'",
-                temp_branch
-            ));
-            if let Err(e2) = context.git().delete_branch(&temp_branch, true) {
-                let error_msg = format!("Failed to delete temp branch '{}': {}", temp_branch, e2);
-                context.log_warning(&error_msg);
-                cleanup_errors.push(error_msg);
-            }
-        }
-
-        // Report overall success/failure based on cleanup results
-        if cleanup_errors.is_empty() {
-            context.log_verbose(&format!(
-                "✓ Successfully cleaned up all temporary branches for environment '{}'",
-                env_name
-            ));
-        } else {
-            context.log_warning(&format!(
-                "Cleanup completed with {} error(s) for environment '{}'",
-                cleanup_errors.len(),
-                env_name
-            ));
-            for error in &cleanup_errors {
-                context.log_warning(&format!("  {}", error));
-            }
-        }
-
-        cleanup_needed = false; // Mark that cleanup is complete
-        Ok(())
-    })();
-
-    // CRITICAL: Ensure cleanup happens even if rebuild fails
-    // This is the error recovery path - we must always clean up temp branches
-    // and return the user to their original branch.
-    if cleanup_needed {
-        context.log_warning("Rebuild failed, performing cleanup...");
-
-        // Determine current branch to decide if we need to switch back
-        let current_branch = match context.git().get_current_branch() {
-            Ok(branch) => branch,
-            Err(_) => {
-                context.log_error("Failed to get current branch during cleanup");
-                // Assume we need to switch back if we can't determine current branch
-                user_original_branch.clone()
-            }
-        };
-
-        // If we're not on the user's original branch, we need to switch back
-        if current_branch != user_original_branch {
-            context.log_info(&format!(
-                "Returning to user's original branch '{}'",
-                user_original_branch
-            ));
-
-            // CRITICAL: Abort any ongoing merge before checking out
-            // Git will refuse checkout if there are unresolved merge conflicts
-            if let Err(e) = context.git().abort_merge_and_clean() {
-                context.log_warning(&format!(
-                    "Failed to reset working directory before checkout: {}",
-                    e
-                ));
-            }
-
-            // Handle detached HEAD case specially
-            let checkout_result =
-                if let Some(commit_hash) = user_original_branch.strip_prefix("detached-HEAD-") {
-                    // Extract commit hash from detached-HEAD-abcdef1 format
-                    context.git().checkout_branch(commit_hash)
-                } else {
-                    context.git().checkout_branch(&user_original_branch)
-                };
-
-            if let Err(e) = checkout_result {
-                context.log_error(&format!(
-                    "Failed to return to user's original branch '{}': {}",
-                    user_original_branch, e
-                ));
-            }
-        }
-
-        // Clean up temp branch if it exists
-        if context.git().branch_exists(&temp_branch)? {
-            context.log_info(&format!("Cleaning up failed temp branch '{}'", temp_branch));
-
-            // First, abort any ongoing merge and reset working directory to clean state
-            if let Err(e) = context.git().abort_merge_and_clean() {
-                context.log_warning(&format!(
-                    "Failed to reset working directory during cleanup: {}",
-                    e
-                ));
-            }
-
-            // Now try to delete the temp branch
-            if let Err(e) = context.git().delete_branch(&temp_branch, true) {
-                context.log_warning(&format!(
-                    "Failed to delete temp branch '{}': {}",
-                    temp_branch, e
-                ));
-            }
-        }
+        let sha = context.git().get_branch_commit_sha(branch)?;
+        pinned_branches.push((branch.clone(), sha));
     }
 
-    // Propagate the original result
-    result?;
+    // Snapshot the remote environment SHA now, before building, so the
+    // eventual push is leased against what we actually observed — not
+    // whatever `origin/<env>` happens to be once the build finishes.
+    let remote_env_sha_before = context
+        .git()
+        .rev_parse_opt(&format!("refs/remotes/origin/{}", env_name))?;
 
-    // Ensure we're back on the user's original branch after successful rebuild
-    let current_branch = match context.git().get_current_branch() {
-        Ok(branch) => branch,
-        Err(_) => {
-            context.log_warning("Failed to get current branch after rebuild");
-            user_original_branch.clone()
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let temp_branch = format!("hitch-tmp-{}-{}", environment.base, timestamp);
+    let worktree_path = worktree_path_for(context, env_name, &timestamp)?;
+    let worktree_path_str = worktree_path.to_string_lossy().to_string();
+
+    context
+        .git()
+        .add_worktree(&worktree_path_str, &temp_branch, &base_sha)?;
+
+    let cleanup_worktree = || {
+        let _ = context.git().remove_worktree(&worktree_path_str, true);
+        if context.git().branch_exists(&temp_branch).unwrap_or(false) {
+            let _ = context.git().delete_branch(&temp_branch, true);
         }
     };
 
-    if current_branch != user_original_branch {
-        context.log_info(&format!(
-            "Returning to user's original branch '{}'",
-            user_original_branch
-        ));
+    // Step 2..N: compose the promoted branches, in order, in the worktree.
+    let build_result = (|| -> Result<String> {
+        let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
 
-        // Handle detached HEAD case specially
-        let checkout_result =
-            if let Some(commit_hash) = user_original_branch.strip_prefix("detached-HEAD-") {
-                // Extract commit hash from detached-HEAD-abcdef1 format
-                context.git().checkout_branch(commit_hash)
-            } else {
-                context.git().checkout_branch(&user_original_branch)
-            };
+        for (branch, sha) in &pinned_branches {
+            logger.step(format!("Merging '{}'", branch));
 
-        if let Err(e) = checkout_result {
-            context.log_warning(&format!(
-                "Failed to return to user's original branch '{}': {}",
-                user_original_branch, e
-            ));
-        } else {
-            context.log_verbose(&format!(
-                "✓ Returned to user's original branch '{}'",
-                user_original_branch
-            ));
-        }
-    }
-
-    logger.complete();
-
-    context.log_verbose(&format!(
-        "✓ Rebuild process completed for environment '{}'",
-        env_name
-    ));
-    Ok(())
-}
-
-/// Create a temporary branch from the base branch for rebuilding
-fn create_temp_branch_for_rebuild(
-    context: &GlobalContext,
-    temp_branch: &str,
-    base_branch: &str,
-) -> Result<()> {
-    // Ensure base branch exists
-    if !context.git().branch_exists_anywhere(base_branch)? {
-        return Err(anyhow::anyhow!(
-            "Base branch '{}' does not exist",
-            base_branch
-        ));
-    }
-
-    // Synchronize base branch - ensure it's available locally
-    context
-        .git()
-        .synchronize_branches(&[base_branch.to_string()])?;
-    context.log_verbose(&format!("✓ Synchronized base branch '{}'", base_branch));
-
-    // Create temp branch from base branch
-    context.git().create_branch_from(temp_branch, base_branch)?;
-    context.log_verbose(&format!(
-        "✓ Created temporary branch '{}' from '{}'",
-        temp_branch, base_branch
-    ));
-
-    Ok(())
-}
-
-/// Perform squash merges of promoted branches into temp branch for rebuilding
-///
-/// When a squash merge would conflict, this function returns a detailed conflict report
-/// without leaving any mid-operation resolve state behind.
-fn perform_squash_merges_for_rebuild(
-    context: &GlobalContext,
-    temp_branch: &str,
-    branches: &[String],
-    base_branch: &str,
-    env_name: &str,
-) -> Result<()> {
-    // Record original branch
-    let original_branch = context.git().get_current_branch()?;
-
-    // Synchronize branches before starting merge operations
-    context.log_info("Synchronizing remote branches...");
-    context.git().synchronize_branches(branches)?;
-    context.log_info("✓ Branch synchronization complete");
-
-    // Use a closure to ensure we always return to original branch
-    let result = (|| -> Result<()> {
-        // Switch to temp branch
-        context.git().checkout_branch(temp_branch)?;
-
-        // Clean working directory to avoid issues with untracked files
-        if !context.git().is_working_directory_clean()? {
-            context.log_verbose("Cleaning working directory before merge operations");
-            context
-                .git()
-                .clean_working_directory("Clean up before rebuild operations")?;
-        }
-
-        for branch in branches {
-            context.log_verbose(&format!("Processing branch '{}'", branch));
-
-            if !context.git().branch_exists(branch)? {
-                return Err(anyhow::anyhow!(
-                    "Branch '{}' does not exist locally after synchronization",
-                    branch
-                ));
-            }
-
-            // Perform the squash merge directly. Previously this did a separate
-            // "dry-run" `merge --no-ff` conflict check and then a second real
-            // `merge --squash` — merging every branch twice. Instead we do the one
-            // real merge and, if it conflicts, build the report from the state it
-            // left behind (the trailing abort_merge_and_clean below then clears it).
             let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
-            context.log_verbose(&format!(
-                "Attempting to squash merge '{}' into temp branch...",
-                branch
-            ));
-
-            match context.git().squash_merge(branch, &merge_message) {
+            match worktree_git.squash_merge(sha, &merge_message) {
                 Ok(()) => {
-                    context.log_verbose(&format!(
-                        "✓ Successfully squash merged '{}' into temp branch",
-                        branch
-                    ));
+                    context.log_verbose(&format!("✓ Squash merged '{}' into worktree", branch));
                 }
                 Err(e) => {
                     // Distinguish a genuine merge conflict (report it clearly) from
                     // any other failure (propagate as-is).
-                    if context.git().has_merge_conflicts().unwrap_or(false) {
-                        context.log_verbose(&format!(
-                            "Merge conflicts detected in branch '{}'",
-                            branch
-                        ));
-
-                        let conflict_result = context.git().current_conflict_result(branch)?;
+                    if worktree_git.has_merge_conflicts().unwrap_or(false) {
+                        let conflict_result = worktree_git.current_conflict_result(branch)?;
                         let conflict_report = format_conflict_report(
                             branch,
                             &conflict_result.target_branch,
-                            base_branch,
+                            &environment.base,
                             env_name,
                             &conflict_result.conflicted_files,
                             conflict_result.merge_base.as_ref(),
                         );
-
+                        let _ = worktree_git.abort_merge_and_clean();
                         return Err(anyhow::anyhow!("{}", conflict_report));
                     }
 
@@ -974,50 +716,60 @@ fn perform_squash_merges_for_rebuild(
             }
         }
 
-        Ok(())
+        if environment.branches.is_empty() {
+            logger.step("No promoted branches to merge".to_string());
+        }
+
+        worktree_git.rev_parse("HEAD")
     })();
 
-    // Always return to original branch and clean up any dangling merge state.
-    let _ = context.git().abort_merge_and_clean();
-    if let Err(e) = context.git().checkout_branch(&original_branch) {
-        context.log_error(&format!(
-            "Failed to return to original branch '{}' after merge operations: {}",
-            original_branch, e
-        ));
-    }
+    let new_sha = match build_result {
+        Ok(sha) => sha,
+        Err(e) => {
+            cleanup_worktree();
+            return Err(e);
+        }
+    };
 
-    result
-}
+    // Publish: back up the current environment ref (if any), then swap it to
+    // the newly built commit with a single compare-and-swap. This is the only
+    // instruction that mutates `refs/heads/<env>` — nothing about it is
+    // observable as changed until this call succeeds.
+    logger.step(format!("Publishing '{}'", env_name));
+    let env_ref = format!("refs/heads/{}", env_name);
+    let old_env_sha = context.git().rev_parse_opt(&env_ref)?;
 
-/// Safely replace environment branch with temp branch for rebuilding
-fn safe_replace_environment_branch_for_rebuild(
-    context: &GlobalContext,
-    env_name: &str,
-    temp_branch: &str,
-) -> Result<String> {
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let backup_branch = format!("hitch-backup-{}-{}", env_name, timestamp);
-
-    // Record original branch
-    let original_branch = context.git().get_current_branch()?;
-
-    // Step 4a: Rename current environment branch to backup
-    if context.git().branch_exists(env_name)? {
+    if let Some(ref old_sha) = old_env_sha {
+        let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, timestamp);
+        context.git().update_ref(&backup_ref, old_sha)?;
         context.log_verbose(&format!(
-            "Backing up '{}' branch to '{}'",
-            env_name, backup_branch
+            "✓ Backed up previous '{}' ({}) to '{}'",
+            env_name, old_sha, backup_ref
         ));
-        context.git().rename_branch(env_name, &backup_branch)?;
     }
 
-    // Step 4b: Create new environment branch from temp branch
-    context.log_verbose(&format!(
-        "Creating new '{}' branch from temp branch",
-        env_name
-    ));
-    context.git().create_branch_from(env_name, temp_branch)?;
+    if let Err(e) = context
+        .git()
+        .update_ref_cas(&env_ref, &new_sha, old_env_sha.as_deref())
+    {
+        cleanup_worktree();
+        return Err(anyhow::anyhow!(
+            "Failed to publish rebuilt '{}' branch: {}. The build itself succeeded but could \
+             not be published — this usually means another rebuild landed first. Fetch and \
+             re-run 'hitch rebuild {}'.",
+            env_name,
+            e,
+            env_name
+        ));
+    }
 
-    // Step 4c: Handle remote branch replacement - prompt/confirm when push is enabled
+    cleanup_worktree();
+    context.log_verbose(&format!(
+        "✓ Published rebuilt '{}' branch ({})",
+        env_name, new_sha
+    ));
+
+    // Handle remote replacement - prompt/confirm when push is enabled
     if context.should_push() {
         context.log_warning(&format!(
             "Ready to force push the rebuilt '{}' branch to 'origin/{}'.",
@@ -1034,20 +786,28 @@ fn safe_replace_environment_branch_for_rebuild(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name
             ));
-            if let Err(e) = context.git().force_push_branch(env_name) {
-                context.log_error(&format!(
-                    "Failed to force push rebuilt '{}' branch: {}",
-                    env_name, e
-                ));
-                context.log_error(&format!(
-                    "You may need to manually run: git push origin {} --force",
-                    env_name
-                ));
-            } else {
-                context.log_success(&format!(
-                    "✓ Force pushed rebuilt '{}' branch to remote",
-                    env_name
-                ));
+            match context
+                .git()
+                .force_push_with_lease(env_name, remote_env_sha_before.as_deref())
+            {
+                Ok(()) => {
+                    context.log_success(&format!(
+                        "✓ Force pushed rebuilt '{}' branch to remote",
+                        env_name
+                    ));
+                }
+                Err(e) => {
+                    context.log_error(&format!(
+                        "Failed to force push rebuilt '{}' branch: {}",
+                        env_name, e
+                    ));
+                    context.log_error(&format!(
+                        "Someone may have pushed to '{}' while this rebuild ran. Fetch and \
+                         re-run 'hitch rebuild {}', or push manually once you've confirmed \
+                         it's safe to overwrite: git push origin {} --force",
+                        env_name, env_name, env_name
+                    ));
+                }
             }
         } else {
             context.log_info(&format!(
@@ -1066,11 +826,43 @@ fn safe_replace_environment_branch_for_rebuild(
         ));
     }
 
-    // Return to original branch
-    context.git().checkout_branch(&original_branch)?;
+    // Update rebuiltAt timestamp on success
+    update_rebuilt_timestamp_for_rebuild(context, env_name)?;
 
-    context.log_verbose(&format!("✓ Successfully replaced '{}' branch", env_name));
-    Ok(backup_branch)
+    logger.complete();
+
+    context.log_verbose(&format!(
+        "✓ Rebuild process completed for environment '{}'",
+        env_name
+    ));
+    Ok(())
+}
+
+/// Choose a filesystem path for the disposable worktree a rebuild composes
+/// in — a sibling of the repository directory, never inside `.git` (backup
+/// tools that archive `.git` should not sweep up a full working copy) and
+/// never inside the repository itself (so it can't be picked up by the
+/// user's own `git add`).
+fn worktree_path_for(
+    context: &GlobalContext,
+    env_name: &str,
+    timestamp: &str,
+) -> Result<std::path::PathBuf> {
+    let repo_path = std::path::PathBuf::from(context.git().workdir());
+    let repo_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+    let parent = repo_path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Repository at '{}' has no parent directory to place a build worktree in",
+            repo_path.display()
+        )
+    })?;
+    Ok(parent.join(format!(
+        ".hitch-worktree-{}-{}-{}",
+        repo_name, env_name, timestamp
+    )))
 }
 
 /// Update the rebuiltAt timestamp for an environment during rebuilding
