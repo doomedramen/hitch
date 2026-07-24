@@ -95,6 +95,72 @@ The tradeoff is merge fixes. Because Hitch repeatedly composes branches against 
 
 **Release also rebuilds dependent environments.** Once a release moves `<target>`, any environment whose `base` is `<target>` — and transitively, any environment based on *those* — is now stale relative to its own definition, so Hitch rebuilds (and pushes) each of them as part of the same release. This is common: if `dev`'s base is `main` and you `hitch release dev main`, `dev` itself qualifies and gets rebuilt right after. In practice this is usually a no-op, since `main` now already contains what `dev` was rebuilding from — it only does real work when other promoted branches or dependent environments are still layered on top. This step is best-effort (a rebuild failure is reported as a warning, not a release failure) and can be skipped with `--no-rebuild-dependents`.
 
+## 🧩 Handling Merge Conflicts
+
+When a promoted branch can't compose cleanly, Hitch tells you exactly which branch, what it conflicts with, and gives you a guided path to fix it — instead of leaving you to work it out with raw `git`.
+
+**1. See what's wrong.** A conflicting branch is *held* — excluded from the build while the rest still compose (see below) — and named with what it collides with:
+
+```bash
+hitch rebuild dev
+# ⛔ 'dev': 1 branch held (excluded from this build)
+#   branch-b conflicts with branch-a
+#     shared.txt
+
+hitch conflicts dev          # same report, without rebuilding
+hitch status                 # ⛔ glyph next to the held branch, anywhere in the tree
+```
+
+**2. Resolve it — Hitch picks the right mode for you:**
+
+```bash
+hitch resolve dev            # infers the branch if only one is held, else use --branch
+```
+
+- **Conflicts with the base branch** (most common — base moved on after you branched): Hitch checks out your branch and runs `git rebase <base>`, then hands off to plain Git. Fix the conflict, `git add`, `git rebase --continue`, push, done — this is the durable fix, since the branch itself is repaired.
+- **Conflicts with another promoted branch** (neither branch can own the fix alone): Hitch builds the composition up to that point in an isolated worktree — your own checkout is never touched — and leaves you real conflict markers there:
+
+  ```bash
+  # edit the files in the printed worktree path, then:
+  hitch resolve dev --branch branch-b --continue
+  # or: hitch resolve dev --branch branch-b --abort
+  # or: hitch resolve dev --branch branch-b --path   (print the path, e.g. to open in an editor)
+  # or add --tool to the first call to run `git mergetool` instead of editing by hand
+  ```
+
+  `--continue` publishes the resolved build immediately, so the fix is live in `dev` right away — but it's a **one-time inclusion**: nothing is saved, so the same conflict comes back on the next plain rebuild unless you carry the fix into a real branch, or record it (next step).
+
+**3. Optionally, record the resolution for reuse:**
+
+```bash
+hitch resolve dev --branch branch-b --continue --record   # save it locally
+hitch resolve dev --branch branch-b --continue --share    # save it and push to origin for the team
+```
+
+A later rebuild can replay it instead of re-resolving by hand:
+
+```bash
+hitch rebuild dev --replay-resolutions
+```
+
+Replay only ever fires when the conflicting content on both sides matches the recording exactly — if either branch changes even slightly, it's a clean miss and the branch is held normally, never a wrong or stale fix. Without `--yes` you're asked to confirm the first time each recorded resolution is applied; recording and sharing never happen silently — `--record`/`--share` must be passed explicitly.
+
+```bash
+hitch resolutions list                          # see what's recorded
+hitch resolutions show <key>                     # inspect one
+hitch resolutions forget <key>                   # delete it once retired
+hitch doctor --max-resolution-age-days 30        # fail CI if a recording is going stale
+```
+
+Recorded resolutions are a convenience, not a substitute for fixing the branch — treat them as debt to retire, not permanent infrastructure.
+
+**4. If you'd rather nothing ship until every branch composes cleanly**, set the environment (or a single run) to halt instead of eject:
+
+```bash
+hitch set dev --on-conflict halt          # persist the policy
+hitch rebuild dev --on-conflict halt      # or just override this run
+```
+
 ## 📋 Key Commands
 
 ```bash
