@@ -337,4 +337,157 @@ mod tests {
 
         Ok(())
     }
+
+    /// Set up dev with branch-a and branch-b conflicting on shared.txt, then
+    /// record a resolution for branch-b (Mode B --continue --record).
+    /// Returns nothing; leaves the recorded ref in place.
+    fn setup_and_record(env: &TestEnvironment) -> anyhow::Result<()> {
+        env.hitch
+            .run()
+            .args(&["add", "dev"])
+            .execute()?
+            .assert_success();
+
+        env.fs.write_file("shared.txt", "base\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git.run(&["commit", "-m", "base"])?;
+
+        env.git.run(&["checkout", "-b", "branch-a"])?;
+        env.fs.write_file("shared.txt", "from-a\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git.run(&["commit", "-m", "a"])?;
+        env.git.run(&["checkout", "main"])?;
+
+        env.git.run(&["checkout", "-b", "branch-b"])?;
+        env.fs.write_file("shared.txt", "from-b\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git.run(&["commit", "-m", "b"])?;
+        env.git.run(&["checkout", "main"])?;
+
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let config_str = env.fs.read_file("hitch.json")?;
+        let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+        config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git.run(&["commit", "-m", "test: inject branches"])?;
+        env.git.run(&["checkout", "main"])?;
+
+        env.hitch
+            .run()
+            .args(&["--no-push", "resolve", "dev", "--branch", "branch-b"])
+            .execute()?
+            .assert_success();
+
+        let worktree_path = env.temp_dir.parent().unwrap().join(format!(
+            ".hitch-resolve-{}-dev-branch-b",
+            env.temp_dir.file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::write(worktree_path.join("shared.txt"), "resolved-both\n")?;
+        std::process::Command::new("git")
+            .args(["add", "shared.txt"])
+            .current_dir(&worktree_path)
+            .status()?;
+
+        env.hitch
+            .run()
+            .args(&[
+                "--no-push",
+                "resolve",
+                "dev",
+                "--branch",
+                "branch-b",
+                "--continue",
+                "--record",
+            ])
+            .execute()?
+            .assert_success();
+
+        Ok(())
+    }
+
+    /// A recorded resolution is replayed under `--replay-resolutions` — the
+    /// conflicting branch composes instead of being held — but a plain
+    /// rebuild still holds it (replay is strictly opt-in).
+    #[test]
+    fn test_replay_composes_recorded_resolution() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_and_record(env)?;
+
+            // Plain rebuild: branch-b is still held.
+            env.hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("held");
+
+            // With replay (and --yes, since the test is non-interactive):
+            // branch-b composes from the recording.
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Reused recorded resolution");
+
+            assert_eq!(
+                env.git.run(&["show", "dev:shared.txt"])?.stdout().trim(),
+                "resolved-both"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Structural staleness: after the recorded branch moves (so the conflict
+    /// stage OIDs differ), the exact-match key no longer hits, so replay is a
+    /// miss and the branch is held — never a wrong (stale) replay. This is
+    /// the red-team-critical property that motivated content-addressed keying
+    /// over rerere.
+    #[test]
+    fn test_replay_is_a_miss_after_branch_moves() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_and_record(env)?;
+
+            // Move branch-b so its side of the conflict has a different blob.
+            env.git.run(&["checkout", "branch-b"])?;
+            env.fs.write_file("shared.txt", "from-b-CHANGED\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "branch-b moved"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Even with replay on, the recorded resolution doesn't match the
+            // new conflict, so branch-b is held rather than wrongly replayed.
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("held");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

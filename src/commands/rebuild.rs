@@ -35,6 +35,15 @@ pub struct RebuildCommand {
     /// plain rebuild never depends on GitHub.
     #[arg(long)]
     pub pr_comments: bool,
+
+    /// Before holding a conflicting branch, try to compose it from a
+    /// recorded resolution matching the exact conflict (see `hitch resolve
+    /// --record` and `hitch resolutions`). Opt-in per run — this flag can't
+    /// live in HITCH_YES, so it is itself the authorization to apply
+    /// someone's recorded content. Without `--yes` each distinct resolution
+    /// is confirmed once; under `--yes` (CI) every application is logged.
+    #[arg(long)]
+    pub replay_resolutions: bool,
 }
 
 /// Runs the rebuild. Returns `Ok(true)` if it succeeded but held one or more
@@ -103,7 +112,12 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     // rebuild_environment itself, using the same pinned SHAs the build uses
     // (a single source of truth, rather than a second, separately-timed
     // check that could in principle disagree with the real merge).
-    if on_conflict == OnConflict::Halt {
+    //
+    // Skipped when replaying: a recorded resolution may compose a conflict
+    // the read-only preflight (which knows nothing about resolutions) would
+    // flag, so the decision is deferred into rebuild_environment_opts, which
+    // tries replay first and only then halts on a still-unresolved conflict.
+    if on_conflict == OnConflict::Halt && !args.replay_resolutions {
         let conflicts = preflight_compatibility_report(context, &base_branch, &promoted_branches)?;
         if !conflicts.is_empty() {
             return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
@@ -114,15 +128,16 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     }
 
     // Step 3: Execute rebuild
+    let replay = args.replay_resolutions;
     let outcome = if args.force {
         context.log_info(&format!(
             "Force rebuilding locked environment '{}'...",
             args.env_name
         ));
-        crate::utils::prelude::rebuild_environment(context, &args.env_name)?
+        crate::utils::prelude::rebuild_environment_opts(context, &args.env_name, replay)?
     } else {
         with_locked_env(context, &args.env_name, || {
-            crate::utils::prelude::rebuild_environment(context, &args.env_name)
+            crate::utils::prelude::rebuild_environment_opts(context, &args.env_name, replay)
         })?
     };
 
@@ -133,6 +148,19 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             &promoted_branches,
             &outcome.held,
         );
+    }
+
+    if !outcome.replayed.is_empty() {
+        context.log_info(&format!(
+            "♻️ Composed {} branch{} from recorded resolutions: {}",
+            outcome.replayed.len(),
+            if outcome.replayed.len() == 1 {
+                ""
+            } else {
+                "es"
+            },
+            outcome.replayed.join(", ")
+        ));
     }
 
     if outcome.held.is_empty() {

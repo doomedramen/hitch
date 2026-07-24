@@ -587,6 +587,9 @@ pub struct RebuildOutcome {
     /// Branches that were excluded from this build because they conflicted
     /// (only ever non-empty under `OnConflict::Eject`).
     pub held: Vec<CompatibilityConflict>,
+    /// Branches that conflicted but were composed anyway from a recorded
+    /// resolution (only ever non-empty under `--replay-resolutions`).
+    pub replayed: Vec<String>,
 }
 
 /// Rebuild an environment by composing its promoted branches into a new
@@ -615,6 +618,21 @@ pub struct RebuildOutcome {
 ///   every merge queue surveyed converges on — while `Halt` aborts the whole
 ///   rebuild on the first conflict, as phase 1 always did.
 pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
+    rebuild_environment_opts(context, env_name, false)
+}
+
+/// `rebuild_environment` with the phase-5 replay opt-in. `replay = true`
+/// (only ever set by `hitch rebuild --replay-resolutions`) makes a
+/// conflicting branch first try a recorded, content-addressed resolution
+/// (see `crate::utils::resolutions`) before being held — turning a
+/// previously hand-resolved peer conflict back into a clean compose without
+/// re-resolving it. Every other caller (promote, demote, release, approve)
+/// passes `false`, so a plain rebuild never consults resolutions.
+pub fn rebuild_environment_opts(
+    context: &GlobalContext,
+    env_name: &str,
+    replay: bool,
+) -> Result<RebuildOutcome> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
         env_name
@@ -700,6 +718,9 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
     // it, so nine healthy branches are never blocked by one broken one — or
     // the whole rebuild halts, per the environment's `on_conflict` policy.
     let mut held: Vec<CompatibilityConflict> = Vec::new();
+    let mut replayed: Vec<String> = Vec::new();
+    let mut confirmed_replay_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     let build_result = (|| -> Result<String> {
         let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
         let mut last_composed = environment.base.clone();
@@ -717,6 +738,27 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
                     // Distinguish a genuine merge conflict (report it clearly) from
                     // any other failure (propagate as-is).
                     if worktree_git.has_merge_conflicts().unwrap_or(false) {
+                        // Try a recorded resolution first (phase 5, opt-in).
+                        // An exact content-addressed match means byte-identical
+                        // conflict inputs, so replaying it reproduces the same
+                        // fix a human already made — turning the hold back into
+                        // a clean compose. On any miss, decline, or error, fall
+                        // through to the normal halt/eject path unchanged.
+                        if replay
+                            && try_replay_resolution(
+                                context,
+                                &worktree_git,
+                                &worktree_path_str,
+                                branch,
+                                &merge_message,
+                                &mut confirmed_replay_keys,
+                            )?
+                        {
+                            replayed.push(branch.clone());
+                            last_composed = branch.clone();
+                            continue;
+                        }
+
                         let conflict_result = worktree_git.current_conflict_result(branch)?;
 
                         if environment.on_conflict == OnConflict::Halt {
@@ -800,7 +842,7 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
         "✓ Rebuild process completed for environment '{}'",
         env_name
     ));
-    Ok(RebuildOutcome { held })
+    Ok(RebuildOutcome { held, replayed })
 }
 
 /// Publish `new_sha` as environment `env_name`'s new content: back up the
@@ -936,6 +978,124 @@ fn worktree_path_for(
         ".hitch-worktree-{}-{}-{}",
         repo_name, env_name, timestamp
     )))
+}
+
+/// Attempt to compose a conflicting branch from a recorded resolution rather
+/// than holding it (phase 5 replay). The worktree currently holds the failed
+/// squash-merge's conflict state; this reads the exact conflict stages, looks
+/// up a content-addressed resolution, and — if one exists and is authorized —
+/// writes the recorded resolved content over the conflicted files, stages it,
+/// and commits the squash. Returns `Ok(true)` when the branch was composed
+/// this way, `Ok(false)` on any miss/decline (caller then holds/halts as
+/// usual). A hard error is only returned for an unexpected git failure.
+///
+/// Safety (see docs/merge-conflict-handling-plan.md phase 5 hardening):
+/// - The match is exact over `(path, base_oid, ours_oid, theirs_oid)`, so a
+///   resolution only ever applies to byte-identical conflict inputs — any
+///   change to any side is a miss, never a wrong replay.
+/// - The whole feature is opt-in per invocation (`--replay-resolutions`),
+///   a flag that cannot hide in `HITCH_YES`.
+/// - Without `--yes`, each distinct resolution is confirmed once before it is
+///   applied; under `--yes` (CI) the explicit flag is the authorization and
+///   every application is logged loudly with its key and recorder.
+fn try_replay_resolution(
+    context: &GlobalContext,
+    worktree_git: &GitOperations,
+    worktree_path: &str,
+    branch: &str,
+    merge_message: &str,
+    confirmed_keys: &mut std::collections::HashSet<String>,
+) -> Result<bool> {
+    use crate::utils::resolutions;
+
+    let stages = match worktree_git.unmerged_stages() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return Ok(false),
+    };
+    let key = resolutions::resolution_key(context.git(), &stages)?;
+    let Some(res) = resolutions::load_resolution(context.git(), &key)? else {
+        return Ok(false);
+    };
+
+    // Authorize. The exact-OID match guarantees identical inputs, but a
+    // recorded resolution is still someone else's content landing on a
+    // deployable branch, so gate it: prompt once per key without --yes;
+    // under --yes the explicit --replay-resolutions flag is the go-ahead and
+    // we log loudly instead.
+    if !confirmed_keys.contains(&key) {
+        if context.assume_yes {
+            context.log_warning(&format!(
+                "♻️ Applying recorded resolution {} for '{}' (recorded by {} at {}) under \
+                 --yes/--replay-resolutions.",
+                &key[..12.min(key.len())],
+                branch,
+                res.meta.recorded_by,
+                res.meta.recorded_at
+            ));
+        } else {
+            let ok = context.confirm(&format!(
+                "Apply recorded resolution {} for '{}' (by {} at {}) to '{}'?",
+                &key[..12.min(key.len())],
+                branch,
+                res.meta.recorded_by,
+                res.meta.recorded_at,
+                res.meta.env
+            ))?;
+            if !ok {
+                context.log_info(&format!(
+                    "Declined resolution for '{}' — it will be held instead.",
+                    branch
+                ));
+                return Ok(false);
+            }
+        }
+        confirmed_keys.insert(key.clone());
+    }
+
+    // Apply: overwrite each conflicted file with the recorded resolved
+    // content, stage everything, verify no conflict markers remain, commit
+    // the squash. If anything goes wrong, abort back to a clean worktree and
+    // report a miss so the branch is held rather than left half-applied.
+    let apply = (|| -> Result<()> {
+        for (path, content) in &res.resolved {
+            let full = std::path::Path::new(worktree_path).join(path);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&full, content)?;
+        }
+        let add = worktree_git.run_git_command(&["add", "--all"])?;
+        if !add.status.success() {
+            return Err(anyhow::anyhow!(
+                "git add failed while applying resolution: {}",
+                String::from_utf8_lossy(&add.stderr)
+            ));
+        }
+        if worktree_git.has_merge_conflicts().unwrap_or(false) {
+            return Err(anyhow::anyhow!(
+                "recorded resolution did not clear every conflicted path"
+            ));
+        }
+        worktree_git.commit(merge_message)?;
+        Ok(())
+    })();
+
+    if let Err(e) = apply {
+        context.log_verbose(&format!(
+            "Could not apply recorded resolution for '{}': {} — holding instead.",
+            branch, e
+        ));
+        let _ = worktree_git.abort_merge_and_clean();
+        return Ok(false);
+    }
+
+    context.log_info(&format!(
+        "♻️ Reused recorded resolution {} for '{}' (by {}).",
+        &key[..12.min(key.len())],
+        branch,
+        res.meta.recorded_by
+    ));
+    Ok(true)
 }
 
 /// Update the rebuiltAt timestamp for an environment during rebuilding
