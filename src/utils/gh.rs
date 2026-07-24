@@ -154,6 +154,10 @@ fn gh_api(endpoint: &str, flags: &[&str]) -> Result<String> {
     for flag in flags {
         cmd.arg(flag);
     }
+    // Never let `gh` block reading from a real inherited terminal (e.g. an
+    // auth device-code prompt) — see the matching comment in
+    // git_operations.rs::run_git_command.
+    cmd.stdin(std::process::Stdio::null());
 
     let output = cmd
         .output()
@@ -229,6 +233,7 @@ fn gh_api_with_body(
 pub fn owner_repo_from_remote() -> Result<(String, String)> {
     let output = Command::new("git")
         .args(["remote", "get-url", "origin"])
+        .stdin(std::process::Stdio::null())
         .output()
         .context("Failed to get origin remote URL")?;
 

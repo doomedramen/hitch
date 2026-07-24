@@ -158,6 +158,15 @@ impl GitOperations {
         // to save", fetch "no remote" messages) are not broken by a user's locale.
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
+        // `Command::output()` leaves stdin at its default of inherited, which
+        // means git (or anything it shells out to in turn — a GPG/SSH commit
+        // signing prompt, a pager, an editor) can block reading from the
+        // *caller's* real terminal. Every prompt hitch itself wants goes
+        // through the `Confirm` trait, never raw git — so no invocation from
+        // here should ever be able to wait on interactive input; give it
+        // /dev/null instead so anything that tries fails fast (or errors)
+        // rather than hanging indefinitely.
+        cmd.stdin(Stdio::null());
         cmd.output().context(format!(
             "Failed to execute git command: git {} in repository at {}",
             args.join(" "),
@@ -440,6 +449,7 @@ impl GitOperations {
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
         cmd.env("GIT_INDEX_FILE", index_path);
+        cmd.stdin(Stdio::null()); // see run_git_command — never inherit a real terminal
         cmd.output().context(format!(
             "Failed to execute git command: git {} in repository at {}",
             args.join(" "),

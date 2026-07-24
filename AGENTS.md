@@ -93,10 +93,12 @@ covered.
   Every git primitive is a named method (`squash_merge`, `add_worktree`,
   `update_ref_cas`, ...), all via `run_git_command` (which forces
   `LC_ALL=C`/`LANG=C` since several call sites match English stderr
-  substrings — never bypass this by calling `git` directly from a command
-  module). The `git2` dependency is present but effectively dead — only used
-  for repo discovery, never for merges — real work always shells out to the
-  `git` binary. Don't introduce new git2 usage without a specific reason.
+  substrings, and `stdin(Stdio::null())` since `Command::output()` otherwise
+  leaves stdin inherited from the caller — see the gotcha below — never
+  bypass either by calling `git` directly from a command module). The `git2`
+  dependency is present but effectively dead — only used for repo discovery,
+  never for merges — real work always shells out to the `git` binary. Don't
+  introduce new git2 usage without a specific reason.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
 - `src/utils/resolutions.rs` — phase-5 shared conflict resolutions:
@@ -161,17 +163,36 @@ covered.
   dance. Reuse that function for anything that produces a new environment
   branch commit; don't hand-roll the publish step again.
 
-## A concrete gotcha, found the hard way
+## Concrete gotchas, found the hard way
 
-`git merge-tree --merge-base <X>` needs the *true common ancestor* of the two
-trees being compared — computed with `get_merge_base(a, b)` — never a
-branch's own current tip. Passing the tip makes `merge-tree` treat that side
-as unchanged since the (wrong) merge-base and silently fast-forward instead
-of reporting a real conflict. This bug existed in this codebase's preflight
-functions for a long time, invisible because every existing test's conflict
-scenario had an *unmoved* base (where the wrong merge-base happens to equal
-the right one) — it only surfaced when a base-moved-after-branch-diverged
-scenario was manually tested end-to-end. If you touch any `merge-tree`
-invocation, be suspicious of this exact mistake and test the
-base-moved-independently case specifically, not just the peers-diverged-from
-an-unmoved-base case.
+**Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
+<X>` needs the *true common ancestor* of the two trees being compared —
+computed with `get_merge_base(a, b)` — never a branch's own current tip.
+Passing the tip makes `merge-tree` treat that side as unchanged since the
+(wrong) merge-base and silently fast-forward instead of reporting a real
+conflict. This bug existed in this codebase's preflight functions for a long
+time, invisible because every existing test's conflict scenario had an
+*unmoved* base (where the wrong merge-base happens to equal the right one) —
+it only surfaced when a base-moved-after-branch-diverged scenario was
+manually tested end-to-end. If you touch any `merge-tree` invocation, be
+suspicious of this exact mistake and test the base-moved-independently case
+specifically, not just the peers-diverged-from-an-unmoved-base case.
+
+**Git subprocesses inheriting a real terminal's stdin.** `Command::output()`
+captures stdout/stderr but leaves stdin at Rust's default, which is
+*inherited* from the caller — not null. Any git subprocess hitch spawns can
+therefore end up blocked reading from the actual terminal the test suite (or
+hitch itself) was launched from, if git or anything it shells out to (GPG/SSH
+commit signing, a pager, an editor) wants interactive input for any reason.
+This surfaced as `cargo test` appearing to hang forever on a specific test
+(`git rebase` inside `hitch resolve`'s Mode A) on one machine but not
+another, purely because of that machine's global git config — not
+reproducible by reading the code or running the same test elsewhere. Fixed by
+explicitly setting `.stdin(Stdio::null())` on every git/gh subprocess hitch's
+own automation spawns (`run_git_command`, `run_git_command_with_index`,
+`gh_api`, `owner_repo_from_remote`) — hitch's own confirmation prompts always
+go through the `Confirm` trait, never raw git/gh, so no automation call
+should ever be able to wait on real input. The one deliberate exception is
+`hitch resolve --tool` (`git mergetool`), which is supposed to be
+interactive. If you add a new `Command::new("git")` or `Command::new("gh")`
+call for anything other than a genuinely interactive flow, null the stdin.
