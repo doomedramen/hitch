@@ -37,6 +37,22 @@ pub struct ResolveCommand {
     /// resolve session, instead of leaving plain conflict markers
     #[arg(long)]
     pub tool: bool,
+
+    /// On `--continue`, record this peer-conflict resolution as a
+    /// content-addressed ref so a byte-identical conflict recurring on a
+    /// later rebuild can be replayed instead of re-resolved (see
+    /// `hitch resolutions` and `hitch rebuild --replay-resolutions`).
+    /// Off by default: the durable fix is still carrying the change back
+    /// into a real branch.
+    #[arg(long)]
+    pub record: bool,
+
+    /// Imply `--record` and also push the recorded resolution to origin so
+    /// teammates and CI can replay it. Separate from `--record` so sharing
+    /// team-wide is always a deliberate, explicit act — it never happens as
+    /// a side effect and never inherits the global `--yes`.
+    #[arg(long)]
+    pub share: bool,
 }
 
 /// Guided conflict resolution for a single held branch. Two modes,
@@ -90,6 +106,8 @@ pub fn run(args: ResolveCommand, context: &GlobalContext) -> Result<()> {
             &branch,
             &worktree_path,
             &environment,
+            args.record || args.share,
+            args.share,
         );
     }
 
@@ -373,6 +391,36 @@ fn start_mode_b_session(
             Ok(())
         }
         Ok(false) => {
+            // Capture the exact conflict stages *now*, while the worktree
+            // index still carries them — once the user `git add`s their
+            // resolution the stages are gone, but `--continue` needs them to
+            // record the resolution against the right content-addressed key.
+            // Stashed in the worktree's private git dir (outside the working
+            // tree, auto-removed with the worktree).
+            let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
+            let branch_sha = context.git().get_branch_commit_sha(branch)?;
+            match worktree_git.unmerged_stages() {
+                Ok(stages) => {
+                    let pending = crate::utils::resolutions::PendingConflict {
+                        env: env_name.to_string(),
+                        branch: branch.to_string(),
+                        conflicts_with: conflict.conflicts_with.clone(),
+                        source_branch_head: branch_sha,
+                        stages,
+                    };
+                    if let Err(e) =
+                        crate::utils::resolutions::write_pending(&worktree_git, &pending)
+                    {
+                        context.log_verbose(&format!(
+                            "Could not stash pending-conflict state (resolution recording will \
+                             be unavailable for this session): {}",
+                            e
+                        ));
+                    }
+                }
+                Err(e) => context.log_verbose(&format!("Could not read conflict stages: {}", e)),
+            }
+
             if tool {
                 run_mergetool(&worktree_path_str);
             }
@@ -396,12 +444,15 @@ fn start_mode_b_session(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn continue_session(
     context: &GlobalContext,
     env_name: &str,
     branch: &str,
     worktree_path: &std::path::Path,
     environment: &Environment,
+    record: bool,
+    share: bool,
 ) -> Result<()> {
     if !worktree_path.exists() {
         return Err(anyhow::anyhow!(
@@ -487,6 +538,16 @@ fn continue_session(
 
     let new_sha = build_result?;
 
+    // Record the resolution (if asked) BEFORE cleanup tears down the
+    // worktree — recording reads both the captured conflict stages (in the
+    // worktree's private git dir) and the resolved file contents (its
+    // working tree), neither of which survives cleanup.
+    let recorded = if record {
+        maybe_record_resolution(context, &worktree_git, worktree_path, share)?
+    } else {
+        false
+    };
+
     let remote_sha_before = context
         .git()
         .rev_parse_opt(&format!("refs/remotes/origin/{}", env_name))?;
@@ -501,14 +562,99 @@ fn continue_session(
         "✓ Published '{}' with '{}' included.",
         env_name, branch
     ));
-    context.log_warning(&format!(
-        "This resolution is not saved anywhere — the next plain 'hitch rebuild {}' will hit \
-         the same conflict and hold '{}' again unless the fix is carried back into '{}' (or \
-         '{}') itself.",
-        env_name, branch, branch, environment.base
-    ));
+    if recorded {
+        context.log_info(&format!(
+            "Resolution recorded. A byte-identical conflict on a later rebuild can replay it \
+             with 'hitch rebuild {} --replay-resolutions'{}. The durable fix is still carrying \
+             the change back into '{}'.",
+            env_name,
+            if share { " (shared to origin)" } else { "" },
+            branch
+        ));
+    } else {
+        context.log_warning(&format!(
+            "This resolution is not saved anywhere — the next plain 'hitch rebuild {}' will hit \
+             the same conflict and hold '{}' again unless the fix is carried back into '{}' (or \
+             '{}') itself. (Pass --record to save it.)",
+            env_name, branch, branch, environment.base
+        ));
+    }
 
     Ok(())
+}
+
+/// Record the just-resolved conflict as a content-addressed resolution ref,
+/// reading the captured stages from the worktree's stashed pending state and
+/// the resolved content from its working tree. Returns whether a resolution
+/// was actually recorded. Best-effort: a recording failure is surfaced as a
+/// warning, not a hard error — the resolution has already been composed and
+/// is about to be published regardless.
+fn maybe_record_resolution(
+    context: &GlobalContext,
+    worktree_git: &GitOperations,
+    worktree_path: &std::path::Path,
+    share: bool,
+) -> Result<bool> {
+    let pending = match crate::utils::resolutions::read_pending(worktree_git) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            context.log_warning(
+                "Cannot record: this resolve session has no captured conflict state (it may \
+                 predate --record support, or the conflict was never left for editing).",
+            );
+            return Ok(false);
+        }
+        Err(e) => {
+            context.log_warning(&format!("Cannot record resolution: {}", e));
+            return Ok(false);
+        }
+    };
+
+    let recorded_by = context.git().get_user_email().unwrap_or_default();
+    let recorded_at = chrono::Utc::now().to_rfc3339();
+
+    match crate::utils::resolutions::record_resolution(
+        context.git(),
+        &pending,
+        worktree_path,
+        &recorded_by,
+        &recorded_at,
+    ) {
+        Ok(crate::utils::resolutions::RecordOutcome::Recorded { key, files }) => {
+            context.log_verbose(&format!("Recorded resolution {} ({} file(s))", key, files));
+            if share {
+                let refspec = format!(
+                    "{}{}",
+                    crate::utils::resolutions::RESOLUTIONS_REF_PREFIX,
+                    key
+                );
+                if let Err(e) = context.git().push_refspec(&refspec) {
+                    context.log_warning(&format!(
+                        "Recorded locally, but failed to share to origin: {}\nPush it manually: \
+                         git push origin {}",
+                        e, refspec
+                    ));
+                }
+            }
+            Ok(true)
+        }
+        Ok(crate::utils::resolutions::RecordOutcome::Conflict {
+            key,
+            existing_commit,
+        }) => {
+            context.log_warning(&format!(
+                "A different resolution for this exact conflict already exists ({}, commit {}). \
+                 Not overwriting it. Inspect both with 'hitch resolutions show {}', and if yours \
+                 should win, 'hitch resolutions forget {}' first.",
+                key, existing_commit, key, key
+            ));
+            Ok(false)
+        }
+        Err(e) => {
+            context.log_warning(&format!("Failed to record resolution: {}", e));
+            Ok(false)
+        }
+    }
 }
 
 fn abort_session(

@@ -67,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Setup(_) => "setup",
         Commands::Conflicts(_) => "conflicts",
         Commands::Resolve(_) => "resolve",
+        Commands::Resolutions(_) => "resolutions",
     };
 
     // Create a new logger configured for this command
@@ -133,6 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Setup(args) => commands::setup::run(args, &context).map_err(|e| e.into()),
         Commands::Conflicts(args) => commands::conflicts::run(args, &context).map_err(|e| e.into()),
         Commands::Resolve(args) => commands::resolve::run(args, &context).map_err(|e| e.into()),
+        Commands::Resolutions(args) => {
+            commands::resolutions::run(args, &context).map_err(|e| e.into())
+        }
     }
 }
 
@@ -148,7 +152,12 @@ fn command_is_mutating(command: &Commands) -> bool {
         | Commands::Diff(_)
         | Commands::Doctor(_)
         | Commands::Setup(_)
-        | Commands::Conflicts(_) => false,
+        | Commands::Conflicts(_)
+        // resolutions only ever touches refs/hitch/resolutions/* — never
+        // hitch-metadata, environment branches, or the working tree — so it
+        // doesn't contend for the repo-wide lock and stays usable during a
+        // rebuild.
+        | Commands::Resolutions(_) => false,
         Commands::Approvals(args) => args.is_mutating(),
         _ => true,
     }

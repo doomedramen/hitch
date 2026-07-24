@@ -81,4 +81,6 @@ pub enum Commands {
     /// Guided resolution for a held branch (rebase for base conflicts,
     /// worktree resolve for peer conflicts)
     Resolve(commands::resolve::ResolveCommand),
+    /// List, inspect, share, or forget recorded conflict resolutions
+    Resolutions(commands::resolutions::ResolutionsCommand),
 }

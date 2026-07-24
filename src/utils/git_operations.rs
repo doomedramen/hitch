@@ -2178,6 +2178,219 @@ impl GitOperations {
         Ok(false)
     }
 
+    /// The three merge stages of each currently-conflicted path, from
+    /// `git ls-files --unmerged`: `(path, base_oid, ours_oid, theirs_oid)`,
+    /// where any side absent from the conflict (add/add, delete/modify) is
+    /// `None`. These blob OIDs are the exact, content-addressed identity of a
+    /// conflict — the key `hitch` records a resolution against, so a
+    /// resolution only ever replays when byte-identical inputs recur (any
+    /// change to any side is a cache miss, never a wrong replay).
+    #[allow(clippy::type_complexity)]
+    pub fn unmerged_stages(
+        &self,
+    ) -> Result<Vec<(String, Option<String>, Option<String>, Option<String>)>> {
+        let output = self.run_git_command(&["ls-files", "--unmerged"])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git ls-files --unmerged failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Each line: "<mode> <oid> <stage>\t<path>"; stage 1=base, 2=ours,
+        // 3=theirs. A path can appear once per stage present.
+        use std::collections::BTreeMap;
+        let mut per_path: BTreeMap<String, (Option<String>, Option<String>, Option<String>)> =
+            BTreeMap::new();
+        for line in stdout.lines() {
+            let Some((meta, path)) = line.split_once('\t') else {
+                continue;
+            };
+            let fields: Vec<&str> = meta.split_whitespace().collect();
+            if fields.len() != 3 {
+                continue;
+            }
+            let oid = fields[1].to_string();
+            let stage = fields[2];
+            let entry = per_path.entry(path.to_string()).or_default();
+            match stage {
+                "1" => entry.0 = Some(oid),
+                "2" => entry.1 = Some(oid),
+                "3" => entry.2 = Some(oid),
+                _ => {}
+            }
+        }
+
+        Ok(per_path
+            .into_iter()
+            .map(|(path, (b, o, t))| (path, b, o, t))
+            .collect())
+    }
+
+    /// Hash `content` into the object database as a blob and return its OID
+    /// (`git hash-object -w --stdin`), without touching the working tree or
+    /// index. Used to store a recorded resolution's payload.
+    pub fn hash_object_bytes(&self, content: &[u8]) -> Result<String> {
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(&self.repo_path)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn 'git hash-object'")?;
+        child
+            .stdin
+            .take()
+            .expect("stdin configured as piped")
+            .write_all(content)
+            .context("Failed to write content to git hash-object")?;
+        let output = child
+            .wait_with_output()
+            .context("Failed to read output of 'git hash-object'")?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git hash-object failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Build a tree object from `(name, blob_oid)` entries (all mode 100644)
+    /// via `git mktree`, returning the tree OID. No index or working tree
+    /// involved.
+    pub fn make_blob_tree(&self, entries: &[(String, String)]) -> Result<String> {
+        let mut input = String::new();
+        for (name, oid) in entries {
+            input.push_str(&format!("100644 blob {}\t{}\n", oid, name));
+        }
+        let mut child = Command::new("git")
+            .args(["mktree"])
+            .current_dir(&self.repo_path)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn 'git mktree'")?;
+        child
+            .stdin
+            .take()
+            .expect("stdin configured as piped")
+            .write_all(input.as_bytes())
+            .context("Failed to write to git mktree")?;
+        let output = child
+            .wait_with_output()
+            .context("Failed to read output of 'git mktree'")?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git mktree failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Create a parentless commit wrapping `tree` (`git commit-tree`) and
+    /// return its OID — the storage object for a resolution ref.
+    pub fn commit_tree_parentless(&self, tree: &str, message: &str) -> Result<String> {
+        let output = self.run_git_command(&["commit-tree", tree, "-m", message])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git commit-tree failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Read a blob's contents as bytes (`git cat-file blob <oid>`).
+    pub fn read_blob(&self, oid: &str) -> Result<Vec<u8>> {
+        let output = self.run_git_command(&["cat-file", "blob", oid])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git cat-file blob {} failed: {}",
+                oid,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    /// List every ref under `prefix` (e.g. `refs/hitch/resolutions/`) as
+    /// `(full_refname, target_oid)`.
+    pub fn list_refs(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let output =
+            self.run_git_command(&["for-each-ref", "--format=%(refname) %(objectname)", prefix])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git for-each-ref {} failed: {}",
+                prefix,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|l| {
+                let (name, oid) = l.split_once(' ')?;
+                Some((name.to_string(), oid.to_string()))
+            })
+            .collect())
+    }
+
+    /// Delete an arbitrary ref (`git update-ref -d`). Used to forget a
+    /// recorded resolution.
+    pub fn delete_ref(&self, refname: &str) -> Result<()> {
+        let output = self.run_git_command(&["update-ref", "-d", refname])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to delete ref '{}': {}",
+                refname,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fetch a refspec from origin (`git fetch origin <refspec>`), tolerating
+    /// benign no-remote/offline failures like the other fetch helpers so
+    /// resolution sharing degrades gracefully in local-only repos.
+    pub fn fetch_refspec(&self, refspec: &str) -> Result<()> {
+        let output = self.run_git_command(&["fetch", "origin", refspec])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if Self::is_benign_fetch_failure(&stderr) {
+                return Ok(());
+            }
+            return Err(anyhow::anyhow!(
+                "git fetch origin {} failed: {}",
+                refspec,
+                stderr.trim()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Push a single ref to origin (`git push origin <refspec>`). Unlike the
+    /// fetch helpers this surfaces failure, since a caller explicitly asking
+    /// to share a resolution wants to know it didn't land.
+    pub fn push_refspec(&self, refspec: &str) -> Result<()> {
+        let output = self.run_git_command(&["push", "origin", refspec])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git push origin {} failed: {}",
+                refspec,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
     /// Return the `--stat` summary of changes introduced by `branch` relative
     /// to its common ancestor with `base` (`git diff --stat base...branch`).
     pub fn get_diff_stat(&self, base: &str, branch: &str) -> Result<String> {
