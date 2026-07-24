@@ -75,7 +75,7 @@ fn display_tree(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
     // Display tree starting from each root
     for (idx, root) in sorted_roots.iter().enumerate() {
         let is_last_root = idx == sorted_roots.len() - 1;
-        display_branch_tree(config, root, &base_to_envs, "", is_last_root, true)?;
+        display_branch_tree(context, config, root, &base_to_envs, "", is_last_root, true)?;
     }
 
     println!();
@@ -84,6 +84,7 @@ fn display_tree(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 
 /// Recursively display the branch tree
 fn display_branch_tree(
+    context: &GlobalContext,
     config: &HitchConfig,
     branch: &str,
     base_to_envs: &HashMap<String, Vec<String>>,
@@ -130,6 +131,16 @@ fn display_branch_tree(
 
             // Display promoted branches as children
             if !env.branches.is_empty() {
+                // Local-only, no-fetch compatibility check (same one `hitch
+                // status` uses) so a branch that would be held on the next
+                // rebuild shows up here too, without slowing tree down with
+                // a network fetch.
+                let held = crate::utils::prelude::preflight_compatibility_report_local(
+                    context,
+                    &env.base,
+                    &env.branches,
+                );
+
                 let mut sorted_branches: Vec<&String> = env.branches.iter().collect();
                 sorted_branches.sort();
 
@@ -145,15 +156,31 @@ fn display_branch_tree(
                         "" // Regular branch
                     };
 
-                    let branch_display = if is_base_for_other {
+                    let held_conflict = held.iter().find(|c| &c.branch == *promoted_branch);
+                    let held_glyph = if held_conflict.is_some() { "⛔ " } else { "" };
+
+                    let mut branch_display = if is_base_for_other {
                         format!(
-                            "{}{} (also a base branch)",
+                            "{}{}{} (also a base branch)",
+                            held_glyph,
                             branch_icon,
                             promoted_branch.bright_cyan()
                         )
                     } else {
-                        format!("{}{}", branch_icon, promoted_branch.bright_white())
+                        format!(
+                            "{}{}{}",
+                            held_glyph,
+                            branch_icon,
+                            promoted_branch.bright_white()
+                        )
                     };
+                    if let Some(c) = held_conflict {
+                        branch_display.push_str(
+                            &format!(" (conflicts with {} — held on rebuild)", c.conflicts_with)
+                                .red()
+                                .to_string(),
+                        );
+                    }
 
                     println!("{}{}{}", child_prefix, branch_connector, branch_display);
                 }
@@ -162,6 +189,7 @@ fn display_branch_tree(
             // Recursively display environments that are based on this environment
             if base_to_envs.contains_key(env_name.as_str()) {
                 display_branch_tree(
+                    context,
                     config,
                     env_name,
                     base_to_envs,

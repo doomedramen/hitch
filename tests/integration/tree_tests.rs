@@ -382,4 +382,60 @@ mod tests {
 
         Ok(())
     }
+
+    /// `hitch tree` should flag a branch that would be held on the next
+    /// rebuild (⛔), same as `hitch status`.
+    #[test]
+    fn test_hitch_tree_shows_held_branch_glyph() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.fs.write_file("shared.txt", "base content\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "Add shared.txt"])?;
+
+            env.git.run(&["checkout", "-b", "branch-a"])?;
+            env.fs.write_file("shared.txt", "from branch-a\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-a: update shared.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.git.run(&["checkout", "-b", "branch-b"])?;
+            env.fs.write_file("shared.txt", "from branch-b\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", "branch-b: update shared.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Inject directly into metadata (bypass the promote gate, which
+            // would otherwise refuse to promote a conflicting sibling).
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let config_str = env.fs.read_file("hitch.json")?;
+            let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+            config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: inject branches"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let result = env.hitch.run().args(&["tree"]).execute()?;
+            result
+                .assert_success()
+                .assert_stdout_contains("⛔")
+                .assert_stdout_contains("branch-b")
+                .assert_stdout_contains("held on rebuild");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
