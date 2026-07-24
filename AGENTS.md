@@ -99,6 +99,11 @@ covered.
   `git` binary. Don't introduce new git2 usage without a specific reason.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
+- `src/utils/resolutions.rs` — phase-5 shared conflict resolutions:
+  content-addressed by exact merge-stage blob OIDs (NOT git-rerere — see the
+  module header for why that matters), stored as `refs/hitch/resolutions/*`.
+  Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`,
+  `hitch resolutions`, and `hitch doctor`'s debt SLA.
 - `src/core/` — read-only view builders (workspace/status models) consumed
   by commands; `workspace.rs`'s `build_workspace_model` is currently
   `#[allow(dead_code)]` — not wired into any live command, don't assume it's

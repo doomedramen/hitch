@@ -74,6 +74,17 @@ hitch release production main           # Release environment to target branch
 hitch diff                              # Preview commits each branch would add
 ```
 
+### Resolving held conflicts
+```bash
+hitch resolve dev                       # Guided fix for a held branch: rebase (base
+                                        #   conflict) or worktree resolve (peer conflict)
+hitch resolve dev --branch b --continue # Finish a peer-conflict resolve session
+hitch resolve dev --branch b --continue --record   # ...and record it for reuse
+hitch rebuild dev --replay-resolutions  # Reuse recorded resolutions (opt-in; exact match)
+hitch resolutions list                  # Inspect recorded resolutions
+hitch doctor --max-resolution-age-days 30  # CI-gate on stale resolution debt
+```
+
 ### Status & Inspection
 ```bash
 hitch status                            # Show status of all environments
