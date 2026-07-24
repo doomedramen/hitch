@@ -154,6 +154,10 @@ impl<'a> HitchCommandBuilder<'a> {
             cmd.env(key, value);
         }
 
+        // Same reasoning as GitCommandRunner::run above: never let the
+        // hitch subprocess itself inherit a real terminal's stdin.
+        cmd.stdin(std::process::Stdio::null());
+
         let output = cmd
             .output()
             .with_context(|| format!("Failed to execute hitch command: {:?}", self.args))?;
@@ -292,6 +296,12 @@ impl GitCommandRunner {
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
+        // Command::output() leaves stdin inherited from the test process by
+        // default, so a git call that wants interactive input for any
+        // reason (an editor, commit signing, ...) can hang the whole suite
+        // instead of erroring — see the matching fix and gotcha entry for
+        // hitch's own git_operations.rs::run_git_command in AGENTS.md.
+        cmd.stdin(std::process::Stdio::null());
 
         let output = cmd
             .output()

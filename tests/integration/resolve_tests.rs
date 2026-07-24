@@ -56,9 +56,15 @@ mod tests {
 
             // Resolve it with plain git, exactly as hitch told us to.
             env.fs.write_file("shared.txt", "resolved\n")?;
-            env.git.run(&["add", "shared.txt"])?;
-            env.git.run(&["rebase", "--continue"])?;
-            env.git.run(&["checkout", "main"])?;
+            env.git.run(&["add", "shared.txt"])?.assert_success();
+            // -c core.editor=true is belt-and-suspenders: a single-commit
+            // --continue already reuses the original message without
+            // opening an editor, but this guarantees it can't block on one
+            // regardless of platform/config.
+            env.git
+                .run(&["-c", "core.editor=true", "rebase", "--continue"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
 
             // No resolve worktree was ever created for Mode A.
             let worktrees = env.git.run(&["worktree", "list"])?;

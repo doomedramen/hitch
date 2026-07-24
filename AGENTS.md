@@ -180,19 +180,32 @@ specifically, not just the peers-diverged-from-an-unmoved-base case.
 
 **Git subprocesses inheriting a real terminal's stdin.** `Command::output()`
 captures stdout/stderr but leaves stdin at Rust's default, which is
-*inherited* from the caller — not null. Any git subprocess hitch spawns can
-therefore end up blocked reading from the actual terminal the test suite (or
-hitch itself) was launched from, if git or anything it shells out to (GPG/SSH
+*inherited* from the caller — not null. Any git subprocess spawned this way
+can therefore end up blocked reading from the actual terminal (or CI job)
+that launched the process, if git or anything it shells out to (GPG/SSH
 commit signing, a pager, an editor) wants interactive input for any reason.
-This surfaced as `cargo test` appearing to hang forever on a specific test
-(`git rebase` inside `hitch resolve`'s Mode A) on one machine but not
-another, purely because of that machine's global git config — not
-reproducible by reading the code or running the same test elsewhere. Fixed by
-explicitly setting `.stdin(Stdio::null())` on every git/gh subprocess hitch's
-own automation spawns (`run_git_command`, `run_git_command_with_index`,
-`gh_api`, `owner_repo_from_remote`) — hitch's own confirmation prompts always
-go through the `Confirm` trait, never raw git/gh, so no automation call
-should ever be able to wait on real input. The one deliberate exception is
+
+This bug existed in **two independent places** and both had to be fixed
+before it was actually gone: `src/utils/git_operations.rs` (hitch's own
+automation — `run_git_command`, `run_git_command_with_index`) *and*
+`tests/test_framework/command_runners.rs` (the test harness's own
+`GitCommandRunner::run` and `HitchCommandBuilder::execute`, which spawn git
+and the `hitch` binary directly and are a completely separate code path).
+Fixing only the first was not enough — a test that shells out to plain git
+itself (e.g. `hitch resolve`'s Mode A integration test, which runs
+`git rebase --continue` directly to simulate what a user does after hitch
+hands off) can still hang via the *second* path.
+
+It surfaced as `cargo test` (and CI) hanging indefinitely on one specific
+test on some machines/runners while passing cleanly, repeatedly, on others —
+purely because of that environment's git config or platform defaults, not
+reproducible by reading the code or by running the same test where it
+happened to work. Fixed by explicitly setting `.stdin(Stdio::null())` on
+every git/gh subprocess spawned by hitch's own code *and* by the test
+framework — hitch's own confirmation prompts always go through the
+`Confirm` trait, never raw git/gh, so no automation call should ever be
+able to wait on real input. The one deliberate exception is
 `hitch resolve --tool` (`git mergetool`), which is supposed to be
 interactive. If you add a new `Command::new("git")` or `Command::new("gh")`
-call for anything other than a genuinely interactive flow, null the stdin.
+call anywhere in `src/` *or* `tests/test_framework/`, for anything other
+than a genuinely interactive flow, null the stdin.
