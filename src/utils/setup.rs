@@ -154,51 +154,97 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
         .ok_or_else(|| anyhow::anyhow!("No id in deploy key response: {}", stdout))
 }
 
-/// Look up an existing deploy key's numeric ID by matching the public key
-/// on disk against the keys registered on the repo. Returns `None` if the
+/// Look up an existing deploy key's numeric ID by matching title, then
+/// falling back to matching the public key on disk. Returns `None` if the
 /// key cannot be found (not yet uploaded, API error, etc.).
 pub fn lookup_deploy_key_id(owner: &str, repo: &str, gh_path: &str) -> Option<u64> {
-    let path = key_path(owner, repo);
-    let pubkey_path = format!("{}.pub", path.display());
-    let pubkey = std::fs::read_to_string(&pubkey_path).ok()?;
-    let pubkey = pubkey.trim();
+    let title = format!("hitch-{}", whoami());
+    let pubkey = {
+        let path = key_path(owner, repo);
+        let pubkey_path = format!("{}.pub", path.display());
+        let raw = std::fs::read_to_string(&pubkey_path)
+            .ok()?
+            .trim()
+            .to_string();
+        // Trim trailing comment — the API returns just "<type> <base64>"
+        // while the local file includes " <comment>" at the end.
+        raw.split(' ').take(2).collect::<Vec<_>>().join(" ")
+    };
 
     let endpoint = format!("/repos/{}/{}/keys", owner, repo);
+    // Do NOT use --silent here: on some gh versions it suppresses the
+    // JSON response for GET requests, not just the progress indicator.
     let output = Command::new(gh_path)
-        .args(["api", &endpoint, "--jq", ".[].id", "--silent"])
+        .args([
+            "api",
+            &endpoint,
+            "-H",
+            "Accept: application/vnd.github+json",
+        ])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!(
+                "hitch: failed to list deploy keys (gh api error): {}",
+                stderr.trim()
+            );
+        }
         return None;
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        // Verify by fetching the individual key
-        let key_endpoint = format!("/repos/{}/{}/keys/{}", owner, repo, line);
-        let key_output = Command::new(gh_path)
-            .args(["api", &key_endpoint, "--jq", ".key", "--silent"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .stdin(std::process::Stdio::null())
-            .output()
-            .ok()?;
+    let keys: Vec<serde_json::Value> = serde_json::from_str(&stdout).ok()?;
 
-        if !key_output.status.success() {
-            continue;
+    // Match by title first (fast path).
+    for key in &keys {
+        if key.get("title").and_then(|t| t.as_str()) == Some(&title) {
+            return key.get("id").and_then(|id| id.as_u64());
         }
+    }
 
-        let key_str = String::from_utf8_lossy(&key_output.stdout);
-        if key_str.trim() == pubkey {
-            return line.parse::<u64>().ok();
+    // Fall back to matching by public key (without comment, both sides).
+    for key in &keys {
+        if let Some(k) = key.get("key").and_then(|k| k.as_str()) {
+            let api_key = k.split(' ').take(2).collect::<Vec<_>>().join(" ");
+            if api_key == pubkey {
+                return key.get("id").and_then(|id| id.as_u64());
+            }
+        }
+    }
+
+    // Last resort: let gh + jq do the matching so Rust JSON parsing
+    // quirks and field name differences can't cause a miss.
+    let jq = format!(
+        ".[] | select(.title == \"{}\") | .id",
+        title.replace('"', "\\\"")
+    );
+    let output = Command::new(gh_path)
+        .args([
+            "api",
+            &endpoint,
+            "--jq",
+            &jq,
+            "-H",
+            "Accept: application/vnd.github+json",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        if let Ok(id) = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u64>()
+        {
+            return Some(id);
         }
     }
 

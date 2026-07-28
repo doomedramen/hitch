@@ -69,13 +69,10 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
             key_path.display()
         ));
         deploy_key_id = setup::lookup_deploy_key_id(&owner, &repo, &gh_path);
-        if deploy_key_id.is_some() {
-            context.log_verbose(&format!(
-                "Found existing deploy key id: {:?}",
-                deploy_key_id
-            ));
+        if let Some(id) = deploy_key_id {
+            context.log_info(&format!("Found deploy key id: {}", id));
         } else {
-            context.log_warning("Could not look up deploy key ID from GitHub — the ruleset bypass may need updating. Re-run 'hitch setup' if the deploy key was recently added.");
+            context.log_warning("Could not look up deploy key ID from GitHub — the ruleset bypass will not be configured. Make sure the deploy key is registered on the repository (it may need to be re-added).");
         }
     } else {
         context.log_info("Generating deploy key for bot-authenticated pushes...");
@@ -164,7 +161,12 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     context.log_info("  Name: hitch-protection");
     context.log_info(&format!("  Branches: {}", selected.join(", ")));
     context.log_info("  Rules: update, deletion, non_fast_forward");
-    context.log_info("  Bypass: All deploy keys");
+    context.log_info(&format!(
+        "  Bypass: deploy key {}",
+        deploy_key_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "not found".to_string())
+    ));
 
     let activate = Confirm::new(
         "Activate this ruleset? (This will block all direct pushes and PR merges to the protected branches)"
@@ -188,7 +190,7 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
 
     context.log_info(&format!("SSH key: {}", key_path.display()));
     context.log_success(
-        "Setup complete! Protected branches can now only receive pushes via 'hitch release' (which uses the deploy key).",
+        "Setup complete! Protected branches can now only receive pushes via hitch (release, rebuild, push — all use the deploy key).",
     );
 
     Ok(())
