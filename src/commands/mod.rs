@@ -14,6 +14,7 @@ pub mod init;
 pub mod lock;
 pub mod pr;
 pub mod promote;
+pub mod push;
 pub mod rebuild;
 pub mod release;
 pub mod remove;

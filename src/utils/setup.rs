@@ -50,7 +50,7 @@ pub fn generate_deploy_key(owner: &str, repo: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<()> {
+pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<u64> {
     let path = key_path(owner, repo);
     let pubkey_path = format!("{}.pub", path.display());
     let pubkey = std::fs::read_to_string(&pubkey_path)
@@ -66,11 +66,12 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
         "read_only": false,
     });
     let body_str = serde_json::to_string(&body)?;
+    let endpoint = format!("/repos/{}/{}/keys", owner, repo);
 
     let output = Command::new(gh_path)
         .args([
             "api",
-            &format!("/repos/{}/{}/keys", owner, repo),
+            &endpoint,
             "--input",
             "-",
             "-X",
@@ -85,32 +86,49 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
         .spawn()
         .context("Failed to run gh api to add deploy key")?;
 
-    if let Some(mut stdin) = output.stdin.as_ref() {
-        use std::io::Write;
-        stdin
-            .write_all(body_str.as_bytes())
-            .context("Failed to write deploy key body")?;
-    } else {
+    let write_ok = {
+        if let Some(mut stdin) = output.stdin.as_ref() {
+            use std::io::Write;
+            stdin
+                .write_all(body_str.as_bytes())
+                .context("Failed to write deploy key body")?;
+            true
+        } else {
+            false
+        }
+    };
+
+    if !write_ok {
         drop(output);
-        let status = Command::new(gh_path)
+        let fallback = Command::new(gh_path)
             .args([
                 "api",
-                &format!("/repos/{}/{}/keys", owner, repo),
+                &endpoint,
                 "-f",
                 &format!("title={}", title),
                 "-f",
                 &format!("key={}", pubkey),
                 "-f",
                 "read_only=false",
+                "--jq",
+                ".id",
                 "--silent",
             ])
-            .status()
-            .context("Failed to run gh api to add deploy key")?;
+            .stdin(std::process::Stdio::null())
+            .output()
+            .context("Failed to run gh api fallback")?;
 
-        if !status.success() {
-            return Err(anyhow::anyhow!("Failed to add deploy key to repository"));
+        if !fallback.status.success() {
+            let stderr = String::from_utf8_lossy(&fallback.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to add deploy key to repository: {}",
+                stderr.trim()
+            ));
         }
-        return Ok(());
+        let stdout = String::from_utf8_lossy(&fallback.stdout).trim().to_string();
+        return stdout
+            .parse()
+            .with_context(|| format!("Failed to parse key ID from: {}", stdout));
     }
 
     let result = output
@@ -127,7 +145,64 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
         ));
     }
 
-    Ok(())
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let created: serde_json::Value = serde_json::from_str(&stdout)
+        .with_context(|| format!("Failed to parse deploy key response: {}", stdout))?;
+    created
+        .get("id")
+        .and_then(|id| id.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("No id in deploy key response: {}", stdout))
+}
+
+/// Look up an existing deploy key's numeric ID by matching the public key
+/// on disk against the keys registered on the repo. Returns `None` if the
+/// key cannot be found (not yet uploaded, API error, etc.).
+pub fn lookup_deploy_key_id(owner: &str, repo: &str, gh_path: &str) -> Option<u64> {
+    let path = key_path(owner, repo);
+    let pubkey_path = format!("{}.pub", path.display());
+    let pubkey = std::fs::read_to_string(&pubkey_path).ok()?;
+    let pubkey = pubkey.trim();
+
+    let endpoint = format!("/repos/{}/{}/keys", owner, repo);
+    let output = Command::new(gh_path)
+        .args(["api", &endpoint, "--jq", ".[].id", "--silent"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Verify by fetching the individual key
+        let key_endpoint = format!("/repos/{}/{}/keys/{}", owner, repo, line);
+        let key_output = Command::new(gh_path)
+            .args(["api", &key_endpoint, "--jq", ".key", "--silent"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+
+        if !key_output.status.success() {
+            continue;
+        }
+
+        let key_str = String::from_utf8_lossy(&key_output.stdout);
+        if key_str.trim() == pubkey {
+            return line.parse::<u64>().ok();
+        }
+    }
+
+    None
 }
 
 pub fn configure_git_ssh(owner: &str, repo: &str) -> Result<()> {
@@ -148,6 +223,7 @@ pub fn configure_git_ssh(owner: &str, repo: &str) -> Result<()> {
 pub struct ProtectionCache {
     pub repo_url: String,
     pub ruleset_id: u64,
+    pub deploy_key_id: Option<u64>,
     pub protected_branches: Vec<String>,
     pub updated_at: String,
 }
@@ -165,6 +241,7 @@ pub fn save_protection_cache(
     repo: &str,
     branches: &[String],
     ruleset_id: u64,
+    deploy_key_id: Option<u64>,
 ) -> Result<()> {
     let path = protection_cache_path(owner, repo);
     if let Some(parent) = path.parent() {
@@ -174,6 +251,7 @@ pub fn save_protection_cache(
     let cache = ProtectionCache {
         repo_url: format!("https://github.com/{}/{}", owner, repo),
         ruleset_id,
+        deploy_key_id,
         protected_branches: branches.to_vec(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };

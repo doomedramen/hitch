@@ -276,14 +276,14 @@ fn resolve_mode_a(context: &GlobalContext, env_name: &str, branch: &str, base: &
                     context.log_error(&format!("Failed to push '{}': {}", branch, e));
                     context.log_error(&format!(
                         "Someone may have pushed to '{}' in the meantime. Fetch, and push \
-                         manually once you've confirmed it's safe: git push origin {} --force",
+                         manually once you've confirmed it's safe: hitch push {} -f",
                         branch, branch
                     ));
                 }
             }
         } else {
             context.log_info(&format!(
-                "Not pushed. Push manually when ready: git push origin {} --force",
+                "Not pushed. Push manually when ready: hitch push {} -f",
                 branch
             ));
         }

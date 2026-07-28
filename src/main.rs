@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Add(_) => "add",
         Commands::Remove(_) => "remove",
         Commands::Promote(_) => "promote",
+        Commands::Push(_) => "push",
         Commands::Demote(_) => "demote",
         Commands::Rebuild(_) => "rebuild",
         Commands::Release(_) => "release",
@@ -98,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Add(args) => commands::add::run(args, &context).map_err(|e| e.into()),
         Commands::Remove(args) => commands::remove::run(args, &context).map_err(|e| e.into()),
         Commands::Promote(args) => commands::promote::run(args, &context).map_err(|e| e.into()),
+        Commands::Push(args) => commands::push::run(args, &context).map_err(|e| e.into()),
         Commands::Demote(args) => commands::demote::run(args, &context).map_err(|e| e.into()),
         Commands::Rebuild(args) => {
             // hitch rebuild distinguishes a fully clean rebuild (exit 0) from

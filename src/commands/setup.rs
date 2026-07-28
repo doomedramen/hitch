@@ -61,20 +61,33 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     // ── Deploy key setup ────────────────────────────────────────────
 
     let key_path = setup::key_path(&owner, &repo);
+    let deploy_key_id: Option<u64>;
 
     if setup::is_setup(&owner, &repo) {
         context.log_info(&format!(
             "Found existing deploy key at {}",
             key_path.display()
         ));
+        deploy_key_id = setup::lookup_deploy_key_id(&owner, &repo, &gh_path);
+        if deploy_key_id.is_some() {
+            context.log_verbose(&format!(
+                "Found existing deploy key id: {:?}",
+                deploy_key_id
+            ));
+        } else {
+            context.log_warning("Could not look up deploy key ID from GitHub — the ruleset bypass may need updating. Re-run 'hitch setup' if the deploy key was recently added.");
+        }
     } else {
         context.log_info("Generating deploy key for bot-authenticated pushes...");
         setup::generate_deploy_key(&owner, &repo)?;
         context.log_success(&format!("Generated SSH key at {}", key_path.display()));
 
         context.log_info("Adding deploy key to repository...");
-        setup::add_deploy_key_to_repo(&owner, &repo, &gh_path)?;
-        context.log_success("Deploy key added to repository.");
+        deploy_key_id = Some(setup::add_deploy_key_to_repo(&owner, &repo, &gh_path)?);
+        context.log_success(&format!(
+            "Deploy key added to repository (id: {}).",
+            deploy_key_id.unwrap()
+        ));
 
         context.log_info("Configuring git to use deploy key...");
         setup::configure_git_ssh(&owner, &repo)?;
@@ -101,14 +114,20 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
         }
     }
 
+    let mut bypass_actors: Vec<serde_json::Value> = Vec::new();
+    if let Some(id) = deploy_key_id {
+        bypass_actors.push(serde_json::json!({
+            "actor_id": id,
+            "actor_type": "DeployKey",
+            "bypass_mode": "always"
+        }));
+    }
+
     let body = serde_json::json!({
         "name": "hitch-protection",
         "target": "branch",
         "enforcement": "disabled",
-        "bypass_actors": [{
-            "actor_type": "DeployKey",
-            "bypass_mode": "always"
-        }],
+        "bypass_actors": bypass_actors,
         "conditions": {
             "ref_name": {
                 "include": selected.iter().map(|b| format!("refs/heads/{}", b)).collect::<Vec<_>>(),
@@ -165,7 +184,7 @@ pub fn run(_args: SetupCommand, context: &GlobalContext) -> Result<()> {
     gh::activate_ruleset(&owner, &repo, ruleset_id)?;
     context.log_success("Ruleset activated.\n");
 
-    setup::save_protection_cache(&owner, &repo, &selected, ruleset_id)?;
+    setup::save_protection_cache(&owner, &repo, &selected, ruleset_id, deploy_key_id)?;
 
     context.log_info(&format!("SSH key: {}", key_path.display()));
     context.log_success(

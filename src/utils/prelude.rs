@@ -984,8 +984,8 @@ pub(crate) fn publish_environment_build(
                     context.log_error(&format!(
                         "Someone may have pushed to '{}' while this rebuild ran, or the \
                          deploy key may be missing/outdated. Fetch and re-run 'hitch rebuild \
-                         {}', or push manually once you've confirmed it's safe to overwrite: \
-                         git push origin {} --force",
+                         {}', or push once you've confirmed it's safe to overwrite: \
+                         hitch push {} -f",
                         env_name, env_name, env_name
                     ));
                 }
@@ -996,7 +996,7 @@ pub(crate) fn publish_environment_build(
                 env_name
             ));
             context.log_info(&format!(
-                "The local '{}' branch has been rebuilt. To push manually, run: git push origin {} --force",
+                "The local '{}' branch has been rebuilt. To push manually, run: hitch push {} -f",
                 env_name, env_name
             ));
         }

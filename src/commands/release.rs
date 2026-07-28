@@ -352,7 +352,7 @@ fn perform_release_core(
                 target_branch, e
             ));
             context.log_warning(&format!(
-                "Publish it manually with: git push origin {}",
+                "Publish it manually with: hitch push {}",
                 target_branch
             ));
         } else if let Err(e) = context.git().push_tag(&tag_name) {

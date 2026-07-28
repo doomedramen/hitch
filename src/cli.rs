@@ -42,6 +42,8 @@ pub enum Commands {
     Remove(commands::remove::RemoveCommand),
     /// Promote a branch to an environment (deploy)
     Promote(commands::promote::PromoteCommand),
+    /// Push a branch to origin, using the deploy key if hitch setup was run
+    Push(commands::push::PushCommand),
     /// Demote a branch from an environment (undeploy)
     Demote(commands::demote::DemoteCommand),
     /// Rebuild environment by merging promoted branches
