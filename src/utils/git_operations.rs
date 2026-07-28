@@ -730,6 +730,48 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Push a branch to a specific SSH remote URL using a deploy-key
+    /// identity, bypassing GitHub rulesets that block non-deploy-key pushes.
+    pub fn push_with_ssh_identity(
+        &self,
+        branch: &str,
+        ssh_identity_file: &str,
+        remote_url: &str,
+    ) -> Result<()> {
+        let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
+
+        let mut cmd = Command::new("git");
+        cmd.args(["push", remote_url, &target]);
+        cmd.current_dir(&self.repo_path);
+        cmd.env("LC_ALL", "C");
+        cmd.env("LANG", "C");
+        cmd.env(
+            "GIT_SSH_COMMAND",
+            format!(
+                "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+                ssh_identity_file
+            ),
+        );
+        cmd.stdin(Stdio::null());
+
+        let output = cmd.output().with_context(|| {
+            format!(
+                "Failed to execute git push to {} (using deploy key at {})",
+                remote_url, ssh_identity_file
+            )
+        })?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to push '{}' (using deploy key): {}",
+                branch,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
         // Use an exact ref lookup rather than `git branch --list <name>`, which
         // treats <name> as a shell-style glob (so a branch like `feature/[wip]`
@@ -1293,6 +1335,59 @@ impl GitOperations {
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to force-push '{}' (lease against {}): {}",
+                branch,
+                if expect.is_empty() {
+                    "no remote branch"
+                } else {
+                    expect
+                },
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Force-push a branch to a specific SSH remote URL using a deploy-key
+    /// identity, bypassing GitHub rulesets that block non-deploy-key pushes.
+    /// `ssh_identity_file` is the absolute path to the private SSH key;
+    /// `remote_url` must be in SSH format (`git@github.com:owner/repo.git`).
+    pub fn force_push_with_ssh_identity(
+        &self,
+        branch: &str,
+        expected_remote_oid: Option<&str>,
+        ssh_identity_file: &str,
+        remote_url: &str,
+    ) -> Result<()> {
+        let refname = format!("refs/heads/{}", branch);
+        let expect = expected_remote_oid.unwrap_or("");
+        let lease = format!("--force-with-lease={}:{}", refname, expect);
+        let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
+
+        let mut cmd = Command::new("git");
+        cmd.args(["push", remote_url, &target, &lease]);
+        cmd.current_dir(&self.repo_path);
+        cmd.env("LC_ALL", "C");
+        cmd.env("LANG", "C");
+        cmd.env(
+            "GIT_SSH_COMMAND",
+            format!(
+                "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+                ssh_identity_file
+            ),
+        );
+        cmd.stdin(Stdio::null());
+
+        let output = cmd.output().with_context(|| {
+            format!(
+                "Failed to execute git push to {} (using deploy key at {})",
+                remote_url, ssh_identity_file
+            )
+        })?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to force-push '{}' (lease against {}, using deploy key): {}",
                 branch,
                 if expect.is_empty() {
                     "no remote branch"
@@ -1907,6 +2002,23 @@ impl GitOperations {
             return Err(anyhow::anyhow!(
                 "Failed to create tag '{}': {}",
                 tag_name,
+                stderr
+            ));
+        }
+        Ok(())
+    }
+
+    /// Create an annotated tag pointing at a specific commit SHA, rather than
+    /// the current HEAD. Required when the desired commit was built in a
+    /// worktree (where the main checkout's HEAD hasn't moved).
+    pub fn create_tag_at(&self, tag_name: &str, message: &str, sha: &str) -> Result<()> {
+        let output = self.run_git_command(&["tag", "-a", tag_name, "-m", message, sha])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!(
+                "Failed to create tag '{}' at {}: {}",
+                tag_name,
+                sha,
                 stderr
             ));
         }

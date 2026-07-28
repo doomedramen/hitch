@@ -151,12 +151,13 @@ covered.
   for three separate concerns (cross-process serialization, rebuild-specific
   serialization, human-facing "don't touch this env" signal). Know which
   one(s) a new mutating operation actually needs.
-- **The user's working tree is sacred**: `hitch rebuild` and `hitch resolve`
-  compose in disposable `git worktree`s, never in the user's own checkout —
-  this was a deliberate phase-1 redesign (see the plan doc) specifically to
-  eliminate a whole class of "left the user on the wrong branch" or "left a
-  dirty tree" bugs. Any new command that needs to build/merge things should
-  follow the same pattern (`GitOperations::new_at_path` on a worktree), not
+- **The user's working tree is sacred**: `hitch rebuild`, `hitch release`,
+  and `hitch resolve` compose in disposable `git worktree`s, never in the
+  user's own checkout — this was a deliberate phase-1 redesign (see the plan
+  doc) specifically to eliminate a whole class of "left the user on the wrong
+  branch" or "left a dirty tree" bugs. Any new command that needs to
+  build/merge things should follow the same pattern
+  (`GitOperations::new_at_path` on a worktree), not
   `checkout`/build/`checkout back` in the real repo.
 - **Publishing an environment branch is always a CAS `update-ref`**
   (`publish_environment_build` in `prelude.rs`), never a rename-and-recreate
@@ -209,3 +210,19 @@ able to wait on real input. The one deliberate exception is
 interactive. If you add a new `Command::new("git")` or `Command::new("gh")`
 call anywhere in `src/` *or* `tests/test_framework/`, for anything other
 than a genuinely interactive flow, null the stdin.
+
+**GitHub deploy key must bypass `hitch-protection` ruleset on push.** `hitch
+setup` creates a GitHub repository ruleset that blocks all direct pushes
+(`update`, `deletion`, `non_fast_forward`) to environment branches, with
+bypass only for deploy keys. `hitch rebuild` and `hitch release` must
+therefore push protected branches using the deploy key (`~/.ssh/hitch_*`),
+not the user's default git credentials (HTTPS token / personal SSH key) —
+otherwise the push fails with `GH013: Repository rule violations`. The
+helpers `force_push_with_deploy_key_if_configured` and
+`push_branch_with_deploy_key_if_configured` in `prelude.rs` detect whether
+`hitch setup` was run and route the push through
+`GitOperations::push_with_ssh_identity` /
+`force_push_with_ssh_identity` accordingly. Any new command that pushes to
+a branch that could be protected by a `hitch-protection` ruleset must use one
+of these helpers, never a raw `push_branch` / `force_push_branch` /
+`force_push_with_lease` against `origin`.

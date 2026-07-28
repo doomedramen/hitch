@@ -3,11 +3,13 @@ use crate::utils::command_helpers::{
     ensure_branch_exists, ensure_environment_exists, environment::get_locked_by_user,
     logging::validation_success,
 };
-use crate::utils::prelude::access_metadata_read_only;
+use crate::utils::git_operations::GitOperations;
+use crate::utils::prelude::{access_metadata_read_only, push_branch_with_deploy_key_if_configured};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
 use clap::Args;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[derive(Args)]
 pub struct ReleaseCommand {
@@ -163,7 +165,13 @@ fn resolve_target_branch(
     Ok(target)
 }
 
-/// Core release logic shared by normal and forced modes
+/// Core release logic shared by normal and forced modes.
+///
+/// Composes the promoted branches into the target branch inside a disposable
+/// worktree so the user's working tree is never touched. Once all merges
+/// succeed the target ref is advanced with a single CAS `update-ref`; on any
+/// merge failure the worktree is discarded and the target branch is never
+/// modified — no rollback needed.
 fn perform_release_core(
     context: &GlobalContext,
     env_name: &str,
@@ -189,7 +197,6 @@ fn perform_release_core(
         return Ok(());
     }
 
-    // Snapshot the branches being released for post-release pruning/rebuild decisions.
     let released_branches = environment.branches.clone();
 
     context.log_info(&format!(
@@ -199,177 +206,175 @@ fn perform_release_core(
         target_branch
     ));
 
-    // Record original branch for cleanup
-    let original_branch = context.git().get_current_branch()?;
-    context.log_verbose(&format!("Current branch: '{}'", original_branch));
+    // Synchronize all branches
+    context.log_info("Synchronizing branches for release...");
+    let sync_branches = {
+        let mut b = environment.branches.clone();
+        b.push(target_branch.to_string());
+        b
+    };
+    context.git().synchronize_branches(&sync_branches)?;
 
-    // Commit the target branch points at before we merge anything. A release merges
-    // each promoted branch and commits it to the target one at a time, so if a later
-    // branch conflicts we must roll the target back to this commit — otherwise the
-    // earlier branches are left committed on the target and the release is not atomic.
-    let mut target_rollback: Option<String> = None;
+    // Pin promoted branch SHAs so merges use the snapshot we synced.
+    let mut pinned_branches: Vec<(String, String)> = Vec::new();
+    for branch in &environment.branches {
+        if !context.git().branch_exists(branch)? {
+            return Err(anyhow::anyhow!(
+                "Branch '{}' does not exist locally after synchronization",
+                branch
+            ));
+        }
+        let sha = context.git().get_branch_commit_sha(branch)?;
+        pinned_branches.push((branch.clone(), sha));
+    }
 
-    let release_result = (|| -> Result<()> {
-        // Synchronize all branches
-        context.log_info("Synchronizing branches for release...");
-        let mut all_branches = environment.branches.clone();
-        all_branches.push(target_branch.to_string());
-        context.git().synchronize_branches(&all_branches)?;
+    // Snapshot the target branch SHA before building — CAS old value.
+    let target_sha = context.git().get_branch_commit_sha(target_branch)?;
 
-        // Switch to target branch
-        context.log_info(&format!(
-            "Switching to target branch '{}'...",
-            target_branch
-        ));
-        context.git().checkout_branch(target_branch)?;
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let temp_branch = format!("hitch-release-{}-{}", target_branch, timestamp);
+    let repo_path = PathBuf::from(context.git().workdir());
+    let repo_name = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+    let parent = repo_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("Repository has no parent directory to place a release worktree in")
+    })?;
+    let worktree_path = parent.join(format!(
+        ".hitch-worktree-release-{}-{}-{}",
+        repo_name, env_name, timestamp
+    ));
+    let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-        // Capture the rollback point now that the target is synced and checked out.
-        target_rollback = Some(context.git().rev_parse("HEAD")?);
+    context
+        .git()
+        .add_worktree(&worktree_path_str, &temp_branch, &target_sha)?;
 
-        // Perform merges with conflict checking
-        for branch in &environment.branches {
+    let cleanup = || {
+        let _ = context.git().remove_worktree(&worktree_path_str, true);
+        if context.git().branch_exists(&temp_branch).unwrap_or(false) {
+            let _ = context.git().delete_branch(&temp_branch, true);
+        }
+    };
+
+    // Compose the merges in the disposable worktree.
+    let build_result = (|| -> Result<String> {
+        let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
+
+        for (branch, sha) in &pinned_branches {
             context.log_info(&format!("Merging '{}' into '{}'...", branch, target_branch));
-
-            let (has_conflicts, conflicted_files) =
-                context.git().check_merge_conflicts_detailed(branch)?;
-
-            if has_conflicts {
-                return Err(build_conflict_error(
-                    branch,
-                    conflicted_files,
-                    target_branch,
-                    env_name,
-                ));
-            }
-
             let merge_message = format!(
                 "Hitch: release {} from {} to {}",
                 branch, env_name, target_branch
             );
 
-            if squash {
-                context.git().squash_merge(branch, &merge_message)?;
-                context.log_verbose(&format!(
-                    "✓ Squash merged '{}' into '{}'",
-                    branch, target_branch
-                ));
+            let merge_res = if squash {
+                worktree_git.squash_merge(sha, &merge_message)
             } else {
-                context
-                    .git()
-                    .merge_no_ff_with_message(branch, &merge_message)?;
-                context.log_verbose(&format!(
-                    "✓ Merged '{}' into '{}' (merge commit)",
-                    branch, target_branch
-                ));
+                worktree_git.merge_no_ff_with_message(sha, &merge_message)
+            };
+
+            if let Err(e) = merge_res {
+                if worktree_git.has_merge_conflicts().unwrap_or(false) {
+                    let conflicted_files = worktree_git.get_conflicted_files().unwrap_or_default();
+                    let _ = worktree_git.abort_merge_and_clean();
+                    return Err(build_conflict_error(
+                        branch,
+                        Some(conflicted_files),
+                        target_branch,
+                        env_name,
+                    ));
+                }
+                return Err(e);
             }
+
+            context.log_verbose(&format!("✓ Merged '{}' into '{}'", branch, target_branch));
         }
 
-        // Note: in squash mode each branch is already committed by `squash_merge` above
-        // (one squash commit per branch), so there is nothing extra to commit here.
-
-        // Create auto-tag for release tracking with descriptive name and ISO 8601 timestamp
-        let now = chrono::Utc::now();
-        let datetime_str = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
-        let target_branch_clean = target_branch.replace('/', "-");
-        let tag_name = format!(
-            "hitch-release-{}-to-{}-{}",
-            env_name, target_branch_clean, datetime_str
-        );
-        let tag_message = format!(
-            "Hitch release of environment '{}' to '{}' at {}",
-            env_name,
-            target_branch,
-            now.format("%Y-%m-%d %H:%M:%S UTC")
-        );
-
-        context.git().create_tag(&tag_name, &tag_message)?;
-        context.log_info(&format!("✓ Created release tag '{}'", tag_name));
-
-        // Push changes and tag if enabled. The merge + tag are already committed
-        // locally at this point, so a push failure (or a local-only repo with no
-        // remote) must NOT abort the release — otherwise we'd report failure for a
-        // release that actually landed locally. Warn clearly and tell the user how
-        // to publish it manually instead.
-        if context.should_push() {
-            context.log_info("Pushing release to remote...");
-            if let Err(e) = context.git().push_branch(target_branch) {
-                context.log_warning(&format!(
-                    "Release was applied to the local '{}' branch, but pushing to origin failed: {}",
-                    target_branch, e
-                ));
-                context.log_warning(&format!(
-                    "Publish it manually with: git push origin {}",
-                    target_branch
-                ));
-            } else if let Err(e) = context.git().push_tag(&tag_name) {
-                context.log_warning(&format!(
-                    "Pushed '{}', but failed to push the release tag '{}': {}",
-                    target_branch, tag_name, e
-                ));
-                context.log_warning(&format!(
-                    "Push the tag manually with: git push origin {}",
-                    tag_name
-                ));
-            } else {
-                context.log_verbose("✓ Pushed release and tag to remote");
-            }
-        }
-
-        Ok(())
+        worktree_git.rev_parse("HEAD")
     })();
 
-    // Always attempt to clean up merge state left by an aborted merge.
-    let _ = context.git().abort_merge_and_clean();
+    let new_sha = match build_result {
+        Ok(sha) => sha,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
 
-    // If the release failed after one or more branches were already merged and committed
-    // to the target, roll the target back to its pre-release commit so it is not left in a
-    // partially-released state. Only touch the target on failure; a successful release keeps
-    // its merges. Best-effort: warn (with the recovery commit) rather than mask the original error.
-    if release_result.is_err() {
-        if let Some(rollback_sha) = &target_rollback {
-            let rolled_back = context
-                .git()
-                .checkout_branch(target_branch)
-                .and_then(|_| context.git().reset_hard_to(rollback_sha));
-            match rolled_back {
-                Ok(()) => context.log_verbose(&format!(
-                    "Rolled '{}' back to its pre-release commit after a failed release",
-                    target_branch
-                )),
-                Err(e) => context.log_warning(&format!(
-                    "Release failed and '{}' could not be rolled back automatically: {}. \
-                     Restore it manually with: git checkout {} && git reset --hard {}",
-                    target_branch, e, target_branch, rollback_sha
-                )),
-            }
+    // Create the release tag pointing at the worktree's result commit.
+    let now = chrono::Utc::now();
+    let datetime_str = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let target_branch_clean = target_branch.replace('/', "-");
+    let tag_name = format!(
+        "hitch-release-{}-to-{}-{}",
+        env_name, target_branch_clean, datetime_str
+    );
+    let tag_message = format!(
+        "Hitch release of environment '{}' to '{}' at {}",
+        env_name,
+        target_branch,
+        now.format("%Y-%m-%d %H:%M:%S UTC")
+    );
+
+    context
+        .git()
+        .create_tag_at(&tag_name, &tag_message, &new_sha)?;
+    context.log_info(&format!("✓ Created release tag '{}'", tag_name));
+
+    // Publish the target branch atomically with CAS.
+    let env_ref = format!("refs/heads/{}", target_branch);
+    if let Err(e) = context
+        .git()
+        .update_ref_cas(&env_ref, &new_sha, Some(&target_sha))
+    {
+        cleanup();
+        return Err(anyhow::anyhow!(
+            "Failed to publish '{}': {}. The release built successfully but could not \
+             be published — the target branch may have moved while the release was \
+             running. Fetch and re-run 'hitch release {}'.",
+            target_branch,
+            e,
+            env_name
+        ));
+    }
+    context.log_verbose(&format!("✓ Published '{}' ({})", target_branch, new_sha));
+
+    // Push if enabled. A push failure must NOT abort the release — the merge
+    // and tag are already committed locally. Warn and tell the user how to
+    // publish it manually.
+    if context.should_push() {
+        context.log_info("Pushing release to remote...");
+        if let Err(e) = push_branch_with_deploy_key_if_configured(context, target_branch) {
+            context.log_warning(&format!(
+                "Release was applied to the local '{}' branch, but pushing to origin failed: {}",
+                target_branch, e
+            ));
+            context.log_warning(&format!(
+                "Publish it manually with: git push origin {}",
+                target_branch
+            ));
+        } else if let Err(e) = context.git().push_tag(&tag_name) {
+            context.log_warning(&format!(
+                "Pushed '{}', but failed to push the release tag '{}': {}",
+                target_branch, tag_name, e
+            ));
+            context.log_warning(&format!(
+                "Push the tag manually with: git push origin {}",
+                tag_name
+            ));
+        } else {
+            context.log_verbose("✓ Pushed release and tag to remote");
         }
     }
 
-    // Always attempt to return to the user's original branch.
-    if let Err(e) = context.git().checkout_branch(&original_branch) {
-        context.log_warning(&format!(
-            "Failed to return to original branch '{}': {}",
-            original_branch, e
-        ));
-    } else {
-        context.log_verbose(&format!(
-            "✓ Returned to original branch '{}'",
-            original_branch
-        ));
-    }
+    cleanup();
 
-    // Propagate the release error (conflict/error) after cleanup.
-    release_result?;
+    // Post-release pruning and dependent rebuilds.
+    let pruned_envs =
+        update_release_metadata_and_prune(context, env_name, &released_branches, !no_prune)?;
 
-    // Update release metadata and prune promoted branches (single metadata commit).
-    let pruned_envs = update_release_metadata_and_prune(
-        context,
-        env_name,
-        &released_branches,
-        /* do_prune */ !no_prune,
-    )?;
-
-    // Rebuild dependent environments (best-effort) so env branches stay up to date after base moves.
     if !no_rebuild_dependents {
         rebuild_dependent_environments(context, target_branch, env_name, &pruned_envs)?;
     }

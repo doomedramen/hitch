@@ -118,7 +118,8 @@ pub fn validate_snapshot(context: &GlobalContext, snapshot: &RebuildSnapshot) ->
     Ok(())
 }
 
-/// Check for merge conflicts between branches
+/// Check for merge conflicts between the base branch and promoted branches
+/// using `git merge-tree` — read-only, never touches the user's working tree.
 fn check_for_merge_conflicts(
     context: &GlobalContext,
     environment: &Environment,
@@ -126,53 +127,72 @@ fn check_for_merge_conflicts(
 ) -> Result<bool> {
     context.log_verbose("Checking for merge conflicts...");
 
-    // Switch to base branch to check conflicts
-    let current_branch = context.git().get_current_branch()?;
-    context.git().checkout_branch(&environment.base)?;
-
-    // Run the conflict checks inside a closure so we ALWAYS return to the original
-    // branch afterward — even if a check errors out. Previously an early `?` here
-    // left the user stranded on the base branch.
-    let result = (|| -> Result<bool> {
-        // Check conflicts between base and new branch
-        let conflict_result = context
-            .git()
-            .check_merge_conflicts_comprehensive(branch_to_promote)?;
-
-        let mut has_conflicts = conflict_result.has_conflicts;
-
-        // If no conflicts with new branch, check conflicts with existing promoted branches
-        if !has_conflicts {
-            for existing_branch in &environment.branches {
-                if existing_branch != branch_to_promote {
-                    let conflicts = context
-                        .git()
-                        .check_merge_conflicts_comprehensive(existing_branch)?;
-                    if conflicts.has_conflicts {
-                        context.log_verbose(&format!(
-                            "Merge conflict detected with existing branch: {}",
-                            existing_branch
-                        ));
-                        has_conflicts = true;
-                        break;
-                    }
-                }
-            }
+    // Ensure all branches are available locally for rev-parse + merge-tree.
+    let mut all_branches: Vec<String> = vec![environment.base.clone()];
+    all_branches.push(branch_to_promote.to_string());
+    for b in &environment.branches {
+        if b != branch_to_promote {
+            all_branches.push(b.clone());
         }
+    }
+    context.git().synchronize_branches(&all_branches)?;
 
-        Ok(has_conflicts)
-    })();
+    let base_tree = context
+        .git()
+        .rev_parse(&format!("{}^{{tree}}", environment.base))?;
+    let base_commit = context.git().rev_parse(&environment.base)?;
 
-    // Always return to the original branch and clear any dangling merge state.
-    let _ = context.git().abort_merge_and_clean();
-    if let Err(e) = context.git().checkout_branch(&current_branch) {
-        context.log_warning(&format!(
-            "Failed to return to original branch '{}' after conflict check: {}",
-            current_branch, e
-        ));
+    // Check conflict between base and the branch being promoted
+    if merge_tree_has_conflicts(
+        context,
+        &environment.base,
+        &base_tree,
+        &base_commit,
+        branch_to_promote,
+    )? {
+        return Ok(true);
     }
 
-    result
+    // Check conflicts between base and each existing promoted branch
+    for existing_branch in &environment.branches {
+        if existing_branch != branch_to_promote
+            && merge_tree_has_conflicts(
+                context,
+                &environment.base,
+                &base_tree,
+                &base_commit,
+                existing_branch,
+            )?
+        {
+            context.log_verbose(&format!(
+                "Merge conflict detected with existing branch: {}",
+                existing_branch
+            ));
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Check if merging `branch` into `base_branch` produces conflicts using
+/// `git merge-tree --write-tree --name-only` — purely read-only.
+fn merge_tree_has_conflicts(
+    context: &GlobalContext,
+    base_branch: &str,
+    base_tree: &str,
+    base_commit: &str,
+    branch: &str,
+) -> Result<bool> {
+    let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
+    let merge_base = context
+        .git()
+        .get_merge_base(base_branch, branch)?
+        .unwrap_or_else(|| base_commit.to_string());
+    let res = context
+        .git()
+        .merge_tree_write_tree_name_only(&merge_base, base_tree, &their_tree)?;
+    Ok(!res.conflicted_files.is_empty())
 }
 
 /// Return the list of branch names (including the base branch) that have

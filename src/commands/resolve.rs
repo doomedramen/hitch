@@ -2,8 +2,8 @@ use crate::commands::global_context::GlobalContext;
 use crate::types::Environment;
 use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{
-    access_metadata_read_only, preflight_compatibility_report, publish_environment_build,
-    CompatibilityConflict,
+    access_metadata_read_only, force_push_with_deploy_key_if_configured,
+    preflight_compatibility_report, publish_environment_build, CompatibilityConflict,
 };
 use anyhow::Result;
 use clap::Args;
@@ -270,10 +270,7 @@ fn resolve_mode_a(context: &GlobalContext, env_name: &str, branch: &str, base: &
             branch
         ));
         if context.confirm("Push it now?")? {
-            match context
-                .git()
-                .force_push_with_lease(branch, prior_remote_sha.as_deref())
-            {
+            match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
                 Ok(()) => context.log_success(&format!("✓ Pushed '{}'", branch)),
                 Err(e) => {
                     context.log_error(&format!("Failed to push '{}': {}", branch, e));

@@ -845,6 +845,66 @@ pub fn rebuild_environment_opts(
     Ok(RebuildOutcome { held, replayed })
 }
 
+/// If `hitch setup` has been run for this repository, use the deploy key to
+/// force-push so the push bypasses the `hitch-protection` GitHub ruleset.
+/// Falls back to a plain `force_push_with_lease` against `origin` when no
+/// deploy key is configured.
+pub(crate) fn force_push_with_deploy_key_if_configured(
+    context: &GlobalContext,
+    env_name: &str,
+    remote_sha_before: &Option<String>,
+) -> Result<()> {
+    let (owner, repo) = match crate::utils::gh::owner_repo_from_remote() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return context
+                .git()
+                .force_push_with_lease(env_name, remote_sha_before.as_deref());
+        }
+    };
+
+    if crate::utils::setup::is_setup(&owner, &repo) {
+        let key_path = crate::utils::setup::key_path(&owner, &repo);
+        let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
+        context.git().force_push_with_ssh_identity(
+            env_name,
+            remote_sha_before.as_deref(),
+            &key_path.to_string_lossy(),
+            &ssh_url,
+        )
+    } else {
+        context
+            .git()
+            .force_push_with_lease(env_name, remote_sha_before.as_deref())
+    }
+}
+
+/// If `hitch setup` has been run for this repository, use the deploy key to
+/// push so the push bypasses the `hitch-protection` GitHub ruleset. Falls
+/// back to a plain `push_branch` against `origin` when no deploy key is
+/// configured.
+pub(crate) fn push_branch_with_deploy_key_if_configured(
+    context: &GlobalContext,
+    branch: &str,
+) -> Result<()> {
+    let (owner, repo) = match crate::utils::gh::owner_repo_from_remote() {
+        Ok(pair) => pair,
+        Err(_) => {
+            return context.git().push_branch(branch);
+        }
+    };
+
+    if crate::utils::setup::is_setup(&owner, &repo) {
+        let key_path = crate::utils::setup::key_path(&owner, &repo);
+        let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
+        context
+            .git()
+            .push_with_ssh_identity(branch, &key_path.to_string_lossy(), &ssh_url)
+    } else {
+        context.git().push_branch(branch)
+    }
+}
+
 /// Publish `new_sha` as environment `env_name`'s new content: back up the
 /// current ref (if any) under a timestamped backup ref, then swap
 /// `refs/heads/<env_name>` to `new_sha` with a single compare-and-swap —
@@ -909,10 +969,7 @@ pub(crate) fn publish_environment_build(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name
             ));
-            match context
-                .git()
-                .force_push_with_lease(env_name, remote_sha_before.as_deref())
-            {
+            match force_push_with_deploy_key_if_configured(context, env_name, remote_sha_before) {
                 Ok(()) => {
                     context.log_success(&format!(
                         "✓ Force pushed rebuilt '{}' branch to remote",
@@ -925,9 +982,10 @@ pub(crate) fn publish_environment_build(
                         env_name, e
                     ));
                     context.log_error(&format!(
-                        "Someone may have pushed to '{}' while this rebuild ran. Fetch and \
-                         re-run 'hitch rebuild {}', or push manually once you've confirmed \
-                         it's safe to overwrite: git push origin {} --force",
+                        "Someone may have pushed to '{}' while this rebuild ran, or the \
+                         deploy key may be missing/outdated. Fetch and re-run 'hitch rebuild \
+                         {}', or push manually once you've confirmed it's safe to overwrite: \
+                         git push origin {} --force",
                         env_name, env_name, env_name
                     ));
                 }
