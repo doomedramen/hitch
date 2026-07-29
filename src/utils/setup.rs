@@ -79,7 +79,6 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
             "-H",
             "Accept: application/vnd.github+json",
         ])
-        .arg("--silent")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -112,7 +111,6 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
                 "read_only=false",
                 "--jq",
                 ".id",
-                "--silent",
             ])
             .stdin(std::process::Stdio::null())
             .output()

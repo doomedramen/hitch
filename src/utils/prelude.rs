@@ -836,6 +836,16 @@ pub fn rebuild_environment_opts(
     cleanup_worktree();
     publish_result?;
 
+    if let Ok(current) = context.git().get_current_branch() {
+        if current == env_name {
+            context.log_verbose(&format!(
+                "Updating local '{}' working tree to match rebuilt ref",
+                env_name
+            ));
+            let _ = context.git().reset_hard_to("HEAD");
+        }
+    }
+
     logger.complete();
 
     context.log_verbose(&format!(
