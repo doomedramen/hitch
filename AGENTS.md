@@ -322,3 +322,15 @@ helpers `force_push_with_deploy_key_if_configured` and
 a branch that could be protected by a `hitch-protection` ruleset must use one
 of these helpers, never a raw `push_branch` / `force_push_branch` /
 `force_push_with_lease` against `origin`.
+
+**Known, deliberately-open trust gap: custom merge drivers.** `merge_tree_compose`
+runs ORT, and ORT honours a `merge=<driver>` attribute from an in-tree
+`.gitattributes`. The driver's *command* comes from git config (`merge.<driver>.driver`),
+not from the tree, so an attacker who can only push commits cannot by itself
+choose a program to run — they need the victim's config to already define that
+driver. The hardening in `git_command` does not close this (there is no
+supported way to disable merge drivers while keeping ORT's real behaviour, and
+faking it would break `test_merge_tree_compose_matches_real_merge_across_scenarios`,
+which is the load-bearing correctness guarantee). Treat any repository that
+configures a merge driver as one where composition executes that program, and
+do not add config-based "mitigations" that silently change merge semantics.
