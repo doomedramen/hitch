@@ -1089,6 +1089,29 @@ pub(crate) fn publish_environment_build(
         // doc comment). That reproduces the plain overwrite-if-exists
         // semantics these refs had before they moved into this transaction,
         // while keeping them inside the atomic batch.
+        //
+        // `prev/` and `backup/` are written with identical content
+        // (`env_name`, `backup_timestamp`, `old_sha`) and nothing in `src/`
+        // reads one differently from the other — they are currently
+        // byte-for-byte duplicates of each other, every publish. `backup/` is
+        // the older namespace (predates this transaction; see
+        // `docs/merge-conflict-handling-plan.md`, which names it the
+        // pre-publish backup ref a future `--restore-backup` flag would read).
+        // `prev/` was added later, in the same task that introduced this
+        // transaction, and documented there as "the rollback anchor" without
+        // apparently noticing `backup/` already served that role — see
+        // `docs/superpowers/plans/2026-07-31-hitch-production-grade.md`,
+        // Task 9/Task 10. Both are kept for now rather than collapsed to one:
+        // `hitch cleanup`'s retention pruning and its test
+        // (`tests/integration/cleanup_tests.rs`) already treat both
+        // namespaces as first-class and independently bounded, and a real
+        // rebuild's regression test
+        // (`test_rebuild_archives_previous_tip_under_prev_ref`) asserts
+        // `prev/` specifically gets written — dropping either namespace now
+        // would mean rewriting already-passing, deliberately-added coverage
+        // rather than fixing a bug. Revisit if one namespace ever gains
+        // semantics the other doesn't (e.g. `--restore-backup` actually
+        // shipping against `backup/` specifically).
         edits.push(crate::utils::git_operations::RefEdit::Update {
             refname: format!("refs/hitch/prev/{}/{}", env_name, backup_timestamp),
             new_oid: old_sha.clone(),
@@ -1124,8 +1147,8 @@ pub(crate) fn publish_environment_build(
 
     if let Some(ref old_sha) = old_env_sha {
         context.log_verbose(&format!(
-            "✓ Backed up previous '{}' ({}) to 'refs/hitch/backup/{}/{}'",
-            env_name, old_sha, env_name, backup_timestamp
+            "✓ Backed up previous '{}' ({}) to 'refs/hitch/backup/{}/{}' and 'refs/hitch/prev/{}/{}'",
+            env_name, old_sha, env_name, backup_timestamp, env_name, backup_timestamp
         ));
     }
 

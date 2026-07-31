@@ -185,15 +185,27 @@ covered.
   the branch it is rebasing is the one the user is standing on. New
   build/merge logic should use the plumbing path; reach for a worktree only
   when a human has to edit the result, and detach it.
-- **Publishing an environment branch is always one atomic ref transaction**
-  (`publish_environment_build` in `prelude.rs`, built on
-  `GitOperations::ref_transaction`), never a rename-and-recreate dance and never
-  a sequence of separate `update-ref` calls. The batch moves `refs/heads/<env>`
-  under compare-and-swap, writes the pending-resync intent, and archives the
-  replaced tip under `refs/hitch/prev/<env>/<timestamp>` — all or nothing.
-  Reuse that function for anything that produces a new environment branch
-  commit; don't hand-roll the publish step again. `refs/hitch/prev/*` and
-  `refs/hitch/backup/*` are written with unconditional-overwrite semantics
+- **Only `publish_environment_build` (used by `hitch rebuild`) lands in one
+  atomic ref transaction; `hitch release` and `hitch resolve` do not — yet.**
+  `publish_environment_build` in `prelude.rs`, built on
+  `GitOperations::ref_transaction`, moves `refs/heads/<env>` under
+  compare-and-swap, writes the pending-resync intent, and archives the
+  replaced tip in the same batch — no rename-and-recreate dance, no sequence
+  of separate `update-ref` calls, all or nothing. Reuse that function for
+  anything that produces a new environment branch commit rather than
+  hand-rolling the publish step again. But `hitch release`
+  (`src/commands/release.rs`) and `hitch resolve`'s branch-landing path
+  (`src/commands/resolve.rs`) still use the older two-step sequence —
+  `pending_resync::record()` followed by a separate `update_ref_cas` call —
+  so a crash between those two calls is still a real, un-recovered-from
+  window for those two commands specifically. They were deliberately not
+  migrated as part of the transaction-ization phase (out of scope for that
+  phase, not overlooked); closing that gap is future work, not something to
+  assume already done because `publish_environment_build` looks solved.
+  `refs/hitch/prev/*` and `refs/hitch/backup/*` (both written only by
+  `publish_environment_build`, currently byte-identical to each other every
+  publish — see the doc comment at the write site in `prelude.rs` for why
+  both still exist) are written with unconditional-overwrite semantics
   (`RefEdit::Update { expected_old: Some(String::new()) }`, not `Create`) so
   that a same-second collision on the timestamped ref name can't fail the
   whole transaction — see the doc comment on `RefEdit`. The trade-off: two
@@ -201,7 +213,12 @@ covered.
   the later tip archived under that timestamp; the earlier one is not lost
   from the object database, just no longer reachable via this ref. `prev/`'s
   "rollback is a one-ref flip" guarantee is therefore per-timestamp, not
-  per-publish, in that rare case.
+  per-publish, in that rare case. The pending-resync ref edit inside that
+  transaction uses `expected_old: Some(String::new())` (unconditional write),
+  not `None` (which this codebase's `ref_transaction` maps to "must not
+  exist") — a leftover pending-resync record is documented in
+  `pending_resync`'s module doc as benign and recoverable, so it must never
+  be able to fail this transaction.
 - **Moving a branch ref means resyncing every checkout attached to it.**
   `scan_checkouts_on_branch` before the ref transaction, `resync_checkouts`
   after — both in `prelude.rs`, both already wired into

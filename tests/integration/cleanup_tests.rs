@@ -225,21 +225,32 @@ mod tests {
                             &format!("refs/hitch/{}/{}", namespace, env_name),
                         ])?
                         .stdout();
-                    let count = remaining.lines().filter(|l| !l.trim().is_empty()).count();
-                    assert!(
-                        count <= 10,
-                        "cleanup left {} refs under refs/hitch/{}/{}, expected <= 10:\n{}",
-                        count,
-                        namespace,
-                        env_name,
-                        remaining
-                    );
-                    assert!(
-                        count > 0,
-                        "cleanup pruned every ref under refs/hitch/{}/{} — some of the \
-                         most-recent 10 must survive",
-                        namespace,
-                        env_name
+                    let mut surviving: Vec<String> = remaining
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    surviving.sort();
+
+                    // The 10 planted refs with the highest timestamp suffix
+                    // (i == 5..=14, since 15 were planted as i == 0..=14) are
+                    // the ones retention must keep. Asserting the exact set —
+                    // not just the count — catches an inverted sort/skip that
+                    // would keep the OLDEST 10 and delete the newest: a count
+                    // of 10 would look identical either way, but that would
+                    // silently discard the most recent rollback points, the
+                    // ones actually useful.
+                    let expected: Vec<String> = (5..15)
+                        .map(|i| {
+                            format!("refs/hitch/{}/{}/2020010100{:04}", namespace, env_name, i)
+                        })
+                        .collect();
+
+                    assert_eq!(
+                        surviving, expected,
+                        "cleanup did not keep exactly the 10 most-recent refs under \
+                         refs/hitch/{}/{} — got:\n{:?}\nexpected:\n{:?}",
+                        namespace, env_name, surviving, expected
                     );
                 }
             }
