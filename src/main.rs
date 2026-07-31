@@ -93,6 +93,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Finish any publish that died between moving a branch ref and updating
+    // the checkouts standing on it. Only under the repo lock, so this can
+    // never race a publish that is still in flight, and only ever repairs a
+    // working tree it can prove is stale rather than edited.
+    if _repo_lock.is_some() {
+        if let Err(e) = hitch::utils::pending_resync::recover(&context) {
+            context.log_verbose(&format!("Could not check for interrupted publishes: {}", e));
+        }
+    }
+
     // Execute the appropriate command
     match command {
         Commands::Init(args) => commands::init::run(args, &context).map_err(|e| e.into()),

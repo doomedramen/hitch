@@ -824,4 +824,187 @@ mod tests {
 
         Ok(())
     }
+
+    /// Simulate a publish that died between moving the branch ref and updating
+    /// the checkout standing on it: move the ref by hand and leave a
+    /// pending-resync record behind. The next mutating hitch command must
+    /// finish the job.
+    fn stage_interrupted_publish(
+        env: &TestEnvironment,
+        branch: &str,
+        from_sha: &str,
+        to_sha: &str,
+    ) -> anyhow::Result<()> {
+        let record = serde_json::json!({
+            "branch": branch,
+            "from_sha": from_sha,
+            "to_sha": to_sha,
+            "checkouts": [env.temp_dir.to_string_lossy()],
+        });
+        let record_path = env.temp_dir.join("pending-record.json");
+        std::fs::write(&record_path, serde_json::to_vec_pretty(&record)?)?;
+
+        let blob = env
+            .git
+            .run(&["hash-object", "-w", &record_path.to_string_lossy()])?
+            .assert_success()
+            .stdout()
+            .trim()
+            .to_string();
+        std::fs::remove_file(&record_path)?;
+
+        env.git
+            .run(&[
+                "update-ref",
+                &format!("refs/hitch/pending-resync/{}", branch),
+                &blob,
+            ])?
+            .assert_success();
+
+        // The ref move that the dying process had already completed. Done with
+        // update-ref precisely so the working tree is left behind, which is the
+        // state being reproduced.
+        env.git
+            .run(&["update-ref", &format!("refs/heads/{}", branch), to_sha])?
+            .assert_success();
+        Ok(())
+    }
+
+    #[test]
+    fn test_interrupted_publish_is_finished_by_the_next_command() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("late.txt", "landed late")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add late.txt"])?;
+            let advanced = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.git.run(&["checkout", "main"])?;
+            let original = env
+                .git
+                .run(&["rev-parse", "main"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+
+            stage_interrupted_publish(env, "main", &original, &advanced)?;
+
+            // Exactly the reported symptom: HEAD moved, the tree did not.
+            assert!(!env.fs.file_exists("late.txt"));
+            let before = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                !before.stdout().trim().is_empty(),
+                "expected the staged interruption to leave a desynchronized tree"
+            );
+
+            // Any mutating command picks the obligation back up.
+            env.hitch
+                .run()
+                .args(&["lock", "dev"])
+                .execute()?
+                .assert_success();
+
+            let after = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                after.stdout().trim().is_empty(),
+                "interrupted publish was not finished: '{}'",
+                after.stdout().trim()
+            );
+            assert!(
+                env.fs.file_exists("late.txt"),
+                "recovery did not bring the working tree up to the published tip"
+            );
+
+            let leftover = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "refs/hitch/pending-resync",
+                ])?
+                .stdout();
+            assert!(
+                leftover.trim().is_empty(),
+                "pending-resync record survived recovery: '{}'",
+                leftover.trim()
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Recovery must prove a tree is stale before touching it. A tree that has
+    /// been edited since the interruption is left exactly as the user left it.
+    #[test]
+    fn test_interrupted_publish_recovery_refuses_to_touch_an_edited_tree() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("late.txt", "landed late")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add late.txt"])?;
+            let advanced = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.git.run(&["checkout", "main"])?;
+            let original = env
+                .git
+                .run(&["rev-parse", "main"])?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+
+            stage_interrupted_publish(env, "main", &original, &advanced)?;
+
+            // The user got back to their desk and started working.
+            env.fs.write_file("my-work.txt", "do not eat this")?;
+
+            let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            let result = result.assert_success();
+
+            assert_eq!(
+                env.fs.read_file("my-work.txt")?,
+                "do not eat this",
+                "recovery destroyed work that appeared after the interruption"
+            );
+            assert!(
+                result.stdout().contains("interrupted") || result.stderr().contains("interrupted"),
+                "recovery skipped an edited tree without telling the user"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

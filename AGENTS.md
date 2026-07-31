@@ -101,6 +101,13 @@ covered.
   introduce new git2 usage without a specific reason.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
+- `src/utils/pending_resync.rs` — crash recovery for the one window
+  publishing cannot make atomic (ref moved, checkouts not yet updated).
+  Records intent at `refs/hitch/pending-resync/<branch>`; `recover` runs from
+  `main.rs` for mutating commands only, so it is always under the repo lock.
+  It repairs a checkout only when that tree is *provably* exactly the old tip
+  — never on the dead process's say-so — so an edited tree is reported, not
+  reset.
 - `src/utils/resolutions.rs` — phase-5 shared conflict resolutions:
   content-addressed by exact merge-stage blob OIDs (NOT git-rerere — see the
   module header for why that matters), stored as `refs/hitch/resolutions/*`.
@@ -168,7 +175,13 @@ covered.
   `scan_checkouts_on_branch` before the `update-ref`, `resync_checkouts`
   after — both in `prelude.rs`, both already wired into
   `publish_environment_build` and `hitch release`. See the gotcha below for
-  why the scan cannot be folded into the resync.
+  why the scan cannot be folded into the resync. Wrap the pair in a
+  `pending_resync::record` / `clear`, so a crash in between is recoverable.
+- **Compare checkout paths with `GitOperations::same_checkout_path`, never
+  `==`.** `git worktree list` reports fully resolved paths; on macOS the temp
+  dir and plenty of real project paths sit behind symlinks, so a string
+  comparison silently never matches and whatever it gated is quietly skipped.
+  This has already caused one bug in `pending_resync`'s recovery.
 
 ## Concrete gotchas, found the hard way
 

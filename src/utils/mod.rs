@@ -12,6 +12,7 @@ pub mod hooks;
 pub mod log_macros;
 pub mod logging;
 pub mod output;
+pub mod pending_resync;
 pub mod pr_status;
 pub mod prelude;
 pub mod progress;

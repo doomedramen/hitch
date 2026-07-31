@@ -1667,6 +1667,75 @@ impl GitOperations {
             .collect())
     }
 
+    /// Whether two paths name the same checkout.
+    ///
+    /// Always compare checkout paths with this, never with `==`: `git worktree
+    /// list` reports fully resolved paths, so on macOS (where the temp dir and
+    /// plenty of real project paths sit behind symlinks) a string comparison
+    /// against a path the user or a stored record supplied silently never
+    /// matches, and whatever the comparison was gating is quietly skipped.
+    pub fn same_checkout_path(a: &str, b: &str) -> bool {
+        if a == b {
+            return true;
+        }
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    /// Full names of every ref under `prefix` (e.g. `refs/hitch/pending-resync`).
+    pub fn list_refs_under(&self, prefix: &str) -> Result<Vec<String>> {
+        let output = self.run_git_command(&["for-each-ref", "--format=%(refname)", prefix])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to list refs under '{}': {}",
+                prefix,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
+    /// Raw bytes of the blob `reference` points at.
+    pub fn cat_file_blob(&self, reference: &str) -> Result<Vec<u8>> {
+        let output = self.run_git_command(&["cat-file", "blob", reference])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to read blob '{}': {}",
+                reference,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    /// Whether this checkout's working tree and index hold *exactly* `commit`'s
+    /// content — nothing staged, nothing modified, no untracked files.
+    ///
+    /// This is the safety proof crash recovery relies on: a tree that matches
+    /// the pre-publish tip exactly is stale, not edited, so advancing it to the
+    /// new tip cannot destroy anyone's work. Note this deliberately compares
+    /// against a given commit rather than HEAD — after an interrupted publish
+    /// HEAD already resolves to the *new* tip, which is what makes the checkout
+    /// look dirty in the first place.
+    pub fn matches_commit_exactly(&self, commit: &str) -> Result<bool> {
+        let tracked = self.run_git_command(&["diff", "--quiet", commit])?;
+        if !tracked.status.success() {
+            return Ok(false);
+        }
+        let staged = self.run_git_command(&["diff", "--quiet", "--cached", commit])?;
+        if !staged.status.success() {
+            return Ok(false);
+        }
+        let untracked = self.run_git_command(&["ls-files", "--others", "--exclude-standard"])?;
+        Ok(untracked.status.success() && untracked.stdout.is_empty())
+    }
+
     /// Point `refs/remotes/origin/<branch>` at `oid`.
     ///
     /// Called after hitch pushes a branch itself. Git only updates a

@@ -947,17 +947,16 @@ pub(crate) fn scan_checkouts_on_branch(
     Ok(states)
 }
 
+/// The paths of a scan, for handing to a durable pending-resync record.
+pub(crate) fn checkout_paths(scanned: &[CheckoutState]) -> Vec<String> {
+    scanned.iter().map(|c| c.path.clone()).collect()
+}
+
 /// Open a `GitOperations` for `path`, reusing the context's own instance when
 /// that path *is* the main checkout. `git worktree list` reports fully
 /// resolved paths, so compare canonically rather than by string.
 fn checkout_git(context: &GlobalContext, path: &str) -> Option<GitOperations> {
-    let same_as_main = std::fs::canonicalize(path)
-        .ok()
-        .zip(std::fs::canonicalize(context.git().workdir()).ok())
-        .map(|(a, b)| a == b)
-        .unwrap_or(false);
-
-    if same_as_main {
+    if GitOperations::same_checkout_path(path, context.git().workdir()) {
         // Cheap to reopen and keeps the return type uniform; the main checkout
         // is a normal repository path like any other.
         GitOperations::new_at_path(context.git().workdir()).ok()
@@ -1047,6 +1046,19 @@ pub(crate) fn publish_environment_build(
     // Must happen before the ref moves — see `scan_checkouts_on_branch`.
     let checkouts = scan_checkouts_on_branch(context, env_name)?;
 
+    // Write the resync down before anything observable changes, so a crash
+    // between the CAS and the resync is recoverable rather than a permanent
+    // silent desync — see `crate::utils::pending_resync`.
+    crate::utils::pending_resync::record(
+        context,
+        &crate::utils::pending_resync::PendingResync {
+            branch: env_name.to_string(),
+            from_sha: old_env_sha.clone(),
+            to_sha: new_sha.to_string(),
+            checkouts: checkout_paths(&checkouts),
+        },
+    )?;
+
     if let Some(ref old_sha) = old_env_sha {
         let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp);
         context.git().update_ref(&backup_ref, old_sha)?;
@@ -1078,6 +1090,7 @@ pub(crate) fn publish_environment_build(
     // before pushing so the local repository is coherent even if the push
     // fails or the user declines it.
     resync_checkouts(context, env_name, new_sha, &checkouts);
+    crate::utils::pending_resync::clear(context, env_name);
 
     if context.should_push() {
         context.log_warning(&format!(

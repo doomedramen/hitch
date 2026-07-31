@@ -326,6 +326,18 @@ fn perform_release_core(
     context.log_info(&format!("✓ Created release tag '{}'", tag_name));
 
     // Publish the target branch atomically with CAS.
+    // Durable intent, so a crash between the CAS and the resync below is
+    // recoverable — see `crate::utils::pending_resync`.
+    crate::utils::pending_resync::record(
+        context,
+        &crate::utils::pending_resync::PendingResync {
+            branch: target_branch.to_string(),
+            from_sha: Some(target_sha.clone()),
+            to_sha: new_sha.clone(),
+            checkouts: crate::utils::prelude::checkout_paths(&target_checkouts),
+        },
+    )?;
+
     let env_ref = format!("refs/heads/{}", target_branch);
     if let Err(e) = context.git().update_ref_cas(
         &env_ref,
@@ -346,6 +358,7 @@ fn perform_release_core(
     context.log_verbose(&format!("✓ Published '{}' ({})", target_branch, new_sha));
 
     crate::utils::prelude::resync_checkouts(context, target_branch, &new_sha, &target_checkouts);
+    crate::utils::pending_resync::clear(context, target_branch);
 
     // Push if enabled. A push failure must NOT abort the release — the merge
     // and tag are already committed locally. Warn and tell the user how to
