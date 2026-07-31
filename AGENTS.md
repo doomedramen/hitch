@@ -158,15 +158,19 @@ covered.
   for three separate concerns (cross-process serialization, rebuild-specific
   serialization, human-facing "don't touch this env" signal). Know which
   one(s) a new mutating operation actually needs.
-- **The user's working tree is sacred**: nothing composes in the user's own
-  checkout — no `checkout`/build/`checkout back` in the real repo, ever. This
-  started as the phase-1 disposable-worktree redesign (see the plan doc) and
-  has since gone further: `hitch rebuild` and `hitch release` compose with
-  pure plumbing (`merge_tree_compose` + `commit_tree`) and create no worktree
-  at all. `hitch resolve` is the *only* remaining worktree user, because
-  hand-resolving conflicts genuinely needs files on disk. New build/merge
-  logic should use the plumbing path; reach for `add_worktree` only if a human
-  has to edit the result.
+- **The user's working tree is sacred**: nothing builds in the user's own
+  checkout — no `checkout`/build/`checkout back` in the real repo, ever, and
+  no command should ever be able to strand them on a branch they didn't ask
+  for. This started as the phase-1 disposable-worktree redesign (see the plan
+  doc) and has since gone further: `hitch rebuild` and `hitch release` compose
+  with pure plumbing (`merge_tree_compose` + `commit_tree`) and create no
+  worktree at all. `hitch resolve` is the only remaining worktree user,
+  because a human editing conflicts needs files on disk — but it works in a
+  *detached* worktree (`add_worktree_detached`) and lands the result with a
+  CAS `update-ref` plus the standard checkout resync, so it works even when
+  the branch it is rebasing is the one the user is standing on. New
+  build/merge logic should use the plumbing path; reach for a worktree only
+  when a human has to edit the result, and detach it.
 - **Publishing an environment branch is always a CAS `update-ref`**
   (`publish_environment_build` in `prelude.rs`), never a rename-and-recreate
   dance. Reuse that function for anything that produces a new environment

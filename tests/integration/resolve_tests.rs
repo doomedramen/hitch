@@ -5,11 +5,12 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
 
-    /// Mode A: a branch conflicting with base gets a guided rebase kicked
-    /// off (checkout + `git rebase`), which git itself pauses on conflict —
-    /// hitch hands off to plain Git rather than inventing its own flow.
+    /// Mode A: a branch conflicting with base gets a guided rebase — run in a
+    /// disposable detached worktree, never the user's own checkout. Git pauses
+    /// it on conflict there; the user resolves with plain Git and hitch lands
+    /// the result.
     #[test]
-    fn test_resolve_mode_a_starts_guided_rebase() -> anyhow::Result<()> {
+    fn test_resolve_mode_a_rebases_without_touching_the_users_checkout() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -40,35 +41,93 @@ mod tests {
                 .execute()?
                 .assert_success();
 
+            // The user has unrelated work in progress. It must survive.
+            env.fs.write_file("scratch.txt", "my work")?;
+
             let result = env.hitch.run().args(&["resolve", "dev"]).execute()?;
             result
                 .assert_success()
                 .assert_stdout_contains("durable fix is rebasing")
-                .assert_stdout_contains("git rebase --continue");
+                .assert_stdout_contains("Rebase paused with conflicts");
 
-            // hitch checked out branch-a and started a real rebase, which
-            // git itself paused on the conflict.
+            // The user's checkout is exactly where they left it: same branch,
+            // no rebase in progress, uncommitted work intact.
             assert_eq!(
                 env.git.run(&["branch", "--show-current"])?.stdout().trim(),
-                ""
+                "main",
+                "resolve moved the user off their own branch"
             );
-            assert!(env.temp_dir.join(".git/rebase-merge").exists());
+            assert!(
+                !env.temp_dir.join(".git/rebase-merge").exists()
+                    && !env.temp_dir.join(".git/rebase-apply").exists(),
+                "resolve left a rebase in progress in the user's own checkout"
+            );
+            assert_eq!(env.fs.read_file("scratch.txt")?, "my work");
+            assert_eq!(
+                env.fs.read_file("shared.txt")?,
+                "from-main-later\n",
+                "resolve modified the user's working tree"
+            );
 
-            // Resolve it with plain git, exactly as hitch told us to.
-            env.fs.write_file("shared.txt", "resolved\n")?;
-            env.git.run(&["add", "shared.txt"])?.assert_success();
+            // The rebase is paused in a worktree of its own.
+            let session_path = env
+                .hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "branch-a", "--path"])
+                .execute()?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+            let session = std::path::PathBuf::from(&session_path);
+            assert!(session.exists(), "no resolve worktree at {}", session_path);
+
+            let session_git = GitCommandRunner::new(&session)?;
+            assert!(
+                session.join(".git").exists(),
+                "resolve worktree is not a git checkout"
+            );
+
+            // Resolve it there with plain git, exactly as hitch instructed.
+            std::fs::write(session.join("shared.txt"), "resolved\n")?;
+            session_git.run(&["add", "shared.txt"])?.assert_success();
             // -c core.editor=true is belt-and-suspenders: a single-commit
-            // --continue already reuses the original message without
-            // opening an editor, but this guarantees it can't block on one
-            // regardless of platform/config.
-            env.git
+            // --continue already reuses the original message without opening
+            // an editor, but this guarantees it can't block on one.
+            session_git
                 .run(&["-c", "core.editor=true", "rebase", "--continue"])?
                 .assert_success();
-            env.git.run(&["checkout", "main"])?.assert_success();
 
-            // No resolve worktree was ever created for Mode A.
+            // hitch lands it.
+            env.hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "branch-a", "--continue"])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("rebased onto");
+
+            assert!(
+                !session.exists(),
+                "resolve worktree survived a successful --continue"
+            );
             let worktrees = env.git.run(&["worktree", "list"])?;
-            assert_eq!(worktrees.stdout().lines().count(), 1);
+            assert_eq!(
+                worktrees.stdout().lines().count(),
+                1,
+                "resolve left a worktree registered: {}",
+                worktrees.stdout()
+            );
+
+            assert_eq!(
+                env.git
+                    .run(&["show", "branch-a:shared.txt"])?
+                    .stdout()
+                    .trim(),
+                "resolved",
+                "the rebased result was not landed on the branch"
+            );
+            assert_eq!(env.fs.read_file("scratch.txt")?, "my work");
+            env.fs.remove("scratch.txt")?; // rebuild rightly requires a clean tree
 
             // Now a plain rebuild picks up the durable fix.
             env.hitch
@@ -80,6 +139,108 @@ mod tests {
                 env.git.run(&["show", "dev:shared.txt"])?.stdout().trim(),
                 "resolved"
             );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The branch being rebased may be the one the user is standing on. That
+    /// used to be impossible to handle (git refuses to check out a branch
+    /// twice); working detached means it just resyncs like any other publish.
+    #[test]
+    fn test_resolve_mode_a_resyncs_a_checkout_standing_on_the_rebased_branch() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.fs.write_file("shared.txt", "v1\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "base v1"])?;
+
+            env.git.run(&["checkout", "-b", "branch-a"])?;
+            env.fs.write_file("shared.txt", "from-branch-a\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "branch-a"])?;
+
+            env.git.run(&["checkout", "main"])?;
+            env.fs.write_file("shared.txt", "from-main-later\n")?;
+            env.fs.write_file("only-on-main.txt", "later")?;
+            env.git.run(&["add", "-f", "."])?;
+            env.git.run(&["commit", "-m", "main moves on"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev", "--no-rebuild"])
+                .execute()?
+                .assert_success();
+
+            // The user is standing on the very branch about to be rebased.
+            env.git.run(&["checkout", "branch-a"])?.assert_success();
+            assert!(!env.fs.file_exists("only-on-main.txt"));
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "branch-a"])
+                .execute()?
+                .assert_success();
+
+            // Still on their branch, nothing rebasing under them.
+            assert_eq!(
+                env.git.run(&["branch", "--show-current"])?.stdout().trim(),
+                "branch-a",
+                "resolve moved the user off their branch"
+            );
+            assert!(
+                !env.temp_dir.join(".git/rebase-merge").exists()
+                    && !env.temp_dir.join(".git/rebase-apply").exists(),
+                "resolve started a rebase in the user's own checkout"
+            );
+
+            let session_path = env
+                .hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "branch-a", "--path"])
+                .execute()?
+                .assert_success()
+                .stdout()
+                .trim()
+                .to_string();
+            let session = std::path::PathBuf::from(&session_path);
+            let session_git = GitCommandRunner::new(&session)?;
+
+            std::fs::write(session.join("shared.txt"), "resolved\n")?;
+            session_git.run(&["add", "shared.txt"])?.assert_success();
+            session_git
+                .run(&["-c", "core.editor=true", "rebase", "--continue"])?
+                .assert_success();
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "branch-a", "--continue"])
+                .execute()?
+                .assert_success();
+
+            // The branch moved under a checkout standing on it — which must
+            // therefore have been brought along.
+            let status = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                status.stdout().trim().is_empty(),
+                "the rebased branch left its own checkout desynchronized: '{}'",
+                status.stdout().trim()
+            );
+            assert!(
+                env.fs.file_exists("only-on-main.txt"),
+                "the checkout was not brought up to the rebased tip"
+            );
+            assert_eq!(env.fs.read_file("shared.txt")?, "resolved\n");
 
             Ok::<(), anyhow::Error>(())
         });

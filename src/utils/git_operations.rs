@@ -1263,6 +1263,48 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Add a linked worktree at `path` with a *detached* HEAD at
+    /// `source_commit`, creating no branch.
+    ///
+    /// Detached is what lets hitch rebase or compose a branch that a human
+    /// already has checked out somewhere: `git worktree add` refuses to attach
+    /// a branch that is checked out elsewhere, and attaching it would move
+    /// their ref anyway. Working detached and landing the result with a CAS
+    /// `update-ref` (plus the usual checkout resync) keeps the user's checkout
+    /// entirely out of it.
+    pub fn add_worktree_detached(&self, path: &str, source_commit: &str) -> Result<()> {
+        let output = self.run_git_command(&["worktree", "add", "--detach", path, source_commit])?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create detached worktree at '{}' from '{}': {}",
+                path,
+                source_commit,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Whether this checkout has a rebase paused part-way through.
+    pub fn rebase_in_progress(&self) -> bool {
+        let git_dir = self.repo.path();
+        git_dir.join("rebase-apply").exists() || git_dir.join("rebase-merge").exists()
+    }
+
+    /// Abandon a paused rebase in this checkout.
+    pub fn rebase_abort(&self) -> Result<()> {
+        let output = self.run_git_command(&["rebase", "--abort"])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to abort rebase: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
     /// Remove a linked worktree previously created with `add_worktree`.
     ///
     /// `force` discards any uncommitted changes left inside it. If the

@@ -143,7 +143,14 @@ pub fn run(args: ResolveCommand, context: &GlobalContext) -> Result<()> {
         })?;
 
     if conflict.conflicts_with == environment.base {
-        resolve_mode_a(context, &args.env_name, &branch, &environment.base)
+        resolve_mode_a(
+            context,
+            &args.env_name,
+            &branch,
+            &environment.base,
+            &worktree_path,
+            args.tool,
+        )
     } else {
         start_mode_b_session(
             context,
@@ -229,40 +236,204 @@ fn sanitize_for_path(s: &str) -> String {
         .collect()
 }
 
+// ── Session marker ─────────────────────────────────────────────────
+
+/// What kind of resolve session a worktree holds, stashed in its private git
+/// directory so `--continue` and `--abort` don't have to infer it from the
+/// worktree's shape. Mode B sessions predate this and are recognised by its
+/// absence, so an in-flight session from an older binary still continues.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RebaseSession {
+    branch: String,
+    base: String,
+    /// The branch tip the rebase started from — the CAS old-value when the
+    /// result is finally landed.
+    from_sha: String,
+}
+
+fn rebase_session_path(worktree_git: &GitOperations) -> std::path::PathBuf {
+    std::path::PathBuf::from(worktree_git.get_git_dir()).join("hitch-resolve-rebase.json")
+}
+
+fn read_rebase_session(worktree_git: &GitOperations) -> Option<RebaseSession> {
+    let bytes = std::fs::read(rebase_session_path(worktree_git)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 // ── Mode A: guided rebase onto base ────────────────────────────────
 
-fn resolve_mode_a(context: &GlobalContext, env_name: &str, branch: &str, base: &str) -> Result<()> {
+/// Rebase the feature branch onto the environment's base — in a disposable
+/// detached worktree, never the user's own checkout.
+///
+/// This used to `git checkout` the branch in the real repository, rebase it
+/// there, and check the user back out afterwards. That put the user's working
+/// tree in the middle of the operation: any failure between the two checkouts
+/// stranded them on someone else's branch, and a conflicted rebase left them
+/// parked mid-rebase on a branch they never asked to be on. Working detached
+/// and landing the result with a CAS `update-ref` (plus the checkout resync
+/// every other publish path uses) means the user's checkout is untouched
+/// whatever happens — including when it is the branch being rebased.
+fn resolve_mode_a(
+    context: &GlobalContext,
+    env_name: &str,
+    branch: &str,
+    base: &str,
+    worktree_path: &std::path::Path,
+    tool: bool,
+) -> Result<()> {
     context.log_info(&format!(
         "'{}' conflicts with base '{}' in '{}' — the durable fix is rebasing it.",
         branch, base, env_name
     ));
 
-    let original_branch = context.git().get_current_branch()?;
-    let prior_remote_sha = context
+    context
         .git()
-        .rev_parse_opt(&format!("refs/remotes/origin/{}", branch))?;
+        .synchronize_branches(&[base.to_string(), branch.to_string()])?;
 
-    if original_branch != branch {
-        context.git().checkout_branch(branch)?;
-    }
+    let from_sha = context.git().get_branch_commit_sha(branch)?;
+    let base_sha = context.git().get_branch_commit_sha(base)?;
+    let worktree_path_str = worktree_path.to_string_lossy().to_string();
+
+    context
+        .git()
+        .add_worktree_detached(&worktree_path_str, &from_sha)?;
+
+    let cleanup = || {
+        let _ = context.git().remove_worktree(&worktree_path_str, true);
+    };
+
+    let worktree_git = match GitOperations::new_at_path(&worktree_path_str) {
+        Ok(g) => g,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
 
     context.log_info(&format!("Rebasing '{}' onto '{}'...", branch, base));
-    let clean = context.git().rebase_onto(base)?;
+    let clean = match worktree_git.rebase_onto(&base_sha) {
+        Ok(clean) => clean,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
 
     if !clean {
+        let session = RebaseSession {
+            branch: branch.to_string(),
+            base: base.to_string(),
+            from_sha,
+        };
+        if let Err(e) = std::fs::write(
+            rebase_session_path(&worktree_git),
+            serde_json::to_vec_pretty(&session)?,
+        ) {
+            cleanup();
+            return Err(anyhow::anyhow!(
+                "Could not record the resolve session state: {}",
+                e
+            ));
+        }
+
+        if tool {
+            run_mergetool(&worktree_path_str);
+        }
+
         context.log_warning(&format!(
-            "Rebase paused with conflicts. Resolve them with plain Git, then:\n\n\
+            "Rebase paused with conflicts in {}\n\n\
+             Resolve them there with plain Git (or --tool for git mergetool):\n\n\
+               cd {}\n\
                git add <files>\n\
                git rebase --continue\n\n\
-             Or give up: git rebase --abort\n\n\
-             Once the rebase finishes cleanly, push it and run 'hitch rebuild {}' — this \
-             replaces the recurring fix instead of caching around it.",
-            env_name
+             Then land it:\n\n\
+               hitch resolve {} --branch {} --continue\n\n\
+             Or give up: hitch resolve {} --branch {} --abort\n\n\
+             Your own checkout has not been touched.",
+            worktree_path.display(),
+            worktree_path.display(),
+            env_name,
+            branch,
+            env_name,
+            branch
         ));
         return Ok(());
     }
 
-    context.log_success(&format!("✓ '{}' rebased cleanly onto '{}'", branch, base));
+    let new_sha = match worktree_git.rev_parse("HEAD") {
+        Ok(sha) => sha,
+        Err(e) => {
+            cleanup();
+            return Err(e);
+        }
+    };
+
+    let result = finish_mode_a(context, env_name, branch, base, &from_sha, &new_sha);
+    cleanup();
+    result
+}
+
+/// Land a completed rebase: move `refs/heads/<branch>` to the rebased tip with
+/// a compare-and-swap, bring any checkout standing on it back in line, and
+/// offer the force push. Shared by the clean-first-try path and `--continue`.
+fn finish_mode_a(
+    context: &GlobalContext,
+    env_name: &str,
+    branch: &str,
+    base: &str,
+    from_sha: &str,
+    new_sha: &str,
+) -> Result<()> {
+    if new_sha == from_sha {
+        context.log_info(&format!(
+            "'{}' is already on top of '{}' — nothing to land.",
+            branch, base
+        ));
+        return Ok(());
+    }
+
+    let prior_remote_sha = context
+        .git()
+        .rev_parse_opt(&format!("refs/remotes/origin/{}", branch))?;
+
+    // Same publish discipline as every other branch move: record the resync
+    // first so an interruption is recoverable, CAS so a branch that moved
+    // under us is detected rather than clobbered, then resync the checkouts.
+    let checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, branch)?;
+    crate::utils::pending_resync::record(
+        context,
+        &crate::utils::pending_resync::PendingResync {
+            branch: branch.to_string(),
+            from_sha: Some(from_sha.to_string()),
+            to_sha: new_sha.to_string(),
+            checkouts: crate::utils::prelude::checkout_paths(&checkouts),
+        },
+    )?;
+
+    context
+        .git()
+        .update_ref_cas(
+            &format!("refs/heads/{}", branch),
+            new_sha,
+            Some(from_sha),
+            &format!("hitch: resolve — rebase {} onto {}", branch, base),
+        )
+        .map_err(|e| {
+            crate::utils::pending_resync::clear(context, branch);
+            anyhow::anyhow!(
+                "'{}' rebased cleanly, but could not be updated: {}. It moved while the rebase \
+                 was running — fetch and rerun 'hitch resolve {} --branch {}'.",
+                branch,
+                e,
+                env_name,
+                branch
+            )
+        })?;
+
+    crate::utils::prelude::resync_checkouts(context, branch, new_sha, &checkouts);
+    crate::utils::pending_resync::clear(context, branch);
+
+    context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
 
     if context.should_push() {
         context.log_warning(&format!(
@@ -287,12 +458,6 @@ fn resolve_mode_a(context: &GlobalContext, env_name: &str, branch: &str, base: &
                 branch
             ));
         }
-    }
-
-    // Return the user to wherever they started, unless they asked to work
-    // on the feature branch directly (already there).
-    if original_branch != branch && context.git().branch_exists(&original_branch)? {
-        context.git().checkout_branch(&original_branch)?;
     }
 
     context.log_info(&format!(
@@ -467,6 +632,12 @@ fn continue_session(
     let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
     let temp_branch = format!("hitch-resolve-{}", sanitize_for_path(branch));
 
+    // A Mode A session is a paused rebase, not a paused merge — it lands the
+    // rebased branch rather than composing and publishing the environment.
+    if let Some(session) = read_rebase_session(&worktree_git) {
+        return continue_rebase_session(context, env_name, worktree_path, &worktree_git, &session);
+    }
+
     if worktree_git.has_merge_conflicts().unwrap_or(false) {
         return Err(anyhow::anyhow!(
             "'{}' still has unresolved files. Resolve them and 'git add' each, then rerun \
@@ -580,6 +751,63 @@ fn continue_session(
     Ok(())
 }
 
+/// Land a Mode A session whose rebase the user has finished by hand.
+///
+/// The rebase itself belongs to plain Git — hitch only checks that it actually
+/// finished and then publishes the result the same way the clean path does.
+fn continue_rebase_session(
+    context: &GlobalContext,
+    env_name: &str,
+    worktree_path: &std::path::Path,
+    worktree_git: &GitOperations,
+    session: &RebaseSession,
+) -> Result<()> {
+    if worktree_git.rebase_in_progress() {
+        return Err(anyhow::anyhow!(
+            "The rebase of '{}' is still in progress. Finish it first:\n\n\
+               cd {}\n\
+               git add <files>\n\
+               git rebase --continue\n\n\
+             Then rerun 'hitch resolve {} --branch {} --continue'.",
+            session.branch,
+            worktree_path.display(),
+            env_name,
+            session.branch
+        ));
+    }
+
+    if has_leftover_markers(worktree_git) {
+        return Err(anyhow::anyhow!(
+            "'{}' has files with leftover conflict markers (<<<<<<< / >>>>>>>). Remove them, \
+             finish the rebase, then rerun 'hitch resolve {} --branch {} --continue'.\n\
+             Worktree: {}",
+            session.branch,
+            env_name,
+            session.branch,
+            worktree_path.display()
+        ));
+    }
+
+    let new_sha = worktree_git.rev_parse("HEAD")?;
+    let result = finish_mode_a(
+        context,
+        env_name,
+        &session.branch,
+        &session.base,
+        &session.from_sha,
+        &new_sha,
+    );
+
+    // Only tear the session down once the result has actually landed —
+    // otherwise a failed publish would discard the user's hand-resolved work.
+    if result.is_ok() {
+        let _ = context
+            .git()
+            .remove_worktree(&worktree_path.to_string_lossy(), true);
+    }
+    result
+}
+
 /// Record the just-resolved conflict as a content-addressed resolution ref,
 /// reading the captured stages from the worktree's stashed pending state and
 /// the resolved content from its working tree. Returns whether a resolution
@@ -666,6 +894,14 @@ fn abort_session(
 
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
     let temp_branch = format!("hitch-resolve-{}", sanitize_for_path(branch));
+
+    // A paused rebase holds its own state; abort it before the worktree goes
+    // so git doesn't leave rebase metadata behind in the shared git dir.
+    if let Ok(worktree_git) = GitOperations::new_at_path(&worktree_path_str) {
+        if worktree_git.rebase_in_progress() {
+            let _ = worktree_git.rebase_abort();
+        }
+    }
 
     let _ = context.git().remove_worktree(&worktree_path_str, true);
     if context.git().branch_exists(&temp_branch).unwrap_or(false) {
