@@ -39,8 +39,8 @@ out of scope unless a task explicitly touches it.
 
 Read `README.md` for the user-facing model and `SKILL.md` for the condensed
 agent-facing command reference. `docs/merge-conflict-handling-plan.md` is the
-active design doc for the conflict-handling system (worktree-isolated
-rebuilds, eject-and-continue policy, `hitch resolve`) — check its
+active design doc for the conflict-handling system (isolated rebuilds,
+eject-and-continue policy, `hitch resolve`) — check its
 "Implementation status" section before assuming a phase is done or before
 starting related work.
 
@@ -90,7 +90,7 @@ covered.
   functions. Large file; read the doc comment on the specific function you
   need rather than the whole file.
 - `src/utils/git_operations.rs` — the *only* place that shells out to `git`.
-  Every git primitive is a named method (`squash_merge`, `add_worktree`,
+  Every git primitive is a named method (`merge_tree_compose`, `commit_tree`,
   `update_ref_cas`, ...), all via `run_git_command` (which forces
   `LC_ALL=C`/`LANG=C` since several call sites match English stderr
   substrings, and `stdin(Stdio::null())` since `Command::output()` otherwise
@@ -151,14 +151,15 @@ covered.
   for three separate concerns (cross-process serialization, rebuild-specific
   serialization, human-facing "don't touch this env" signal). Know which
   one(s) a new mutating operation actually needs.
-- **The user's working tree is sacred**: `hitch rebuild`, `hitch release`,
-  and `hitch resolve` compose in disposable `git worktree`s, never in the
-  user's own checkout — this was a deliberate phase-1 redesign (see the plan
-  doc) specifically to eliminate a whole class of "left the user on the wrong
-  branch" or "left a dirty tree" bugs. Any new command that needs to
-  build/merge things should follow the same pattern
-  (`GitOperations::new_at_path` on a worktree), not
-  `checkout`/build/`checkout back` in the real repo.
+- **The user's working tree is sacred**: nothing composes in the user's own
+  checkout — no `checkout`/build/`checkout back` in the real repo, ever. This
+  started as the phase-1 disposable-worktree redesign (see the plan doc) and
+  has since gone further: `hitch rebuild` and `hitch release` compose with
+  pure plumbing (`merge_tree_compose` + `commit_tree`) and create no worktree
+  at all. `hitch resolve` is the *only* remaining worktree user, because
+  hand-resolving conflicts genuinely needs files on disk. New build/merge
+  logic should use the plumbing path; reach for `add_worktree` only if a human
+  has to edit the result.
 - **Publishing an environment branch is always a CAS `update-ref`**
   (`publish_environment_build` in `prelude.rs`), never a rename-and-recreate
   dance. Reuse that function for anything that produces a new environment
@@ -183,6 +184,30 @@ it only surfaced when a base-moved-after-branch-diverged scenario was
 manually tested end-to-end. If you touch any `merge-tree` invocation, be
 suspicious of this exact mistake and test the base-moved-independently case
 specifically, not just the peers-diverged-from-an-unmoved-base case.
+
+The composition path (`merge_tree_compose`) sidesteps this entirely by *not*
+passing `--merge-base` — git computes it, including the virtual base for
+criss-cross histories, exactly as a real merge does. Don't "helpfully" add an
+explicit `--merge-base` there. The gotcha applies to the preflight callers
+(`merge_tree_write_tree_name_only`) that do pass one.
+
+**Composition happens in the object database, and must stay merge-identical.**
+`rebuild`/`release` build with `git merge-tree --write-tree -z` plus
+`commit-tree`: no worktree, no index, no checkout. One parent gives squash
+semantics, two gives the ancestry-preserving merge commit `--no-ff` release
+mode needs. Ejecting a conflicting branch is just "don't advance `composed`" —
+there is no merge state to abort. Two things to keep in mind:
+
+- The load-bearing assumption is that ORT-via-merge-tree agrees with
+  ORT-via-worktree. `test_merge_tree_compose_matches_real_merge_across_scenarios`
+  is a *differential* test that runs both and compares — tree OIDs for clean
+  merges, exact per-path stage OIDs for conflicts (which is what recorded
+  resolutions are keyed on). Extend it, don't replace it, when you touch the
+  merge path; rename-vs-modify and delete-vs-modify are where a shortcut shows.
+- A `commit-tree` commit is unreachable until the publish CAS lands. Both
+  callers anchor it under `refs/hitch/build/*` / `refs/hitch/release/*` for
+  that window so a concurrent `git gc --prune=now` cannot collect it, and drop
+  the anchor only after publish is attempted. Keep that ordering.
 
 **Git subprocesses inheriting a real terminal's stdin.** `Command::output()`
 captures stdout/stderr but leaves stdin at Rust's default, which is
@@ -247,7 +272,7 @@ so git does not update `refs/remotes/origin/<branch>` for them;
 reports a just-pushed branch as ahead of origin until the next fetch. Tests
 creating linked worktrees must place them **beside** the repo, not inside it,
 or they show up as untracked content in the repo's own `git status` (the same
-reason `worktree_path_for` picks a sibling directory).
+reason `hitch resolve` puts its own worktree in a sibling directory).
 
 **GitHub deploy key must bypass `hitch-protection` ruleset on push.** `hitch
 setup` creates a GitHub repository ruleset that blocks all direct pushes

@@ -697,134 +697,125 @@ pub fn rebuild_environment_opts(
         .rev_parse_opt(&format!("refs/remotes/origin/{}", env_name))?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let temp_branch = format!("hitch-tmp-{}-{}", environment.base, timestamp);
-    let worktree_path = worktree_path_for(context, env_name, &timestamp)?;
-    let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    context
-        .git()
-        .add_worktree(&worktree_path_str, &temp_branch, &base_sha)?;
-
-    let cleanup_worktree = || {
-        let _ = context.git().remove_worktree(&worktree_path_str, true);
-        if context.git().branch_exists(&temp_branch).unwrap_or(false) {
-            let _ = context.git().delete_branch(&temp_branch, true);
-        }
-    };
-
-    // Step 2..N: compose the promoted branches, in order, in the worktree. A
+    // Step 2..N: compose the promoted branches, in order, entirely in the
+    // object database — `git merge-tree --write-tree` runs the same ORT merge
+    // a real `git merge` does but writes only trees, so there is no worktree
+    // to create, leak on a crash, or collide with the user's checkouts. A
     // branch that conflicts is either ejected — skipped, recorded as held,
     // with later branches checked against what actually accumulated without
     // it, so nine healthy branches are never blocked by one broken one — or
     // the whole rebuild halts, per the environment's `on_conflict` policy.
+    // Ejecting is now simply "don't advance `composed`": there is no merge
+    // state anywhere that would need aborting.
     let mut held: Vec<CompatibilityConflict> = Vec::new();
     let mut replayed: Vec<String> = Vec::new();
     let mut confirmed_replay_keys: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     let build_result = (|| -> Result<String> {
-        let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
+        let git = context.git();
+        let mut composed = base_sha.clone();
         let mut last_composed = environment.base.clone();
 
         for (branch, sha) in &pinned_branches {
             logger.step(format!("Merging '{}'", branch));
 
             let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
-            match worktree_git.squash_merge(sha, &merge_message) {
-                Ok(()) => {
-                    context.log_verbose(&format!("✓ Squash merged '{}' into worktree", branch));
-                    last_composed = branch.clone();
+            let outcome = git.merge_tree_compose(&composed, sha)?;
+
+            if outcome.conflicted_stages.is_empty() {
+                // A merge that changes nothing produces no commit, matching
+                // what `git merge --squash` + `git commit` did when there was
+                // nothing staged (a branch already contained in the base).
+                let composed_tree = git.rev_parse(&format!("{}^{{tree}}", composed))?;
+                if outcome.tree_oid != composed_tree {
+                    composed = git.commit_tree(&outcome.tree_oid, &[&composed], &merge_message)?;
                 }
-                Err(e) => {
-                    // Distinguish a genuine merge conflict (report it clearly) from
-                    // any other failure (propagate as-is).
-                    if worktree_git.has_merge_conflicts().unwrap_or(false) {
-                        // Try a recorded resolution first (phase 5, opt-in).
-                        // An exact content-addressed match means byte-identical
-                        // conflict inputs, so replaying it reproduces the same
-                        // fix a human already made — turning the hold back into
-                        // a clean compose. On any miss, decline, or error, fall
-                        // through to the normal halt/eject path unchanged.
-                        if replay
-                            && try_replay_resolution(
-                                context,
-                                &worktree_git,
-                                &worktree_path_str,
-                                branch,
-                                &merge_message,
-                                &mut confirmed_replay_keys,
-                            )?
-                        {
-                            replayed.push(branch.clone());
-                            last_composed = branch.clone();
-                            continue;
-                        }
+                context.log_verbose(&format!("✓ Composed '{}' into '{}'", branch, env_name));
+                last_composed = branch.clone();
+                continue;
+            }
 
-                        let conflict_result = worktree_git.current_conflict_result(branch)?;
-
-                        if environment.on_conflict == OnConflict::Halt {
-                            let conflict_report = format_conflict_report(
-                                branch,
-                                &conflict_result.target_branch,
-                                &environment.base,
-                                env_name,
-                                &conflict_result.conflicted_files,
-                                conflict_result.merge_base.as_ref(),
-                            );
-                            let _ = worktree_git.abort_merge_and_clean();
-                            return Err(anyhow::anyhow!("{}", conflict_report));
-                        }
-
-                        // Eject: undo the failed attempt (leaving the worktree
-                        // exactly where the last successful merge left it),
-                        // record the hold, and keep going without this branch.
-                        let conflicted_paths: Vec<String> = conflict_result
-                            .conflicted_files
-                            .iter()
-                            .map(|f| f.path.clone())
-                            .collect();
-                        let _ = worktree_git.abort_merge_and_clean();
-                        context.log_warning(&format!(
-                            "⛔ Held '{}' — conflicts with '{}' ({} file{})",
-                            branch,
-                            last_composed,
-                            conflicted_paths.len(),
-                            if conflicted_paths.len() == 1 { "" } else { "s" }
-                        ));
-                        held.push(CompatibilityConflict {
-                            branch: branch.clone(),
-                            conflicts_with: last_composed.clone(),
-                            conflicted_files: conflicted_paths,
-                        });
-                        continue;
-                    }
-
-                    return Err(e);
+            // Try a recorded resolution first (phase 5, opt-in). An exact
+            // content-addressed match means byte-identical conflict inputs, so
+            // replaying it reproduces the same fix a human already made —
+            // turning the hold back into a clean compose. On any miss,
+            // decline, or error, fall through to the normal halt/eject path.
+            if replay {
+                if let Some(resolved) = try_replay_resolution(
+                    context,
+                    &composed,
+                    branch,
+                    &merge_message,
+                    &outcome,
+                    &mut confirmed_replay_keys,
+                )? {
+                    composed = resolved;
+                    replayed.push(branch.clone());
+                    last_composed = branch.clone();
+                    continue;
                 }
             }
+
+            let conflict_result =
+                git.conflict_result_from_compose(branch, env_name, &composed, sha, &outcome)?;
+
+            if environment.on_conflict == OnConflict::Halt {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    format_conflict_report(
+                        branch,
+                        &conflict_result.target_branch,
+                        &environment.base,
+                        env_name,
+                        &conflict_result.conflicted_files,
+                        conflict_result.merge_base.as_ref(),
+                    )
+                ));
+            }
+
+            let conflicted_paths: Vec<String> = conflict_result
+                .conflicted_files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect();
+            context.log_warning(&format!(
+                "⛔ Held '{}' — conflicts with '{}' ({} file{})",
+                branch,
+                last_composed,
+                conflicted_paths.len(),
+                if conflicted_paths.len() == 1 { "" } else { "s" }
+            ));
+            held.push(CompatibilityConflict {
+                branch: branch.clone(),
+                conflicts_with: last_composed.clone(),
+                conflicted_files: conflicted_paths,
+            });
         }
 
         if environment.branches.is_empty() {
             logger.step("No promoted branches to merge".to_string());
         }
 
-        worktree_git.rev_parse("HEAD")
+        Ok(composed)
     })();
 
-    let new_sha = match build_result {
-        Ok(sha) => sha,
-        Err(e) => {
-            cleanup_worktree();
-            return Err(e);
-        }
+    let new_sha = build_result?;
+
+    // The composed commit is only reachable from this process until the
+    // publish CAS lands. Anchor it under a ref for that window so a
+    // concurrent `git gc --prune=now` cannot collect it out from under us.
+    let build_ref = format!("refs/hitch/build/{}/{}", env_name, timestamp);
+    context.git().update_ref(&build_ref, &new_sha)?;
+    let drop_build_ref = || {
+        let _ = context.git().delete_ref(&build_ref);
     };
 
     // Publish, push, and record the timestamp — shared with `hitch resolve`'s
-    // Mode B, which produces a build the exact same way but from a
-    // hand-resolved worktree instead of a straight-through one. The worktree
-    // (and its temp branch, which is what keeps `new_sha` reachable) is only
-    // torn down *after* publish is attempted, so the new commit stays
-    // reachable via some ref for the whole window until `refs/heads/<env>`
-    // itself takes over that job.
+    // Mode B, which produces a build the same way but from a hand-resolved
+    // worktree instead of a straight-through compose. The anchor ref is only
+    // dropped *after* publish is attempted, so the new commit stays reachable
+    // for the whole window until `refs/heads/<env>` takes over that job.
     logger.step(format!("Publishing '{}'", env_name));
     let publish_result = publish_environment_build(
         context,
@@ -833,7 +824,7 @@ pub fn rebuild_environment_opts(
         &timestamp,
         &remote_env_sha_before,
     );
-    cleanup_worktree();
+    drop_build_ref();
     publish_result?;
 
     logger.complete();
@@ -1146,41 +1137,18 @@ pub(crate) fn publish_environment_build(
     Ok(())
 }
 
-/// Choose a filesystem path for the disposable worktree a rebuild composes
-/// in — a sibling of the repository directory, never inside `.git` (backup
-/// tools that archive `.git` should not sweep up a full working copy) and
-/// never inside the repository itself (so it can't be picked up by the
-/// user's own `git add`).
-fn worktree_path_for(
-    context: &GlobalContext,
-    env_name: &str,
-    timestamp: &str,
-) -> Result<std::path::PathBuf> {
-    let repo_path = std::path::PathBuf::from(context.git().workdir());
-    let repo_name = repo_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repo".to_string());
-    let parent = repo_path.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Repository at '{}' has no parent directory to place a build worktree in",
-            repo_path.display()
-        )
-    })?;
-    Ok(parent.join(format!(
-        ".hitch-worktree-{}-{}-{}",
-        repo_name, env_name, timestamp
-    )))
-}
-
 /// Attempt to compose a conflicting branch from a recorded resolution rather
-/// than holding it (phase 5 replay). The worktree currently holds the failed
-/// squash-merge's conflict state; this reads the exact conflict stages, looks
-/// up a content-addressed resolution, and — if one exists and is authorized —
-/// writes the recorded resolved content over the conflicted files, stages it,
-/// and commits the squash. Returns `Ok(true)` when the branch was composed
-/// this way, `Ok(false)` on any miss/decline (caller then holds/halts as
-/// usual). A hard error is only returned for an unexpected git failure.
+/// than holding it (phase 5 replay). `outcome` holds the conflicted merge's
+/// exact stage OIDs; this looks up a content-addressed resolution and — if one
+/// exists and is authorized — splices the recorded resolved blobs into the
+/// merge result tree and commits it onto `composed`. Returns the new composed
+/// commit when the branch was composed this way, `None` on any miss/decline
+/// (caller then holds/halts as usual). A hard error is only returned for an
+/// unexpected git failure.
+///
+/// Nothing here touches a working tree or the real index: the splice goes
+/// through a scratch index (`splice_blobs_into_tree`), so a failed replay
+/// leaves no state to abort — the caller simply doesn't advance `composed`.
 ///
 /// Safety (see docs/merge-conflict-handling-plan.md phase 5 hardening):
 /// - The match is exact over `(path, base_oid, ours_oid, theirs_oid)`, so a
@@ -1193,21 +1161,20 @@ fn worktree_path_for(
 ///   every application is logged loudly with its key and recorder.
 fn try_replay_resolution(
     context: &GlobalContext,
-    worktree_git: &GitOperations,
-    worktree_path: &str,
+    composed: &str,
     branch: &str,
     merge_message: &str,
+    outcome: &crate::utils::git_operations::MergeTreeCompose,
     confirmed_keys: &mut std::collections::HashSet<String>,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     use crate::utils::resolutions;
 
-    let stages = match worktree_git.unmerged_stages() {
-        Ok(s) if !s.is_empty() => s,
-        _ => return Ok(false),
-    };
-    let key = resolutions::resolution_key(context.git(), &stages)?;
+    if outcome.conflicted_stages.is_empty() {
+        return Ok(None);
+    }
+    let key = resolutions::resolution_key(context.git(), &outcome.conflicted_stages)?;
     let Some(res) = resolutions::load_resolution(context.git(), &key)? else {
-        return Ok(false);
+        return Ok(None);
     };
 
     // Authorize. The exact-OID match guarantees identical inputs, but a
@@ -1239,56 +1206,60 @@ fn try_replay_resolution(
                     "Declined resolution for '{}' — it will be held instead.",
                     branch
                 ));
-                return Ok(false);
+                return Ok(None);
             }
         }
         confirmed_keys.insert(key.clone());
     }
 
-    // Apply: overwrite each conflicted file with the recorded resolved
-    // content, stage everything, verify no conflict markers remain, commit
-    // the squash. If anything goes wrong, abort back to a clean worktree and
-    // report a miss so the branch is held rather than left half-applied.
-    let apply = (|| -> Result<()> {
+    // Apply: swap each conflicted path in the merge result tree for the
+    // recorded resolved blob, then commit that tree. Every conflicted path
+    // must be covered — a partial resolution would leave conflict markers in
+    // a published tree, so it is treated as a miss and the branch is held.
+    let apply = (|| -> Result<String> {
+        let git = context.git();
+
+        let mut entries = Vec::with_capacity(res.resolved.len());
         for (path, content) in &res.resolved {
-            let full = std::path::Path::new(worktree_path).join(path);
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&full, content)?;
+            let blob = git.hash_object_bytes(content)?;
+            entries.push((path.clone(), blob));
         }
-        let add = worktree_git.run_git_command(&["add", "--all"])?;
-        if !add.status.success() {
+
+        let unresolved: Vec<&str> = outcome
+            .conflicted_stages
+            .iter()
+            .map(|(path, _, _, _)| path.as_str())
+            .filter(|path| !res.resolved.iter().any(|(p, _)| p == path))
+            .collect();
+        if !unresolved.is_empty() {
             return Err(anyhow::anyhow!(
-                "git add failed while applying resolution: {}",
-                String::from_utf8_lossy(&add.stderr)
+                "recorded resolution does not cover every conflicted path (missing: {})",
+                unresolved.join(", ")
             ));
         }
-        if worktree_git.has_merge_conflicts().unwrap_or(false) {
-            return Err(anyhow::anyhow!(
-                "recorded resolution did not clear every conflicted path"
-            ));
-        }
-        worktree_git.commit(merge_message)?;
-        Ok(())
+
+        let tree = git.splice_blobs_into_tree(&outcome.tree_oid, &entries)?;
+        git.commit_tree(&tree, &[composed], merge_message)
     })();
 
-    if let Err(e) = apply {
-        context.log_verbose(&format!(
-            "Could not apply recorded resolution for '{}': {} — holding instead.",
-            branch, e
-        ));
-        let _ = worktree_git.abort_merge_and_clean();
-        return Ok(false);
+    match apply {
+        Ok(new_composed) => {
+            context.log_info(&format!(
+                "♻️ Reused recorded resolution {} for '{}' (by {}).",
+                &key[..12.min(key.len())],
+                branch,
+                res.meta.recorded_by
+            ));
+            Ok(Some(new_composed))
+        }
+        Err(e) => {
+            context.log_verbose(&format!(
+                "Could not apply recorded resolution for '{}': {} — holding instead.",
+                branch, e
+            ));
+            Ok(None)
+        }
     }
-
-    context.log_info(&format!(
-        "♻️ Reused recorded resolution {} for '{}' (by {}).",
-        &key[..12.min(key.len())],
-        branch,
-        res.meta.recorded_by
-    ));
-    Ok(true)
 }
 
 /// Update the rebuiltAt timestamp for an environment during rebuilding

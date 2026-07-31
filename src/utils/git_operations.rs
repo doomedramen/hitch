@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use git2::Repository;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::conflict_report::{parse_conflict_type, ConflictedFile, MergeBaseInfo};
+use super::conflict_report::{parse_conflict_type, ConflictType, ConflictedFile, MergeBaseInfo};
 
 /// Detailed result from a merge conflict check
 #[derive(Debug)]
@@ -98,6 +99,30 @@ pub struct MergeTreeWriteTreeResult {
     pub tree_oid: String,
     /// List of conflicted file paths (empty when no conflicts).
     pub conflicted_files: Vec<String>,
+}
+
+/// Per-path merge stages: `(path, base_oid, ours_oid, theirs_oid)`. A stage is
+/// `None` when that side does not have the path (a delete/modify conflict has
+/// no ours or no theirs; an add/add has no base). Same shape as
+/// `GitOperations::unmerged_stages` returns from an index, so the recorded
+/// resolution machinery keys off either source identically.
+pub type MergeStages = (String, Option<String>, Option<String>, Option<String>);
+
+/// The stage OIDs of `MergeStages` without the path, keyed by path while a
+/// merge result is being accumulated.
+type StageOids = (Option<String>, Option<String>, Option<String>);
+
+/// Result of composing two commits with `git merge-tree --write-tree`.
+///
+/// The merge is performed entirely in the object database — no worktree, no
+/// index, no checkout. `tree_oid` is always a real tree: on conflict it holds
+/// the conflict-marker rendering of each conflicted path, exactly as a real
+/// merge would leave in the working tree.
+#[derive(Debug, Clone)]
+pub struct MergeTreeCompose {
+    pub tree_oid: String,
+    /// Empty when the merge was clean.
+    pub conflicted_stages: Vec<MergeStages>,
 }
 
 /// One entry of `git worktree list --porcelain`: the main checkout or a
@@ -1268,6 +1293,277 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Merge `theirs` into `ours` entirely in the object database.
+    ///
+    /// This is how `rebuild` and `release` compose: `git merge-tree
+    /// --write-tree` runs the same ORT merge machinery a real `git merge`
+    /// does, but writes the resulting tree straight into the object store
+    /// without a working tree, an index, or a checkout — so there is no
+    /// disposable worktree to create, leak on a crash, or clean up, and
+    /// nothing that can collide with the user's own checkouts.
+    ///
+    /// The merge base is deliberately left for git to compute (including the
+    /// virtual merge base for criss-cross histories), which is both what a
+    /// real merge does and immune to the wrong-merge-base mistake documented
+    /// in AGENTS.md — that gotcha applies to callers passing `--merge-base`
+    /// explicitly, which this one never does.
+    pub fn merge_tree_compose(&self, ours: &str, theirs: &str) -> Result<MergeTreeCompose> {
+        let output = self.run_git_command(&["merge-tree", "--write-tree", "-z", ours, theirs])?;
+
+        // 0 = clean, 1 = conflicted, anything else is a real failure.
+        let code = output.status.code().unwrap_or(2);
+        if code != 0 && code != 1 {
+            return Err(anyhow::anyhow!(
+                "Failed to merge '{}' into '{}': {}",
+                theirs,
+                ours,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        Self::parse_merge_tree_compose(&output.stdout)
+    }
+
+    /// Parse NUL-delimited `git merge-tree --write-tree -z` output.
+    ///
+    /// Record layout: the tree OID, then one record per conflicted stage in
+    /// `<mode> <oid> <stage>\t<path>` form, then an empty record introducing
+    /// the human-readable messages section. A clean merge emits the tree OID
+    /// and nothing else, so running out of records is a normal ending.
+    pub(crate) fn parse_merge_tree_compose(stdout: &[u8]) -> Result<MergeTreeCompose> {
+        let mut records = stdout.split(|b| *b == 0);
+
+        let tree_oid = records
+            .next()
+            .map(|r| String::from_utf8_lossy(r).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("git merge-tree produced no tree OID"))?;
+
+        // Preserve git's ordering rather than sorting, so a conflict report
+        // lists paths the way git itself would.
+        let mut order: Vec<String> = Vec::new();
+        let mut per_path: HashMap<String, StageOids> = HashMap::new();
+
+        for record in records {
+            if record.is_empty() {
+                break; // end of the conflicted-stage section
+            }
+            let record = String::from_utf8_lossy(record);
+            let Some((meta, path)) = record.split_once('\t') else {
+                continue;
+            };
+            let fields: Vec<&str> = meta.split_whitespace().collect();
+            if fields.len() != 3 {
+                continue;
+            }
+            let oid = fields[1].to_string();
+            let entry = per_path.entry(path.to_string()).or_insert_with(|| {
+                order.push(path.to_string());
+                (None, None, None)
+            });
+            match fields[2] {
+                "1" => entry.0 = Some(oid),
+                "2" => entry.1 = Some(oid),
+                "3" => entry.2 = Some(oid),
+                _ => {}
+            }
+        }
+
+        let conflicted_stages = order
+            .into_iter()
+            .map(|path| {
+                let (b, o, t) = per_path.remove(&path).unwrap_or((None, None, None));
+                (path, b, o, t)
+            })
+            .collect();
+
+        Ok(MergeTreeCompose {
+            tree_oid,
+            conflicted_stages,
+        })
+    }
+
+    /// Build the reportable conflict description for a failed
+    /// `merge_tree_compose`, the object-database counterpart of
+    /// `current_conflict_result` (which reads a conflicted index).
+    ///
+    /// `target_label` is what the report calls the side being merged *into* —
+    /// the environment or target branch, since with no worktree there is no
+    /// checked-out branch name to borrow. Conflict content comes from the
+    /// merge result tree, which holds exactly the marker rendering a real
+    /// merge would have written into the working tree.
+    pub fn conflict_result_from_compose(
+        &self,
+        source_branch: &str,
+        target_label: &str,
+        ours: &str,
+        theirs: &str,
+        compose: &MergeTreeCompose,
+    ) -> Result<MergeConflictResult> {
+        let mut conflicted_files = Vec::new();
+
+        for (path, base, our_side, their_side) in &compose.conflicted_stages {
+            let conflict_type = match (base, our_side, their_side) {
+                (_, Some(_), Some(_)) => ConflictType::ModifyModify,
+                (_, None, Some(_)) => ConflictType::ModifyDelete,
+                (_, Some(_), None) => ConflictType::DeleteModify,
+                _ => ConflictType::Unknown,
+            };
+            let conflict_type = if base.is_none() && conflict_type == ConflictType::ModifyModify {
+                ConflictType::AddAdd
+            } else {
+                conflict_type
+            };
+
+            match self.read_text_from_tree(&compose.tree_oid, path)? {
+                Some(content) => conflicted_files.push(ConflictedFile::with_content(
+                    path.clone(),
+                    conflict_type,
+                    content,
+                )),
+                None => conflicted_files.push(ConflictedFile::new(path.clone(), conflict_type)),
+            }
+        }
+
+        let merge_base = self.get_merge_base(ours, theirs)?.map(|hash| {
+            let date = self.get_commit_date(&hash).ok().flatten();
+            let mut base_info = MergeBaseInfo::new(hash);
+            if let Some(d) = date {
+                base_info = base_info.with_date(d);
+            }
+            base_info
+        });
+
+        Ok(MergeConflictResult::with_conflicts(
+            source_branch.to_string(),
+            target_label.to_string(),
+            conflicted_files,
+            merge_base,
+        ))
+    }
+
+    /// Create a commit object for `tree` with the given parents.
+    ///
+    /// One parent gives squash semantics (the composed branch's own history,
+    /// with the merged branch's commits deliberately absent); two gives a
+    /// real merge commit that preserves ancestry. Unlike `git commit`, this
+    /// runs no hooks and needs no index or working tree.
+    pub fn commit_tree(&self, tree: &str, parents: &[&str], message: &str) -> Result<String> {
+        let mut args = vec!["commit-tree", tree];
+        for parent in parents {
+            args.push("-p");
+            args.push(parent);
+        }
+        args.push("-m");
+        args.push(message);
+
+        let output = self.run_git_command(&args)?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to create commit for tree {}: {}",
+                tree,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if sha.is_empty() {
+            return Err(anyhow::anyhow!(
+                "git commit-tree produced no commit OID for tree {}",
+                tree
+            ));
+        }
+        Ok(sha)
+    }
+
+    /// Read `path` out of `tree` as text, or `None` if it is absent or not
+    /// valid UTF-8 (a binary conflict has no marker rendering to show).
+    pub fn read_text_from_tree(&self, tree: &str, path: &str) -> Result<Option<String>> {
+        let spec = format!("{}:{}", tree, path);
+        let output = self.run_git_command(&["cat-file", "blob", &spec])?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        Ok(String::from_utf8(output.stdout).ok())
+    }
+
+    /// Return a copy of `base_tree` with each `(path, blob_oid)` replaced,
+    /// built through a scratch index so neither the real index nor any
+    /// working tree is touched.
+    ///
+    /// Used to apply a recorded conflict resolution to a merge-tree result:
+    /// the conflicted tree holds marker-laden blobs, and each resolved path is
+    /// swapped for the recorded content. File modes are carried over from
+    /// `base_tree` so replacing an executable file keeps it executable.
+    pub fn splice_blobs_into_tree(
+        &self,
+        base_tree: &str,
+        entries: &[(String, String)],
+    ) -> Result<String> {
+        let index_path = tempfile::Builder::new()
+            .prefix("hitch-splice-index-")
+            .tempfile()
+            .context("Failed to create scratch index file")?
+            .into_temp_path();
+        // git only starts a fresh index when GIT_INDEX_FILE names a path that
+        // does not exist; the reserved empty file would read as corrupt.
+        std::fs::remove_file(&index_path).context("Failed to free reserved scratch index path")?;
+
+        let read = self.run_git_command_with_index(&index_path, &["read-tree", base_tree])?;
+        if !read.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to read tree {} into a scratch index: {}",
+                base_tree,
+                String::from_utf8_lossy(&read.stderr).trim()
+            ));
+        }
+
+        for (path, blob) in entries {
+            let mode = self.tree_entry_mode(base_tree, path)?;
+            let cacheinfo = format!("{},{},{}", mode, blob, path);
+            let update = self.run_git_command_with_index(
+                &index_path,
+                &["update-index", "--add", "--cacheinfo", &cacheinfo],
+            )?;
+            if !update.status.success() {
+                return Err(anyhow::anyhow!(
+                    "Failed to stage resolved '{}': {}",
+                    path,
+                    String::from_utf8_lossy(&update.stderr).trim()
+                ));
+            }
+        }
+
+        let write = self.run_git_command_with_index(&index_path, &["write-tree"])?;
+        if !write.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to write spliced tree: {}",
+                String::from_utf8_lossy(&write.stderr).trim()
+            ));
+        }
+        let tree = String::from_utf8_lossy(&write.stdout).trim().to_string();
+        if tree.is_empty() {
+            return Err(anyhow::anyhow!("git write-tree produced no tree OID"));
+        }
+        Ok(tree)
+    }
+
+    /// File mode recorded for `path` in `tree`, defaulting to a regular file
+    /// when the path is not present (a resolution that adds a file).
+    fn tree_entry_mode(&self, tree: &str, path: &str) -> Result<String> {
+        let output = self.run_git_command(&["ls-tree", tree, "--", path])?;
+        if !output.status.success() {
+            return Ok("100644".to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap_or("100644")
+            .to_string())
+    }
+
     /// Every checkout attached to this repository — the main working tree plus
     /// every linked worktree — as reported by `git worktree list --porcelain`.
     ///
@@ -1626,35 +1922,6 @@ impl GitOperations {
 
         Ok(())
     }
-
-    /// Merge a branch into the current branch with a merge commit.
-    ///
-    /// This preserves Git ancestry (unlike squash merges), which is important for stacked branches:
-    /// downstream branches based on the merged branch won't need rebasing to avoid duplicated diffs.
-    ///
-    /// Uses `--no-ff` to always record a merge commit when a merge is performed.
-    pub fn merge_no_ff_with_message(&self, source_branch: &str, message: &str) -> Result<()> {
-        let output = self.run_git_command(&[
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            "--no-verify",
-            "-m",
-            message,
-            source_branch,
-        ])?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to merge branch '{}' with a merge commit: {}",
-                source_branch,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Check if a merge would result in conflicts and return detailed conflict info
     pub fn check_merge_conflicts_detailed(
         &self,
@@ -1780,39 +2047,6 @@ impl GitOperations {
             target_branch,
         ))
     }
-
-    /// Build a comprehensive conflict result from the CURRENT conflicted state of
-    /// the working tree — e.g. immediately after a `merge --squash` that
-    /// conflicted — WITHOUT performing any additional merge.
-    ///
-    /// Callers use this to avoid a second, redundant "dry-run" merge purely to
-    /// produce a conflict report: they attempt the real (squash) merge once, and
-    /// if it conflicts, describe the conflict from the state it left behind.
-    pub fn current_conflict_result(&self, source_branch: &str) -> Result<MergeConflictResult> {
-        let target_branch = self
-            .get_current_branch()
-            .unwrap_or_else(|_| "HEAD".to_string());
-
-        let conflicted_files = self.collect_detailed_conflicts()?;
-        let merge_base = self
-            .get_merge_base(&target_branch, source_branch)?
-            .map(|hash| {
-                let date = self.get_commit_date(&hash).ok().flatten();
-                let mut base_info = MergeBaseInfo::new(hash);
-                if let Some(d) = date {
-                    base_info = base_info.with_date(d);
-                }
-                base_info
-            });
-
-        Ok(MergeConflictResult::with_conflicts(
-            source_branch.to_string(),
-            target_branch,
-            conflicted_files,
-            merge_base,
-        ))
-    }
-
     /// Collect detailed information about conflicted files
     ///
     /// This function gathers:

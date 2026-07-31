@@ -1544,4 +1544,226 @@ mod tests {
 
         Ok(())
     }
+
+    // Parity between worktree-less composition (`merge_tree_compose`) and a
+    // real `git merge --squash`. This is the load-bearing assumption of the
+    // indexless rebuild/release path: ORT via merge-tree must agree with ORT
+    // via a working tree, including on the sharp cases.
+
+    /// Run a real `git merge --squash <theirs>` on top of `<ours>` in the test
+    /// repo and return `(index tree OID, unmerged stages)`.
+    fn real_squash_merge(
+        env: &TestEnvironment,
+        git_ops: &GitOperations,
+        ours: &str,
+        theirs: &str,
+    ) -> Result<(
+        Option<String>,
+        Vec<hitch::utils::git_operations::MergeStages>,
+    )> {
+        env.git
+            .run(&["checkout", "--force", ours])?
+            .assert_success();
+        let _ = env.git.run(&["merge", "--squash", theirs])?;
+
+        let stages = git_ops.unmerged_stages()?;
+        let tree = if stages.is_empty() {
+            Some(
+                env.git
+                    .run(&["write-tree"])?
+                    .assert_success()
+                    .stdout()
+                    .trim()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        let _ = env.git.run(&["merge", "--abort"]);
+        env.git.run(&["reset", "--hard", ours])?.assert_success();
+        Ok((tree, stages))
+    }
+
+    fn assert_compose_matches_real_merge(
+        env: &TestEnvironment,
+        git_ops: &GitOperations,
+        ours: &str,
+        theirs: &str,
+        scenario: &str,
+    ) -> Result<()> {
+        let composed = git_ops.merge_tree_compose(ours, theirs)?;
+        let (real_tree, real_stages) = real_squash_merge(env, git_ops, ours, theirs)?;
+
+        match real_tree {
+            Some(tree) => {
+                assert!(
+                    composed.conflicted_stages.is_empty(),
+                    "{scenario}: merge-tree reported conflicts where a real merge had none: {:?}",
+                    composed.conflicted_stages
+                );
+                assert_eq!(
+                    composed.tree_oid, tree,
+                    "{scenario}: merge-tree produced a different tree than a real merge"
+                );
+            }
+            None => {
+                // Stage OIDs are what recorded resolutions are keyed on, so
+                // they must agree exactly, not just the set of paths.
+                assert_eq!(
+                    composed.conflicted_stages, real_stages,
+                    "{scenario}: merge-tree conflict stages differ from a real merge"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_tree_compose_matches_real_merge_across_scenarios() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("shared.txt", "line1\nline2\nline3\n")?;
+            env.fs.write_file("moved.txt", "original\n")?;
+            env.fs.write_file("doomed.txt", "delete me\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "base"])?;
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Disjoint edits — must merge cleanly to an identical tree.
+            env.git.run(&["checkout", "-b", "disjoint-a", "main"])?;
+            env.fs.write_file("a-only.txt", "a\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "a"])?;
+
+            env.git.run(&["checkout", "-b", "disjoint-b", "main"])?;
+            env.fs.write_file("b-only.txt", "b\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "b"])?;
+
+            assert_compose_matches_real_merge(
+                env,
+                &git_ops,
+                "disjoint-a",
+                "disjoint-b",
+                "disjoint edits",
+            )?;
+
+            // Rename on one side, content edit on the other — the case where
+            // a merge engine that skipped rename detection would silently
+            // produce a different tree.
+            env.git.run(&["checkout", "-b", "renamer", "main"])?;
+            env.git.run(&["mv", "moved.txt", "renamed.txt"])?;
+            env.git.run(&["commit", "-m", "rename"])?;
+
+            env.git.run(&["checkout", "-b", "editor", "main"])?;
+            env.fs.write_file("moved.txt", "original\nplus more\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "edit"])?;
+
+            assert_compose_matches_real_merge(
+                env,
+                &git_ops,
+                "renamer",
+                "editor",
+                "rename vs modify",
+            )?;
+
+            // Executable bit must survive composition.
+            env.git.run(&["checkout", "-b", "chmod", "main"])?;
+            env.git
+                .run(&["update-index", "--chmod=+x", "doomed.txt"])?
+                .assert_success();
+            env.git.run(&["commit", "-m", "chmod"])?;
+
+            assert_compose_matches_real_merge(env, &git_ops, "chmod", "disjoint-a", "mode change")?;
+
+            // Content conflict — stages must match exactly.
+            env.git.run(&["checkout", "-b", "conflict-a", "main"])?;
+            env.fs.write_file("shared.txt", "AAA\nline2\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "conflict a"])?;
+
+            env.git.run(&["checkout", "-b", "conflict-b", "main"])?;
+            env.fs.write_file("shared.txt", "BBB\nline2\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "conflict b"])?;
+
+            assert_compose_matches_real_merge(
+                env,
+                &git_ops,
+                "conflict-a",
+                "conflict-b",
+                "content conflict",
+            )?;
+
+            // Delete/modify conflict.
+            env.git.run(&["checkout", "-b", "deleter", "main"])?;
+            env.git.run(&["rm", "doomed.txt"])?;
+            env.git.run(&["commit", "-m", "delete"])?;
+
+            env.git.run(&["checkout", "-b", "modifier", "main"])?;
+            env.fs.write_file("doomed.txt", "kept and changed\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "modify"])?;
+
+            assert_compose_matches_real_merge(
+                env,
+                &git_ops,
+                "deleter",
+                "modifier",
+                "delete vs modify",
+            )?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The base moving after the branches diverged is the exact shape that hid
+    /// the historic wrong-merge-base bug (see AGENTS.md). `merge_tree_compose`
+    /// lets git compute the base rather than passing one, so this must agree
+    /// with a real merge too.
+    #[test]
+    fn test_merge_tree_compose_matches_real_merge_when_base_moved() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("f.txt", "one\ntwo\nthree\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "base"])?;
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.git.run(&["checkout", "-b", "feature", "main"])?;
+            env.fs.write_file("f.txt", "one\nFEATURE\nthree\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feature"])?;
+
+            // The base moves independently *after* the branch diverged.
+            env.git.run(&["checkout", "main"])?;
+            env.fs.write_file("f.txt", "one\nMAIN\nthree\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "base moved"])?;
+
+            let composed = git_ops.merge_tree_compose("main", "feature")?;
+            assert!(
+                !composed.conflicted_stages.is_empty(),
+                "a base that moved onto the same line must still conflict"
+            );
+
+            assert_compose_matches_real_merge(env, &git_ops, "main", "feature", "base moved")?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

@@ -3,13 +3,11 @@ use crate::utils::command_helpers::{
     ensure_branch_exists, ensure_environment_exists, environment::get_locked_by_user,
     logging::validation_success,
 };
-use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{access_metadata_read_only, push_branch_with_deploy_key_if_configured};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
 use clap::Args;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 #[derive(Args)]
 pub struct ReleaseCommand {
@@ -238,35 +236,14 @@ fn perform_release_core(
     let target_checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, target_branch)?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    let temp_branch = format!("hitch-release-{}-{}", target_branch, timestamp);
-    let repo_path = PathBuf::from(context.git().workdir());
-    let repo_name = repo_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repo".to_string());
-    let parent = repo_path.parent().ok_or_else(|| {
-        anyhow::anyhow!("Repository has no parent directory to place a release worktree in")
-    })?;
-    let worktree_path = parent.join(format!(
-        ".hitch-worktree-release-{}-{}-{}",
-        repo_name, env_name, timestamp
-    ));
-    let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    context
-        .git()
-        .add_worktree(&worktree_path_str, &temp_branch, &target_sha)?;
-
-    let cleanup = || {
-        let _ = context.git().remove_worktree(&worktree_path_str, true);
-        if context.git().branch_exists(&temp_branch).unwrap_or(false) {
-            let _ = context.git().delete_branch(&temp_branch, true);
-        }
-    };
-
-    // Compose the merges in the disposable worktree.
+    // Compose the merges entirely in the object database — see
+    // `GitOperations::merge_tree_compose`. A release is all-or-nothing: any
+    // conflict aborts before the target ref is touched, and since nothing was
+    // ever checked out there is no merge state to unwind.
     let build_result = (|| -> Result<String> {
-        let worktree_git = GitOperations::new_at_path(&worktree_path_str)?;
+        let git = context.git();
+        let mut composed = target_sha.clone();
 
         for (branch, sha) in &pinned_branches {
             context.log_info(&format!("Merging '{}' into '{}'...", branch, target_branch));
@@ -275,41 +252,60 @@ fn perform_release_core(
                 branch, env_name, target_branch
             );
 
-            let merge_res = if squash {
-                worktree_git.squash_merge(sha, &merge_message)
-            } else {
-                worktree_git.merge_no_ff_with_message(sha, &merge_message)
-            };
-
-            if let Err(e) = merge_res {
-                if worktree_git.has_merge_conflicts().unwrap_or(false) {
-                    let conflicted_files = worktree_git.get_conflicted_files().unwrap_or_default();
-                    let _ = worktree_git.abort_merge_and_clean();
-                    return Err(build_conflict_error(
-                        branch,
-                        Some(conflicted_files),
-                        target_branch,
-                        env_name,
-                    ));
-                }
-                return Err(e);
+            let outcome = git.merge_tree_compose(&composed, sha)?;
+            if !outcome.conflicted_stages.is_empty() {
+                let conflicted_files = outcome
+                    .conflicted_stages
+                    .iter()
+                    .map(|(path, _, _, _)| path.clone())
+                    .collect();
+                return Err(build_conflict_error(
+                    branch,
+                    Some(conflicted_files),
+                    target_branch,
+                    env_name,
+                ));
             }
 
+            // Squash keeps the released branch's commits out of the target's
+            // history; the default merge commit records the second parent so
+            // ancestry is preserved and GitHub can detect merged PRs.
+            let parents: Vec<&str> = if squash {
+                vec![composed.as_str()]
+            } else {
+                vec![composed.as_str(), sha.as_str()]
+            };
+
+            let composed_tree = git.rev_parse(&format!("{}^{{tree}}", composed))?;
+            if squash && outcome.tree_oid == composed_tree {
+                // Nothing to record — the branch is already contained in the
+                // target. A merge commit is still worth making in --no-ff mode
+                // because it is what carries the ancestry link.
+                context.log_verbose(&format!(
+                    "'{}' is already contained in '{}'",
+                    branch, target_branch
+                ));
+                continue;
+            }
+
+            composed = git.commit_tree(&outcome.tree_oid, &parents, &merge_message)?;
             context.log_verbose(&format!("✓ Merged '{}' into '{}'", branch, target_branch));
         }
 
-        worktree_git.rev_parse("HEAD")
+        Ok(composed)
     })();
 
-    let new_sha = match build_result {
-        Ok(sha) => sha,
-        Err(e) => {
-            cleanup();
-            return Err(e);
-        }
+    let new_sha = build_result?;
+
+    // Keep the composed commit reachable until the tag and the publish CAS
+    // take over that job, so a concurrent `git gc` cannot collect it.
+    let build_ref = format!("refs/hitch/release/{}/{}", target_branch, timestamp);
+    context.git().update_ref(&build_ref, &new_sha)?;
+    let cleanup = || {
+        let _ = context.git().delete_ref(&build_ref);
     };
 
-    // Create the release tag pointing at the worktree's result commit.
+    // Create the release tag pointing at the composed commit.
     let now = chrono::Utc::now();
     let datetime_str = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
     let target_branch_clean = target_branch.replace('/', "-");
