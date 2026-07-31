@@ -1191,6 +1191,28 @@ fn try_replay_resolution(
         return Ok(None);
     };
 
+    // The refname is attacker-writable (`refs/hitch/resolutions/*` is
+    // force-pushable — see the module header in resolutions.rs), so it is not
+    // a trustworthy binding between "what this ref is named" and "what this
+    // ref actually contains". Only the signed `meta.key` proves that: it is
+    // computed the same way (`resolution_key` over the sorted stage tuples)
+    // at record time and is part of the signed payload, so a mismatch means
+    // someone repointed a validly-signed resolution for a *different*
+    // conflict onto this one's refname. This is a structural check, not a
+    // signature concern — apply it unconditionally, before the
+    // `require_signed` gate.
+    if res.meta.key != key {
+        context.log_warning(&format!(
+            "Recorded resolution at 'refs/hitch/resolutions/{}' does not match the conflict it \
+             is keyed by (recorded for a different conflict) — holding '{}' instead. This may \
+             indicate the ref was repointed at another resolution's commit. To inspect it:\n  \
+             hitch resolutions",
+            &key[..12.min(key.len())],
+            branch
+        ));
+        return Ok(None);
+    }
+
     // A recorded resolution is content nobody on this machine reviewed,
     // spliced into a branch that deploys. When the repository has opted in,
     // it must carry a signature from a signer the repository trusts —
@@ -1198,9 +1220,10 @@ fn try_replay_resolution(
     // proves nothing.
     if require_signed && !resolutions::verify_resolution_signature(context.git(), &res)? {
         context.log_warning(&format!(
-            "Recorded resolution {} for '{}' is not signed by a trusted signer and this \
-             repository requires signed resolutions — holding '{}' instead. To inspect it:\n  \
-             hitch resolutions",
+            "Recorded resolution {} for '{}' is not signed by a trusted signer, or its recorded \
+             content does not match what was signed (this may indicate a tampered resolution \
+             ref), and this repository requires signed resolutions — holding '{}' instead. To \
+             inspect it:\n  hitch resolutions",
             &key[..12.min(key.len())],
             branch,
             branch

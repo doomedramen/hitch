@@ -775,4 +775,196 @@ mod tests {
 
         Ok(())
     }
+
+    /// The key-binding regression test: `try_replay_resolution` used to look
+    /// up a resolution purely by refname (the content-addressed key) and
+    /// verify its signature over `meta.json`, but never check that the
+    /// *signed* `meta.key` inside the ref's own content actually matches the
+    /// key it was looked up by. `refs/hitch/resolutions/*` is force-pushable
+    /// (see the module header in resolutions.rs), so the refname alone is not
+    /// a trustworthy binding between "what this ref is named" and "what this
+    /// ref contains".
+    ///
+    /// This reproduces the reviewer's exact exploit: record a legitimately
+    /// signed resolution R1 for conflict C1 (branch-a vs branch-b), record a
+    /// second legitimately signed resolution R2 for a *different* conflict C2
+    /// (branch-c vs branch-d), then force-push R1's untouched, validly-signed
+    /// commit onto C2's refname. Nothing is tampered — R1's signature is
+    /// genuinely valid and its blob OIDs genuinely match its own content — so
+    /// the old code's signature/OID checks both pass and it replays R1's
+    /// content into C2's conflict, even though nobody ever authorized R1's
+    /// content for C2. The fix must hold C2 instead.
+    #[test]
+    fn test_resolution_force_pushed_onto_a_different_conflicts_refname_is_held(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let keys_dir = sibling_path(env, "ssh-keys-key-binding");
+            configure_ssh_signing(env, &keys_dir, "hitch-test@example.com")?;
+            env.git
+                .run(&["config", "user.email", "hitch-test@example.com"])?
+                .assert_success();
+
+            // Conflict C1: branch-a vs branch-b, resolved and recorded as R1.
+            setup_conflict_and_start_resolve(env)?;
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            let refs_after_r1 = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname)",
+                    "refs/hitch/resolutions/",
+                ])?
+                .stdout();
+            let r1_line = refs_after_r1
+                .lines()
+                .next()
+                .expect("expected exactly one recorded resolution ref after R1");
+            let (r1_refname, r1_commit) = r1_line
+                .split_once(' ')
+                .expect("for-each-ref line must have a refname and an oid");
+            let r1_refname = r1_refname.to_string();
+            let r1_commit = r1_commit.trim().to_string();
+
+            // Conflict C2: a different pair of branches with different
+            // content, so it hashes to a different resolution key. "dev" was
+            // already added by `setup_conflict_and_start_resolve` above, so
+            // this reuses it rather than calling `add dev` again.
+            env.git.run(&["checkout", "main"])?.assert_success();
+            env.git
+                .run(&["checkout", "-b", "branch-c"])?
+                .assert_success();
+            env.fs.write_file("shared.txt", "from-c\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?.assert_success();
+            env.git.run(&["commit", "-m", "c"])?.assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.git
+                .run(&["checkout", "-b", "branch-d"])?
+                .assert_success();
+            env.fs.write_file("shared.txt", "from-d\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?.assert_success();
+            env.git.run(&["commit", "-m", "d"])?.assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.git
+                .run(&["checkout", "hitch-metadata"])?
+                .assert_success();
+            let config_str = env.fs.read_file("hitch.json")?;
+            let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+            config["environments"]["dev"]["branches"] = serde_json::json!(["branch-c", "branch-d"]);
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "test: inject second conflict pair"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.hitch
+                .run()
+                .args(&["--no-push", "resolve", "dev", "--branch", "branch-d"])
+                .execute()?
+                .assert_success();
+
+            let worktree_path_c2 = env.temp_dir.parent().unwrap().join(format!(
+                ".hitch-resolve-{}-dev-branch-d",
+                env.temp_dir.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::write(worktree_path_c2.join("shared.txt"), "resolved-c-and-d\n")?;
+            // Test-only: simulates a user staging their edited file by hand
+            // in the resolve worktree, same rationale as
+            // `setup_conflict_and_start_resolve`'s equivalent call.
+            #[allow(clippy::disallowed_methods)]
+            std::process::Command::new("git")
+                .args(["add", "shared.txt"])
+                .current_dir(&worktree_path_c2)
+                .stdin(std::process::Stdio::null())
+                .status()?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-d",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            // Two refs now exist: R1 (C1) and R2 (C2). Force-push R1's
+            // untouched, validly-signed commit onto R2's refname — the
+            // attack under test.
+            let refs_after_r2 = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname)",
+                    "refs/hitch/resolutions/",
+                ])?
+                .stdout();
+            let r2_refname = refs_after_r2
+                .lines()
+                .filter_map(|line| line.split_once(' ').map(|(refname, _)| refname))
+                .find(|refname| *refname != r1_refname)
+                .expect("expected a second recorded resolution ref after R2")
+                .to_string();
+
+            env.git
+                .run(&["update-ref", &r2_refname, &r1_commit])?
+                .assert_success();
+
+            require_signed_resolutions(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?;
+
+            let combined = format!("{}{}", result.stdout(), result.stderr());
+            assert!(
+                !combined.contains("Reused recorded resolution"),
+                "R1's resolution (for a different conflict) was replayed into C2 after being \
+                 force-pushed onto C2's refname:\n{}",
+                combined
+            );
+
+            let dev_content = env.git.run(&["show", "dev:shared.txt"])?.stdout();
+            assert!(
+                !dev_content.contains("resolved-both"),
+                "R1's resolved content (recorded for branch-a/branch-b's conflict) must never \
+                 land on a build for branch-c/branch-d's conflict, got:\n{}",
+                dev_content
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
