@@ -148,15 +148,6 @@ covered.
   pure-function tests. Follow the existing naming pattern:
   `test_<command>_<scenario>`.
 
-## Known dead/aspirational code — don't build on these without reviving them
-
-- `src/utils/git_error.rs` — a typed `GitError` enum, explicitly documented
-  in its own header as not integrated; all live error handling uses
-  `anyhow::anyhow!` with formatted strings.
-- `src/utils/hooks.rs` — a lifecycle-hook/plugin system
-  (`#![allow(dead_code)]`), zero call sites outside the file.
-- `src/core/workspace.rs`'s `build_workspace_model` / `WorkspaceModel`.
-
 ## Conventions
 
 - **Errors**: `anyhow::Result` everywhere in commands/utils; error messages
