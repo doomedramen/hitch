@@ -160,4 +160,93 @@ mod tests {
 
         Ok(())
     }
+
+    /// refs/hitch/backup/* and refs/hitch/prev/* both accumulate one ref per
+    /// rebuild with no existing bound — `hitch cleanup --apply` must prune
+    /// each namespace down to its N-most-recent-per-environment, independent
+    /// of the other namespace and of other environments.
+    #[test]
+    fn test_cleanup_prunes_old_archive_refs_per_env_per_namespace() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_success();
+
+            let head = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Plant more refs than the retention policy keeps, in both
+            // namespaces, across two environments, so the test also proves
+            // pruning is scoped per-env (dev's excess doesn't affect qa's
+            // count and vice versa).
+            for namespace in ["backup", "prev"] {
+                for env_name in ["dev", "qa"] {
+                    for i in 0..15 {
+                        env.git
+                            .run(&[
+                                "update-ref",
+                                &format!(
+                                    "refs/hitch/{}/{}/2020010100{:04}",
+                                    namespace, env_name, i
+                                ),
+                                &head,
+                            ])?
+                            .assert_success();
+                    }
+                }
+            }
+
+            env.hitch
+                .run()
+                .args(&["cleanup", "--apply"])
+                .execute()?
+                .assert_success();
+
+            for namespace in ["backup", "prev"] {
+                for env_name in ["dev", "qa"] {
+                    let remaining = env
+                        .git
+                        .run(&[
+                            "for-each-ref",
+                            "--format=%(refname)",
+                            &format!("refs/hitch/{}/{}", namespace, env_name),
+                        ])?
+                        .stdout();
+                    let count = remaining.lines().filter(|l| !l.trim().is_empty()).count();
+                    assert!(
+                        count <= 10,
+                        "cleanup left {} refs under refs/hitch/{}/{}, expected <= 10:\n{}",
+                        count,
+                        namespace,
+                        env_name,
+                        remaining
+                    );
+                    assert!(
+                        count > 0,
+                        "cleanup pruned every ref under refs/hitch/{}/{} — some of the \
+                         most-recent 10 must survive",
+                        namespace,
+                        env_name
+                    );
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
