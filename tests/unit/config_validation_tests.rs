@@ -41,14 +41,24 @@ mod tests {
 
     #[test]
     fn test_parse_untrusted_config_rejects_option_shaped_base() {
-        let raw = r#"{"version":"1.0","environments":{"dev":{"base":"-fdx","branches":[]}}}"#;
-        assert!(parse_untrusted_config(raw).is_err());
+        let raw = r#"{"version":"1.0","environments":{"dev":{"base":"-fdx","branches":[],"locked":false}}}"#;
+        let err = parse_untrusted_config(raw).expect_err("option-shaped base must be rejected");
+        assert!(
+            err.to_string().contains("unusable base branch"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
     fn test_parse_untrusted_config_rejects_option_shaped_env_name() {
-        let raw = r#"{"version":"1.0","environments":{"--exec=x":{"base":"main","branches":[]}}}"#;
-        assert!(parse_untrusted_config(raw).is_err());
+        let raw = r#"{"version":"1.0","environments":{"--exec=x":{"base":"main","branches":[],"locked":false}}}"#;
+        let err = parse_untrusted_config(raw).expect_err("option-shaped env name must be rejected");
+        assert!(
+            err.to_string().contains("unusable environment name"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -63,25 +73,65 @@ mod tests {
 
     #[test]
     fn test_parse_untrusted_config_rejects_too_many_environments() {
+        let envs_at_cap: Vec<String> = (0..MAX_ENVIRONMENTS)
+            .map(|i| {
+                format!(
+                    r#""env{}":{{"base":"main","branches":[],"locked":false}}"#,
+                    i
+                )
+            })
+            .collect();
+        let raw_at_cap = format!(
+            r#"{{"version":"1.0","environments":{{{}}}}}"#,
+            envs_at_cap.join(",")
+        );
+        parse_untrusted_config(&raw_at_cap).expect("exactly MAX_ENVIRONMENTS must be accepted");
+
         let envs: Vec<String> = (0..=MAX_ENVIRONMENTS)
-            .map(|i| format!(r#""env{}":{{"base":"main","branches":[]}}"#, i))
+            .map(|i| {
+                format!(
+                    r#""env{}":{{"base":"main","branches":[],"locked":false}}"#,
+                    i
+                )
+            })
             .collect();
         let raw = format!(
             r#"{{"version":"1.0","environments":{{{}}}}}"#,
             envs.join(",")
         );
-        assert!(parse_untrusted_config(&raw).is_err());
+        let err = parse_untrusted_config(&raw).expect_err("over-cap environments must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("declares {} environments", MAX_ENVIRONMENTS + 1)),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
     fn test_parse_untrusted_config_rejects_too_many_branches() {
+        let branches_at_cap: Vec<String> = (0..MAX_BRANCHES_PER_ENV)
+            .map(|i| format!(r#""feature/b{}""#, i))
+            .collect();
+        let raw_at_cap = format!(
+            r#"{{"version":"1.0","environments":{{"dev":{{"base":"main","branches":[{}],"locked":false}}}}}}"#,
+            branches_at_cap.join(",")
+        );
+        parse_untrusted_config(&raw_at_cap).expect("exactly MAX_BRANCHES_PER_ENV must be accepted");
+
         let branches: Vec<String> = (0..=MAX_BRANCHES_PER_ENV)
             .map(|i| format!(r#""feature/b{}""#, i))
             .collect();
         let raw = format!(
-            r#"{{"version":"1.0","environments":{{"dev":{{"base":"main","branches":[{}]}}}}}}"#,
+            r#"{{"version":"1.0","environments":{{"dev":{{"base":"main","branches":[{}],"locked":false}}}}}}"#,
             branches.join(",")
         );
-        assert!(parse_untrusted_config(&raw).is_err());
+        let err = parse_untrusted_config(&raw).expect_err("over-cap branches must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("{} promoted branches", MAX_BRANCHES_PER_ENV + 1)),
+            "got: {}",
+            err
+        );
     }
 }
