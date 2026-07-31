@@ -132,9 +132,10 @@ covered.
   module header for why that matters), stored as `refs/hitch/resolutions/*`.
   Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`,
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
-- `src/core/` — read-only view builders (workspace/status models) consumed
-  by commands; `workspace_index.rs`'s `build_workspace_index_model` is
-  actively used.
+- `src/core/` — read-only view builders (workspace/status models).
+  `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
+  have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
+  Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
