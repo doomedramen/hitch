@@ -56,7 +56,25 @@ pub struct ConflictStage {
     pub ours: Option<String>,
     pub theirs: Option<String>,
     /// Name of the resolved-content blob in the ref's tree (`f0`, `f1`...).
+    /// This is a tree-entry name, NOT a content hash — do not treat it as
+    /// proof of what the blob holds. `blob_oid` is what actually binds the
+    /// signature to content.
     pub blob: String,
+    /// The resolved content's git blob OID, computed at record time
+    /// (`hash_object_bytes` over the same bytes written to `blob`). This is
+    /// part of the signed `meta.json` payload, so it is what actually ties a
+    /// signature to specific content: `blob` only names a tree entry, and
+    /// `refs/hitch/resolutions/*` is force-pushable, so an attacker can keep
+    /// `meta.json` byte-identical (signature still verifies) while
+    /// repointing the tree entry at different content. Verification recomputes
+    /// each entry's actual OID and rejects any mismatch against this field —
+    /// see `verify_resolution_signature`.
+    /// `#[serde(default)]` so a resolution recorded before this field existed
+    /// still deserializes; it simply can never pass content verification
+    /// (empty string never matches a real OID), which is the correct fail-closed
+    /// outcome for a resolution predating this guarantee.
+    #[serde(default)]
+    pub blob_oid: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,13 +183,14 @@ pub fn record_resolution(
         })?;
         let blob = format!("f{}", i);
         let blob_oid = git.hash_object_bytes(&content)?;
-        tree_entries.push((blob.clone(), blob_oid));
+        tree_entries.push((blob.clone(), blob_oid.clone()));
         files.push(ConflictStage {
             path: path.clone(),
             base: base.clone(),
             ours: ours.clone(),
             theirs: theirs.clone(),
             blob,
+            blob_oid,
         });
     }
 
@@ -300,6 +319,20 @@ pub fn read_pending(worktree_git: &GitOperations) -> Result<Option<PendingConfli
 /// no allowed-signers file, unknown signer, altered content — is `false`;
 /// this must fail closed, since it gates whether unreviewed content gets
 /// spliced into a build.
+///
+/// A valid SSH signature over `meta.json` only proves those bytes are
+/// untouched — it says nothing about whether the ref's tree entries still
+/// hold the content that was actually signed off on. `ConflictStage::blob`
+/// is a tree-entry *name* (`"f0"`), not a content hash, so an attacker with
+/// push access to `refs/hitch/resolutions/*` (force-pushable, see the module
+/// header) can leave `meta.json` byte-for-byte identical — signature still
+/// verifies — while repointing the "f0" entry at attacker-chosen content.
+/// So after the signature itself checks out, recompute each file's *actual*
+/// blob OID straight from the commit's tree (`git rev-parse
+/// <commit>:<name>`, independent of whatever bytes `load_resolution` already
+/// read) and require it match `ConflictStage::blob_oid`, which is part of
+/// the signed payload. Any mismatch is exactly as untrusted as a bad
+/// signature — fail closed, do not apply.
 pub fn verify_resolution_signature(git: &GitOperations, res: &Resolution) -> Result<bool> {
     let Some(signature) = res.meta.signature.as_deref() else {
         return Ok(false);
@@ -307,7 +340,21 @@ pub fn verify_resolution_signature(git: &GitOperations, res: &Resolution) -> Res
     let mut unsigned = res.meta.clone();
     unsigned.signature = None;
     let payload = serde_json::to_vec_pretty(&unsigned)?;
-    git.verify_signature_ssh(&payload, signature, &res.meta.recorded_by)
+    if !git.verify_signature_ssh(&payload, signature, &res.meta.recorded_by)? {
+        return Ok(false);
+    }
+
+    for f in &res.meta.files {
+        let actual_oid = match git.rev_parse_opt(&format!("{}:{}", res.commit_oid, f.blob))? {
+            Some(oid) => oid,
+            None => return Ok(false),
+        };
+        if actual_oid != f.blob_oid {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 #[cfg(test)]

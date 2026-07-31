@@ -194,9 +194,27 @@ impl GitOperations {
     /// bypass the `hitch-protection` ruleset, so anything git executes on its
     /// behalf inherits push rights to protected branches. Repository-local
     /// config chooses those programs — `core.hooksPath` picks the hook
-    /// directory, `core.fsmonitor` names a program git runs on status — and
-    /// repository-local config is writable by anyone who can push. So they are
-    /// turned off here rather than trusted.
+    /// directory, `core.fsmonitor` names a program git runs on status.
+    ///
+    /// The threat here is NOT "anyone who can push controls this config" —
+    /// `.git/config` is local-machine state, never transported by `push` or
+    /// `clone`, so a plain push cannot touch it. The real risk is that
+    /// repo-local config is not part of the reviewed tree and may already be
+    /// set by a prior CI job, a shared runner's leftover state, or anyone with
+    /// filesystem access to the checkout — none of which hitch's automation
+    /// should trust to choose a program it then executes with deploy-key
+    /// rights. So these are turned off here rather than trusted.
+    ///
+    /// This is worth spelling out precisely because it is easy to
+    /// over-generalize into "repo-local config is attacker-controlled", which
+    /// is false and contradicts `require_signed_resolutions`'s own root of
+    /// trust: `verify_signature_ssh` reads `gpg.ssh.allowedSignersFile` from
+    /// this exact same repo-local config to decide who to trust for
+    /// resolution signatures. If repo-local config really were reachable by
+    /// push, an attacker would just repoint `allowedSignersFile` at their own
+    /// key instead of bothering to swap a blob. The signing gate's guarantee
+    /// is bounded by control of the checkout (the same threat model as this
+    /// hardening), not by git's push/clone security model.
     const HARDENING_ARGS: &'static [&'static str] = &[
         "-c",
         "core.hooksPath=/dev/null",
@@ -3070,6 +3088,15 @@ impl GitOperations {
     /// allowed-signers file, an unknown signer, a tampered payload. This must
     /// fail closed: a resolution with a defect anywhere in the verification
     /// chain is treated as unsigned, never as verified.
+    ///
+    /// Root of trust: `allowedSignersFile` is read from this repository's
+    /// *local* git config — the same repo-local config `HARDENING_ARGS`'s
+    /// doc comment discusses. It is not transported by `push`/`clone`, so an
+    /// attacker with only push access cannot repoint it. But whoever *does*
+    /// control this checkout (a prior CI job, a shared runner, filesystem
+    /// access to the machine) controls who `require_signed_resolutions`
+    /// trusts — the guarantee is bounded by control of the checkout, not by
+    /// git's push/clone security model.
     pub fn verify_signature_ssh(
         &self,
         payload: &[u8],

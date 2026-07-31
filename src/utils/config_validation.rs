@@ -1,12 +1,27 @@
-//! The one place where bytes read off the `hitch-metadata` branch become a
-//! `HitchConfig`.
+//! The hardened parser for bytes read off the `hitch-metadata` branch,
+//! used by every *mutating* code path (rebuild, promote, demote, release,
+//! approve, ...) that turns `hitch.json` into a `HitchConfig`.
+//!
+//! This is NOT the only place `hitch.json` gets parsed — `src/core/timeline.rs`
+//! (`read_config_at`, reading historical configs from arbitrary past commits
+//! for `hitch timeline`) and `src/commands/status.rs` (`display_diff`, reading
+//! both the committed config and a cwd-local `hitch.json` for a diff preview)
+//! both do a bare `serde_json::from_str` instead. That's a real gap — the size
+//! cap and ref-shape checks below don't apply there — left deliberately
+//! unrouted for now because `timeline.rs` reads configs written by
+//! arbitrarily old versions of hitch, which may have looser name validation
+//! than `validate_name` currently enforces; routing it through here risked
+//! breaking `hitch timeline` on real repositories' real history without
+//! evidence either way. Revisit if either site becomes a demonstrated attack
+//! surface (`status.rs`'s cwd-local read is the more plausible candidate,
+//! since nothing has validated that file yet).
 //!
 //! `hitch-metadata` is a normal branch: anyone who can push to the repository
 //! can rewrite `hitch.json`, and every environment name, base branch and
 //! promoted branch in it ends up in a `git` argv on every machine that runs a
-//! rebuild. So this is a trust boundary, not a convenience parser — bound the
-//! input before parsing it, and prove every name is ref-shaped before it can
-//! steer a command line.
+//! rebuild. So parsing what mutating commands consume is a trust boundary,
+//! not a convenience parser — bound the input before parsing it, and prove
+//! every name is ref-shaped before it can steer a command line.
 //!
 //! Deliberately NOT `#[serde(deny_unknown_fields)]`: `HitchConfig`'s forward
 //! compatibility story (`check_write_compatibility`) depends on a newer config

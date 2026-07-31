@@ -734,6 +734,7 @@ pub fn rebuild_environment_opts(
                     &merge_message,
                     &outcome,
                     &mut confirmed_replay_keys,
+                    config.require_signed_resolutions,
                 )? {
                     composed = resolved;
                     replayed.push(branch.clone());
@@ -1157,6 +1158,20 @@ pub(crate) fn publish_environment_build(
 /// - Without `--yes`, each distinct resolution is confirmed once before it is
 ///   applied; under `--yes` (CI) the explicit flag is the authorization and
 ///   every application is logged loudly with its key and recorder.
+///
+/// `require_signed` is read once by the caller (`rebuild_environment_opts`,
+/// from the `config` it already loaded via `access_metadata_read_only` at the
+/// top of the rebuild) rather than re-read here on every conflicting branch.
+/// This function used to call `access_metadata_read_only` itself, which reruns
+/// `check_metadata_health` (including a `git fetch hitch-metadata`) on every
+/// invocation — inside the per-branch compose loop, that meant one redundant
+/// fetch per held-candidate branch, and a rebuild could hard-abort mid-way
+/// with "hitch-metadata is behind remote" as a new failure mode, on a feature
+/// (`require_signed_resolutions`) most repos never enable. Taking a plain
+/// `bool` instead means this function does no metadata I/O at all, so it
+/// structurally cannot fail open on a metadata read error — the single read
+/// in the caller still propagates its own error via `?`, preserving fail
+/// closed without the redundant fetches.
 fn try_replay_resolution(
     context: &GlobalContext,
     composed: &str,
@@ -1164,6 +1179,7 @@ fn try_replay_resolution(
     merge_message: &str,
     outcome: &crate::utils::git_operations::MergeTreeCompose,
     confirmed_keys: &mut std::collections::HashSet<String>,
+    require_signed: bool,
 ) -> Result<Option<String>> {
     use crate::utils::resolutions;
 
@@ -1180,18 +1196,6 @@ fn try_replay_resolution(
     // it must carry a signature from a signer the repository trusts —
     // `recorded_by` alone is self-reported by whoever wrote the ref and
     // proves nothing.
-    // Whether signing is even required is itself read from `hitch.json`, so a
-    // failure to read metadata here (e.g. `check_metadata_health` reporting
-    // hitch-metadata is behind remote) must not silently resolve to "not
-    // required" — that would fail open on the one question that decides
-    // whether the whole signature gate is active. Propagate instead: the
-    // caller (`rebuild_environment_opts`) already aborts the whole rebuild on
-    // any `Err` from this function (see the `?` at its call site), which
-    // matches how a `Halt`-policy conflict already aborts the rebuild — this
-    // is not a "hold this branch and keep going" situation, since we cannot
-    // even determine whether replay is authorized.
-    let require_signed =
-        access_metadata_read_only(context, |config| Ok(config.require_signed_resolutions))?;
     if require_signed && !resolutions::verify_resolution_signature(context.git(), &res)? {
         context.log_warning(&format!(
             "Recorded resolution {} for '{}' is not signed by a trusted signer and this \
@@ -1330,14 +1334,22 @@ mod try_replay_resolution_tests {
     /// not required" instead of surfacing. That fails open on the one
     /// question that decides whether the whole signature gate is active.
     ///
+    /// `try_replay_resolution` no longer reads metadata itself (see its doc
+    /// comment): `require_signed` is now a plain `bool` the caller
+    /// (`rebuild_environment_opts`) reads once via `access_metadata_read_only`
+    /// and passes down, so this function structurally cannot fail open on a
+    /// metadata read error — it does no metadata I/O at all. The fail-closed
+    /// property this test guards now lives entirely in that single read, so
+    /// this exercises `access_metadata_read_only` directly against the same
+    /// "behind remote" repo shape the original bug was found with, then
+    /// separately confirms `try_replay_resolution` — given `require_signed`
+    /// directly, as the real caller now supplies it — still holds an unsigned
+    /// resolution rather than applying it.
+    ///
     /// This constructs a repo where `refs/remotes/origin/hitch-metadata` is
     /// ahead of local `hitch-metadata` — no real "origin" remote or network
     /// fetch needed, since `is_branch_behind_remote` only ever compares those
-    /// two local refs — and a recorded (unsigned) resolution matching a
-    /// fabricated conflict, so `try_replay_resolution` gets past the
-    /// `load_resolution` lookup and reaches the `require_signed` read. Before
-    /// the fix this returned `Ok(None)` (silently held, signing bypassed);
-    /// after the fix it must return `Err` mentioning the metadata problem.
+    /// two local refs.
     #[test]
     fn require_signed_check_fails_closed_on_metadata_health_error() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -1421,25 +1433,39 @@ mod try_replay_resolution_tests {
             tree_oid: tree,
             conflicted_stages: stages,
         };
-        let mut confirmed = HashSet::new();
 
-        let result = try_replay_resolution(
+        // The single read `rebuild_environment_opts` now relies on to learn
+        // whether signing is required must surface the metadata-health
+        // failure, not silently resolve to "not required".
+        let read_result =
+            access_metadata_read_only(&context, |config| Ok(config.require_signed_resolutions));
+        let err = read_result.expect_err(
+            "an unreadable/health-failing hitch-metadata must surface as an error, not silently \
+             disable the signing requirement",
+        );
+        assert!(
+            err.to_string().contains("behind remote"),
+            "expected the metadata health failure to surface, got: {}",
+            err
+        );
+
+        // `try_replay_resolution` itself now takes `require_signed` as a
+        // plain bool and does no metadata I/O, so it must still hold this
+        // unsigned resolution when told signing is required — proving the
+        // gate works correctly from the caller-supplied value alone.
+        let mut confirmed = HashSet::new();
+        let replay_result = try_replay_resolution(
             &context,
             &metadata_sha,
             "branch-b",
             "merge message",
             &outcome,
             &mut confirmed,
-        );
-
-        let err = result.expect_err(
-            "an unreadable/health-failing hitch-metadata during a replay attempt must surface \
-             as an error, not silently disable the signing requirement",
-        );
+            true,
+        )?;
         assert!(
-            err.to_string().contains("behind remote"),
-            "expected the metadata health failure to surface, got: {}",
-            err
+            replay_result.is_none(),
+            "an unsigned resolution must be held when require_signed is true"
         );
 
         Ok(())

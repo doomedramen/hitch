@@ -96,8 +96,16 @@ covered.
   English stderr substrings), `GIT_TERMINAL_PROMPT=0`, `stdin(Stdio::null())`
   (see the gotcha below), and the hardening flags `core.hooksPath=/dev/null`
   and `core.fsmonitor=false` — hitch runs under a deploy key that bypasses
-  branch protection, so anything repo-local config can make git execute
-  inherits those rights. `run_git_plumbing_command` adds
+  branch protection, so anything repo-local config makes git execute inherits
+  those rights. This is NOT because repo-local config is reachable by push —
+  `.git/config` is local-machine state, never transported by `push`/`clone` —
+  the real risk is a prior CI job, a shared runner, or anyone with filesystem
+  access to the checkout leaving config hitch's automation shouldn't trust.
+  Note this is also `require_signed_resolutions`'s own root of trust
+  (`gpg.ssh.allowedSignersFile` is read from this same repo-local config), so
+  that feature's guarantee is bounded by control of the checkout, not by
+  git's push/clone security model — see the doc comments on `HARDENING_ARGS`
+  and `verify_signature_ssh`. `run_git_plumbing_command` adds
   `GIT_CONFIG_NOSYSTEM=1` and is for object-database-only calls; network calls
   must not use it, because on macOS the system config is where
   `credential.helper` lives. `clippy.toml` denies `std::process::Command::new`

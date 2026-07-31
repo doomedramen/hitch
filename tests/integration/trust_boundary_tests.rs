@@ -253,79 +253,6 @@ mod tests {
         Ok(())
     }
 
-    /// With `require_signed_resolutions` on, a planted resolution ref — the
-    /// shape an attacker with push access creates — must not be replayed into
-    /// a build, even under `--yes --replay-resolutions`.
-    #[test]
-    fn test_unsigned_resolution_is_not_replayed_when_signing_required() -> anyhow::Result<()> {
-        let framework = HitchTestFramework::new()?;
-
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            env.hitch
-                .run()
-                .args(&["add", "dev"])
-                .execute()?
-                .assert_success();
-
-            // Build two branches that conflict on the same file. `hitch
-            // promote` runs a pre-promote compatibility preflight that would
-            // reject the second branch outright, so — exactly as
-            // `resolve_tests.rs`'s `setup_and_record` does — the branches are
-            // injected directly into `hitch.json` to get them both into the
-            // environment's promoted list without going through that gate.
-            for (branch, content) in [("feat-a", "A\n"), ("feat-b", "B\n")] {
-                env.git.run(&["checkout", "main"])?.assert_success();
-                env.git.run(&["checkout", "-b", branch])?.assert_success();
-                env.fs.write_file("clash.txt", content)?;
-                env.git.run(&["add", "."])?.assert_success();
-                env.git
-                    .run(&["commit", "-m", &format!("{} edits clash.txt", branch)])?
-                    .assert_success();
-                env.git.run(&["checkout", "main"])?.assert_success();
-            }
-
-            env.git
-                .run(&["checkout", "hitch-metadata"])?
-                .assert_success();
-            let raw = env.fs.read_file("hitch.json")?;
-            let mut config: serde_json::Value = serde_json::from_str(&raw)?;
-            config["require_signed_resolutions"] = serde_json::Value::Bool(true);
-            config["environments"]["dev"]["branches"] = serde_json::json!(["feat-a", "feat-b"]);
-            env.fs
-                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
-            env.git.run(&["add", "hitch.json"])?.assert_success();
-            env.git
-                .run(&["commit", "-m", "test: require signed resolutions"])?
-                .assert_success();
-            env.git.run(&["checkout", "main"])?.assert_success();
-
-            // Rebuild with replay enabled. There is no signed resolution, so
-            // the conflicting branch must be held, not silently composed.
-            let result = env
-                .hitch
-                .run()
-                .args(&[
-                    "--no-push",
-                    "rebuild",
-                    "dev",
-                    "--replay-resolutions",
-                    "--yes",
-                ])
-                .execute()?;
-
-            let combined = format!("{}{}", result.stdout(), result.stderr());
-            assert!(
-                !combined.contains("Applying recorded resolution"),
-                "an unsigned resolution was replayed while signing was required:\n{}",
-                combined
-            );
-
-            Ok::<(), anyhow::Error>(())
-        });
-
-        Ok(())
-    }
-
     /// Set up `dev` with `branch-a`/`branch-b` conflicting on `shared.txt` and
     /// start a Mode B resolve session on `branch-b`, staging `resolved-both`
     /// as the fix. Returns the resolve worktree path so the caller can decide
@@ -650,6 +577,197 @@ mod tests {
                 !combined.contains("Reused recorded resolution"),
                 "a resolution signed by an untrusted signer was replayed:\n{}",
                 combined
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Test-only raw `git mktree`: rebuilds a tree from a hand-crafted
+    /// `<mode> blob <oid>\t<name>` spec fed over stdin. Used only to simulate
+    /// the blob-swap attack below — the test harness's `GitCommandRunner`
+    /// nulls stdin (see the module doc comment), so this needs its own
+    /// piped-stdin spawn, same rationale as `configure_ssh_signing`'s
+    /// `ssh-keygen` call.
+    #[allow(clippy::disallowed_methods)]
+    fn git_mktree(dir: &std::path::Path, tree_spec: &str) -> String {
+        use std::io::Write;
+        let mut child = std::process::Command::new("git")
+            .args(["mktree"])
+            .current_dir(dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to spawn git mktree");
+        child
+            .stdin
+            .take()
+            .expect("stdin configured as piped")
+            .write_all(tree_spec.as_bytes())
+            .expect("failed to write tree spec to git mktree");
+        let output = child
+            .wait_with_output()
+            .expect("failed to wait on git mktree");
+        assert!(
+            output.status.success(),
+            "git mktree failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The critical regression test: a resolution's SSH signature covers
+    /// `meta.json`'s bytes, but `ConflictStage.blob` used to be only a
+    /// tree-entry *name* (`"f0"`), not a content hash — so nothing about the
+    /// signed payload actually pinned down what content lived at that tree
+    /// entry. `refs/hitch/resolutions/*` is force-pushable
+    /// (`+refs/hitch/resolutions/*:refs/hitch/resolutions/*`), so an attacker
+    /// with push access could take a legitimately signed resolution, leave
+    /// `meta.json` byte-for-byte identical (signature still verifies), swap
+    /// the "f0" tree entry to point at attacker-chosen content, and
+    /// force-push. This reproduces exactly that attack end-to-end: record a
+    /// real signed resolution, then rebuild its ref's tree with the resolved
+    /// blob swapped out (meta.json's own tree entry untouched), and assert
+    /// the tampered resolution is held rather than replayed, and that the
+    /// evil content never lands on the built branch.
+    #[test]
+    fn test_signed_resolution_with_swapped_blob_content_is_held() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let keys_dir = sibling_path(env, "ssh-keys-swap");
+            configure_ssh_signing(env, &keys_dir, "hitch-test@example.com")?;
+            env.git
+                .run(&["config", "user.email", "hitch-test@example.com"])?
+                .assert_success();
+
+            setup_conflict_and_start_resolve(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            // Locate the recorded resolution ref this just created.
+            let refs_out = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname)",
+                    "refs/hitch/resolutions/",
+                ])?
+                .stdout();
+            let line = refs_out
+                .lines()
+                .next()
+                .expect("expected exactly one recorded resolution ref");
+            let (refname, commit_oid) = line
+                .split_once(' ')
+                .expect("for-each-ref line must have a refname and an oid");
+            let commit_oid = commit_oid.trim().to_string();
+
+            let tree_oid = env
+                .git
+                .run(&["rev-parse", &format!("{}^{{tree}}", commit_oid)])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Parse the tree's entries so the rebuilt tree below can keep
+            // meta.json's entry byte-identical and swap only the resolved
+            // content entry ("f0").
+            let ls_out = env.git.run(&["ls-tree", &tree_oid])?.stdout();
+            let entries: Vec<(String, String, String)> = ls_out
+                .lines()
+                .map(|line| {
+                    let (meta_part, name) = line.split_once('\t').expect("ls-tree line has a tab");
+                    let mut parts = meta_part.split_whitespace();
+                    let mode = parts.next().expect("mode").to_string();
+                    let _kind = parts.next().expect("kind");
+                    let oid = parts.next().expect("oid").to_string();
+                    (mode, oid, name.to_string())
+                })
+                .collect();
+            let (_, _, target_name) = entries
+                .iter()
+                .find(|(_, _, name)| name != "meta.json")
+                .cloned()
+                .expect("expected a resolved-content blob entry besides meta.json");
+
+            // Hash attacker-chosen content into the object database.
+            let evil_path = sibling_path(env, "evil-content.txt");
+            std::fs::write(&evil_path, "EVIL CONTENT\n")?;
+            let evil_oid = env
+                .git
+                .run(&["hash-object", "-w", &evil_path.to_string_lossy()])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Rebuild the tree with only the resolved-content entry
+            // repointed at the evil blob; meta.json's entry (name AND oid)
+            // is untouched, so meta.json's bytes — and therefore the
+            // signature over them — are unaffected.
+            let mut mktree_input = String::new();
+            for (mode, oid, name) in &entries {
+                let oid = if *name == target_name { &evil_oid } else { oid };
+                mktree_input.push_str(&format!("{} blob {}\t{}\n", mode, oid, name));
+            }
+            let new_tree = git_mktree(&env.temp_dir, &mktree_input);
+            let new_commit = env
+                .git
+                .run(&[
+                    "commit-tree",
+                    &new_tree,
+                    "-m",
+                    "tampered resolution (blob swapped, meta.json untouched)",
+                ])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.git
+                .run(&["update-ref", refname, &new_commit])?
+                .assert_success();
+
+            require_signed_resolutions(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?;
+
+            let combined = format!("{}{}", result.stdout(), result.stderr());
+            assert!(
+                !combined.contains("Reused recorded resolution"),
+                "a resolution with a swapped blob (meta.json byte-identical) was replayed:\n{}",
+                combined
+            );
+
+            let dev_content = env.git.run(&["show", "dev:shared.txt"])?.stdout();
+            assert!(
+                !dev_content.contains("EVIL CONTENT"),
+                "tampered content must never land in the built branch, got:\n{}",
+                dev_content
             );
 
             Ok::<(), anyhow::Error>(())
