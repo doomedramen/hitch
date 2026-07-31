@@ -115,13 +115,18 @@ covered.
   for repo discovery, never for merges.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
-- `src/utils/pending_resync.rs` — crash recovery for the one window
-  publishing cannot make atomic (ref moved, checkouts not yet updated).
-  Records intent at `refs/hitch/pending-resync/<branch>`; `recover` runs from
-  `main.rs` for mutating commands only, so it is always under the repo lock.
-  It repairs a checkout only when that tree is *provably* exactly the old tip
-  — never on the dead process's say-so — so an edited tree is reported, not
-  reset.
+- `src/utils/publish_journal.rs` — the record of what a publish still owes,
+  for the effects git cannot make atomic. The publish itself is one ref
+  transaction (see `publish_environment_build`); what remains outside it is the
+  checkout resync and the push to origin. Both obligations are written to
+  `refs/hitch/publish/<branch>` before the ref moves, inside the same
+  transaction, and cleared as each completes; `recover` runs from `main.rs` for
+  mutating commands only, so it is always under the repo lock. It repairs a
+  checkout only when that tree is *provably* exactly the old tip — never on the
+  dead process's say-so — so an edited tree is reported, not reset, and an owed
+  push is reported rather than performed. Legacy
+  `refs/hitch/pending-resync/<branch>` records are still read so an upgrade
+  mid-publish recovers.
 - `src/utils/resolutions.rs` — phase-5 shared conflict resolutions:
   content-addressed by exact merge-stage blob OIDs (NOT git-rerere — see the
   module header for why that matters), stored as `refs/hitch/resolutions/*`.
@@ -189,20 +194,23 @@ covered.
   atomic ref transaction; `hitch release` and `hitch resolve` do not — yet.**
   `publish_environment_build` in `prelude.rs`, built on
   `GitOperations::ref_transaction`, moves `refs/heads/<env>` under
-  compare-and-swap, writes the pending-resync intent, and archives the
-  replaced tip in the same batch — no rename-and-recreate dance, no sequence
-  of separate `update-ref` calls, all or nothing. Reuse that function for
-  anything that produces a new environment branch commit rather than
-  hand-rolling the publish step again. But `hitch release`
-  (`src/commands/release.rs`) and `hitch resolve`'s branch-landing path
-  (`src/commands/resolve.rs`) still use the older two-step sequence —
-  `pending_resync::record()` followed by a separate `update_ref_cas` call —
-  so a crash between those two calls is still a real, un-recovered-from
-  window for those two commands specifically. They were deliberately not
-  migrated as part of the transaction-ization phase (out of scope for that
-  phase, not overlooked); closing that gap is future work, not something to
-  assume already done because `publish_environment_build` looks solved.
-  `refs/hitch/prev/*` and `refs/hitch/backup/*` (both written only by
+  compare-and-swap, writes the publish-journal intent (including whether a
+  push is owed), and archives the replaced tip in the same batch — no
+  rename-and-recreate dance, no sequence of separate `update-ref` calls, all
+  or nothing. Reuse that function for anything that produces a new
+  environment branch commit rather than hand-rolling the publish step again.
+  But `hitch release` (`src/commands/release.rs`) and `hitch resolve`'s
+  branch-landing path (`src/commands/resolve.rs`) still use the older
+  two-step sequence — `publish_journal::record()` followed by a separate
+  `update_ref_cas` call, and an unconditional `clear()` immediately after the
+  resync rather than surviving until the push resolves — so a crash between
+  the CAS and that `clear()` call is still a real, un-recovered-from window
+  for those two commands specifically, and neither tracks its push obligation
+  through the actual push (only through that same narrow window). They were
+  deliberately not migrated as part of the transaction-ization phase (out of
+  scope for that phase, not overlooked); closing that gap is future work, not
+  something to assume already done because `publish_environment_build` looks
+  solved. `refs/hitch/prev/*` and `refs/hitch/backup/*` (both written only by
   `publish_environment_build`, currently byte-identical to each other every
   publish — see the doc comment at the write site in `prelude.rs` for why
   both still exist) are written with unconditional-overwrite semantics
@@ -213,25 +221,35 @@ covered.
   the later tip archived under that timestamp; the earlier one is not lost
   from the object database, just no longer reachable via this ref. `prev/`'s
   "rollback is a one-ref flip" guarantee is therefore per-timestamp, not
-  per-publish, in that rare case. The pending-resync ref edit inside that
+  per-publish, in that rare case. The publish-journal ref edit inside that
   transaction uses `expected_old: Some(String::new())` (unconditional write),
   not `None` (which this codebase's `ref_transaction` maps to "must not
-  exist") — a leftover pending-resync record is documented in
-  `pending_resync`'s module doc as benign and recoverable, so it must never
-  be able to fail this transaction.
+  exist") — a leftover publish-journal record is documented in
+  `publish_journal`'s module doc as benign and recoverable, so it must never
+  be able to fail this transaction. **Do not touch that `expected_old` value**
+  when working near this code — see the module doc and the regression test
+  `publish_survives_leftover_publish_journal_ref` in `prelude.rs`, added
+  after this exact CAS was once wrongly set to `None` and turned an
+  unparseable leftover record into a permanent, self-perpetuating publish
+  wedge for that environment.
 - **Moving a branch ref means resyncing every checkout attached to it.**
   `scan_checkouts_on_branch` before the ref transaction, `resync_checkouts`
   after — both in `prelude.rs`, both already wired into
   `publish_environment_build` and `hitch release`. See the gotcha below for
   why the scan cannot be folded into the resync. The intent is written with
-  `pending_resync::record_blob` so its ref update rides inside that same
-  transaction, then dropped with `pending_resync::clear` once the resync has
-  actually happened, so a crash in between is recoverable.
+  `publish_journal::record_blob` so its ref update rides inside that same
+  transaction; `publish_environment_build` keeps the record in place until
+  every obligation it describes is actually settled — cleared immediately
+  only if no push is owed, otherwise cleared (and the push obligation marked
+  done via `publish_journal::mark_push_done`) once the push succeeds, cleared
+  if the user declines the push prompt, and left in place on push failure, so
+  a crash in any of those windows is recoverable or at least reported by
+  `recover` on the next mutating command.
 - **Compare checkout paths with `GitOperations::same_checkout_path`, never
   `==`.** `git worktree list` reports fully resolved paths; on macOS the temp
   dir and plenty of real project paths sit behind symlinks, so a string
   comparison silently never matches and whatever it gated is quietly skipped.
-  This has already caused one bug in `pending_resync`'s recovery.
+  This has already caused one bug in `publish_journal`'s recovery.
 
 ## Concrete gotchas, found the hard way
 

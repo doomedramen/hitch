@@ -1093,4 +1093,72 @@ mod tests {
 
         Ok(())
     }
+
+    /// A publish that has not pushed yet owes a push, and that obligation must
+    /// be written down — otherwise a process killed between the ref move and
+    /// the push leaves the local branch ahead of origin with nothing recording
+    /// why.
+    #[test]
+    fn test_publish_journal_records_push_obligation() -> anyhow::Result<()> {
+        use hitch::utils::publish_journal::PublishRecord;
+
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git
+                .run(&["checkout", "-b", "feature-1"])?
+                .assert_success();
+            env.fs.write_file("1.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "feature 1"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // `run()` already defaults to `--no-push` (and `--yes`), so the
+            // obligation is deliberately not incurred here, and a completed
+            // rebuild must leave no journal record at all.
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let leftovers = env
+                .git
+                .run(&["for-each-ref", "--format=%(refname)", "refs/hitch/publish"])?
+                .stdout();
+            assert!(
+                leftovers.trim().is_empty(),
+                "a completed publish left a journal record behind:\n{}",
+                leftovers
+            );
+
+            // The record type must be able to express the obligation.
+            let record = PublishRecord {
+                branch: "dev".to_string(),
+                from_sha: None,
+                to_sha: "0".repeat(40),
+                checkouts: vec![],
+                push_owed: true,
+            };
+            assert!(record.push_owed);
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

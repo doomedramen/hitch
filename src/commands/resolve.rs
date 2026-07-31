@@ -407,6 +407,12 @@ fn finish_mode_a(
             from_sha: Some(from_sha.to_string()),
             to_sha: new_sha.to_string(),
             checkouts: crate::utils::prelude::checkout_paths(&checkouts),
+            // This path still clears the record right after resync, before the
+            // push below runs — see the "old two-step sequence" note in
+            // AGENTS.md. `push_owed` only protects the narrow crash window
+            // between the CAS landing and that clear() call, not through the
+            // push itself.
+            push_owed: context.should_push(),
         },
     )?;
 

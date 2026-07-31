@@ -1827,7 +1827,7 @@ impl GitOperations {
         }
     }
 
-    /// Full names of every ref under `prefix` (e.g. `refs/hitch/pending-resync`).
+    /// Full names of every ref under `prefix` (e.g. `refs/hitch/publish`).
     pub fn list_refs_under(&self, prefix: &str) -> Result<Vec<String>> {
         let output =
             self.run_git_plumbing_command(&["for-each-ref", "--format=%(refname)", prefix])?;

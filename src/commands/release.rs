@@ -335,6 +335,12 @@ fn perform_release_core(
             from_sha: Some(target_sha.clone()),
             to_sha: new_sha.clone(),
             checkouts: crate::utils::prelude::checkout_paths(&target_checkouts),
+            // This path still clears the record right after resync, before the
+            // push below runs — see the "old two-step sequence" note in
+            // AGENTS.md. `push_owed` only protects the narrow crash window
+            // between the CAS landing and that clear() call, not through the
+            // push itself.
+            push_owed: context.should_push(),
         },
     )?;
 

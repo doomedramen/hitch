@@ -1,36 +1,50 @@
-//! Crash recovery for the one window that publishing cannot make atomic.
+//! The record of what a publish still owes, for the effects git cannot make
+//! atomic.
 //!
-//! Publishing a rebuild or release is two steps that git gives us no way to
-//! fuse: move `refs/heads/<branch>` (a CAS `update-ref`), then bring every
-//! checkout attached to that branch back in line with it. If the process dies
-//! between them — Ctrl-C, a crash, a killed CI job — the obligation to resync
-//! existed only in that process's memory, and the user is left with a checkout
-//! whose working tree silently disagrees with its own branch, forever. That is
-//! precisely the failure this whole area exists to eliminate, so it cannot be
-//! left to chance.
+//! Publishing a rebuild or release moves `refs/heads/<branch>` with a single
+//! CAS `update-ref`, but two effects remain outside that transaction: bring
+//! every checkout attached to the branch back in line with it, and push the
+//! new tip to origin. If the process dies between the ref move and either of
+//! those — Ctrl-C, a crash, a killed CI job — the obligation existed only in
+//! that process's memory. For the resync, that leaves a checkout whose
+//! working tree silently disagrees with its own branch, forever. For the
+//! push, it leaves the local branch ahead of origin with nothing recording
+//! why. That is precisely the failure this whole area exists to eliminate, so
+//! it cannot be left to chance.
 //!
 //! So the intent is written down first. Before the ref moves, a record lands
-//! at `refs/hitch/pending-resync/<branch>` naming the branch, the tip it is
-//! moving from, the tip it is moving to, and the checkouts that will need
-//! updating. It is deleted once the resync has actually happened. A record
-//! found later therefore means "someone died mid-publish here".
+//! at `refs/hitch/publish/<branch>` naming the branch, the tip it is moving
+//! from, the tip it is moving to, the checkouts that will need updating, and
+//! whether a push is owed. The resync and push obligations are cleared
+//! independently, as each completes — a record found later with either still
+//! set therefore means "someone died mid-publish here".
 //!
 //! **Recovery never guesses.** It repairs a checkout only when that checkout's
 //! working tree and index are provably *exactly* the old tip — clean against
 //! `from_sha`, nothing staged, nothing modified. That is a fact about the disk
 //! right now, not a claim inherited from the dead process, so a user who has
 //! since started editing is never reset out from under. Anything else is
-//! reported with the command to run and left untouched.
+//! reported with the command to run and left untouched. An owed push is
+//! likewise only ever reported, never performed — pushing on someone's behalf
+//! during a startup recovery pass is a network side effect nobody asked for.
+//!
+//! Legacy `refs/hitch/pending-resync/<branch>` records (written before this
+//! journal covered the push) are still read, so a hitch upgrade partway
+//! through a publish still finishes it rather than stranding it.
 
 use crate::commands::global_context::GlobalContext;
 use crate::utils::git_operations::GitOperations;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-const REF_PREFIX: &str = "refs/hitch/pending-resync";
+const REF_PREFIX: &str = "refs/hitch/publish";
+
+/// The namespace this journal used before it covered the push step. Read on
+/// recovery so a hitch upgrade partway through a publish still finishes it.
+const LEGACY_REF_PREFIX: &str = "refs/hitch/pending-resync";
 
 /// A publish that had moved (or was about to move) a branch ref, and the
-/// checkouts it still owed an update to.
+/// checkouts and push it still owed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishRecord {
     #[serde(default)]
@@ -44,6 +58,12 @@ pub struct PublishRecord {
     /// Checkout paths that had the branch attached when the publish started.
     #[serde(default)]
     pub checkouts: Vec<String>,
+    /// Whether this publish still owes a push to origin. Set when the publish
+    /// intends to push; cleared by `mark_push_done` once it has. A record found
+    /// later with this still set means the process died between moving the ref
+    /// and telling the remote.
+    #[serde(default)]
+    pub push_owed: bool,
 }
 
 fn ref_name(branch: &str) -> String {
@@ -80,23 +100,49 @@ pub fn clear(context: &GlobalContext, branch: &str) {
     let _ = context.git().delete_ref(&ref_name(branch));
 }
 
-/// Every pending record currently in the repository.
+/// Every pending record currently in the repository, from both the current
+/// namespace and the legacy one an in-flight upgrade may have left behind.
 pub fn list(git: &GitOperations) -> Result<Vec<(String, PublishRecord)>> {
     let mut found = Vec::new();
 
-    for refname in git.list_refs_under(REF_PREFIX)? {
-        let Ok(payload) = git.cat_file_blob(&refname) else {
-            continue;
-        };
-        match serde_json::from_slice::<PublishRecord>(&payload) {
-            Ok(pending) => found.push((refname, pending)),
-            // A record we can't parse is not something to act on, but it is
-            // also not something to delete silently — leave it for `doctor`.
-            Err(_) => continue,
+    for prefix in [REF_PREFIX, LEGACY_REF_PREFIX] {
+        for refname in git.list_refs_under(prefix)? {
+            let Ok(payload) = git.cat_file_blob(&refname) else {
+                continue;
+            };
+            match serde_json::from_slice::<PublishRecord>(&payload) {
+                Ok(record) => found.push((refname, record)),
+                // A record we can't parse is not something to act on, but it is
+                // also not something to delete silently — leave it for `doctor`.
+                Err(_) => continue,
+            }
         }
     }
 
     Ok(found)
+}
+
+/// Clear the push obligation on `branch`'s record, leaving the resync
+/// obligation intact.
+///
+/// The two obligations are cleared separately because they complete at
+/// different times: the resync happens locally and immediately, the push
+/// happens afterwards and can be declined or fail.
+pub fn mark_push_done(context: &GlobalContext, branch: &str) -> Result<()> {
+    let refname = ref_name(branch);
+    let Ok(payload) = context.git().cat_file_blob(&refname) else {
+        return Ok(());
+    };
+    let Ok(mut record) = serde_json::from_slice::<PublishRecord>(&payload) else {
+        return Ok(());
+    };
+    if !record.push_owed {
+        return Ok(());
+    }
+    record.push_owed = false;
+    let updated = serde_json::to_vec_pretty(&record)?;
+    let blob = context.git().hash_object_bytes(&updated)?;
+    context.git().update_ref(&refname, &blob)
 }
 
 /// Finish any publish that died before it could resync, then drop its record.
@@ -124,6 +170,15 @@ pub fn recover(context: &GlobalContext) -> Result<()> {
 
         for path in &record.checkouts {
             repair_checkout(context, &record, path);
+        }
+
+        if record.push_owed {
+            context.log_warning(&format!(
+                "A previous '{}' publish moved the branch but was interrupted before it \
+                 could push. The local branch is ahead of origin. To finish it:\n  \
+                 hitch push {} -f",
+                record.branch, record.branch
+            ));
         }
 
         let _ = context.git().delete_ref(&refname);
