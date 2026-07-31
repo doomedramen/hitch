@@ -420,13 +420,16 @@ a recovery path with no test. Two things learned writing it:
   a second look.
 
 The `push-succeeded` abort point (added in Task 12, past what the original
-plan specified) confirmed a real, minor find: `publish_journal::recover`'s
-"ahead of origin" warning fires whenever a record's `push_owed` is still
-`true`, with no way to distinguish "the push never happened" from "the push
-landed but the journal wasn't told yet" (the process can die between
+plan specified) confirmed a real find: a record with `push_owed: true` does
+not by itself mean the push never happened — the process can die between
 `force_push_with_deploy_key_if_configured` returning `Ok(())` and
-`mark_push_done`/`clear` running). In the latter case the branch is not
-actually ahead of origin, so the warning's suggested fix
-(`hitch push <branch> -f`) is redundant, not wrong — the exact text was
-observed in the test and is left as-is; fixing it is a follow-up, not part
-of this task.
+`mark_push_done`/`clear` running, and by that point the push has already
+landed. The two cases ARE distinguishable: `record_pushed_tip` (documented
+above, ~70 lines up) updates `refs/remotes/origin/<branch>` as part of a
+successful push, before either of those calls, so `recover()` compares that
+ref against the record's `to_sha` before deciding what to do. A match means
+the push already landed — log it and drop the record silently, no warning.
+A mismatch means the push is genuinely still owed — warn as before, but
+leave the record in place (rather than deleting it) so the next mutating
+command's `recover()` sees it and warns again, instead of the obligation
+being reported once and then permanently forgotten.

@@ -73,12 +73,24 @@ pub struct PublishRecord {
 /// step and assert that recovery converges. `std::process::abort` rather than a
 /// normal exit, because the whole point is to skip every destructor and
 /// cleanup path exactly as a `kill -9` would.
+///
+/// Gated on `debug_assertions` so a release build compiles this out entirely
+/// (see the `not(debug_assertions)` twin below) — otherwise anyone able to
+/// set an environment variable on a production `hitch` process (a shared CI
+/// runner, anyone with filesystem/environment access to where hitch runs)
+/// could abort a real publish mid-flight. `just test` builds and runs
+/// against the debug profile (`CARGO_BIN_EXE_hitch`), so `debug_assertions`
+/// is true for the whole crash-fuzz suite.
+#[cfg(debug_assertions)]
 pub fn maybe_abort_for_test(point: &str) {
     if std::env::var("HITCH_TEST_ABORT_AFTER").as_deref() == Ok(point) {
         eprintln!("hitch: aborting after '{}' (HITCH_TEST_ABORT_AFTER)", point);
         std::process::abort();
     }
 }
+
+#[cfg(not(debug_assertions))]
+pub fn maybe_abort_for_test(_point: &str) {}
 
 fn ref_name(branch: &str) -> String {
     // Branch names contain '/'; the ref path nests accordingly, which is fine
@@ -127,7 +139,11 @@ pub fn list(git: &GitOperations) -> Result<Vec<(String, PublishRecord)>> {
             match serde_json::from_slice::<PublishRecord>(&payload) {
                 Ok(record) => found.push((refname, record)),
                 // A record we can't parse is not something to act on, but it is
-                // also not something to delete silently — leave it for `doctor`.
+                // also not something to delete silently. Nothing currently
+                // surfaces it, though — `doctor` has no check for stuck
+                // publish-journal refs today; this is left in place for a
+                // human to find by hand (`git for-each-ref refs/hitch/publish`)
+                // rather than deleted, in case that ever changes.
                 Err(_) => continue,
             }
         }
@@ -187,12 +203,43 @@ pub fn recover(context: &GlobalContext) -> Result<()> {
         }
 
         if record.push_owed {
-            context.log_warning(&format!(
-                "A previous '{}' publish moved the branch but was interrupted before it \
-                 could push. The local branch is ahead of origin. To finish it:\n  \
-                 hitch push {} -f",
-                record.branch, record.branch
-            ));
+            // Unlike the resync obligation, a push is never actually
+            // discharged by anything that runs after the crash — it either
+            // already landed (the process died between the push succeeding
+            // and `mark_push_done`/`clear` running; see
+            // `force_push_with_deploy_key_if_configured` /
+            // `record_pushed_tip` in `prelude.rs`, which update
+            // `refs/remotes/origin/<branch>` as part of a successful push,
+            // before either of those) or it genuinely never happened. Tell
+            // those apart before saying anything, and only drop the record
+            // once the obligation is actually gone — warning once and then
+            // deleting the record regardless would either lie (claiming a
+            // push is owed when it already landed) or permanently forget a
+            // real one (deleting the only place recording that it didn't).
+            let remote_tip = context
+                .git()
+                .rev_parse_opt(&format!("refs/remotes/origin/{}", record.branch))
+                .ok()
+                .flatten();
+            if remote_tip.as_deref() == Some(record.to_sha.as_str()) {
+                context.log_info(&format!(
+                    "A previous '{}' publish was interrupted, but its push had already \
+                     completed before the process died. Nothing to do.",
+                    record.branch
+                ));
+            } else {
+                context.log_warning(&format!(
+                    "A previous '{}' publish moved the branch but was interrupted before it \
+                     could push. The local branch is ahead of origin. To finish it:\n  \
+                     hitch push {} -f",
+                    record.branch, record.branch
+                ));
+                // The push obligation is still genuinely owed — leave the
+                // record in place so the next mutating command's `recover()`
+                // finds it and warns again, instead of silently forgetting
+                // it after this one report.
+                continue;
+            }
         }
 
         let _ = context.git().delete_ref(&refname);
