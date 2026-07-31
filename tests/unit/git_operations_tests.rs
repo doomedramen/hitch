@@ -1825,4 +1825,80 @@ mod tests {
 
         Ok(())
     }
+
+    /// The whole point of a transaction: one bad compare-and-swap in the batch
+    /// must leave every other ref in the batch untouched.
+    #[test]
+    fn test_ref_transaction_is_all_or_nothing() -> Result<()> {
+        use hitch::utils::git_operations::RefEdit;
+
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "one"])?.assert_success();
+            let first = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.fs.write_file("b.txt", "b")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "two"])?.assert_success();
+            let second = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let git = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            // Edit 1 is valid (create a fresh ref). Edit 2 has a deliberately
+            // wrong expected_old, so the batch must be rejected entirely.
+            let edits = vec![
+                RefEdit::Create {
+                    refname: "refs/hitch/test/alpha".to_string(),
+                    new_oid: second.clone(),
+                },
+                RefEdit::Update {
+                    refname: "refs/hitch/test/beta".to_string(),
+                    new_oid: second.clone(),
+                    expected_old: Some(first.clone()),
+                },
+            ];
+
+            let result = git.ref_transaction(&edits, "hitch: test transaction");
+            assert!(result.is_err(), "a bad CAS must fail the whole transaction");
+
+            assert!(
+                git.rev_parse_opt("refs/hitch/test/alpha")?.is_none(),
+                "the valid edit must have been rolled back with the bad one"
+            );
+
+            // And the happy path must actually apply every edit.
+            let ok = vec![
+                RefEdit::Create {
+                    refname: "refs/hitch/test/alpha".to_string(),
+                    new_oid: first.clone(),
+                },
+                RefEdit::Create {
+                    refname: "refs/hitch/test/gamma".to_string(),
+                    new_oid: second.clone(),
+                },
+            ];
+            git.ref_transaction(&ok, "hitch: test transaction")?;
+            assert_eq!(git.rev_parse_opt("refs/hitch/test/alpha")?, Some(first));
+            assert_eq!(git.rev_parse_opt("refs/hitch/test/gamma")?, Some(second));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

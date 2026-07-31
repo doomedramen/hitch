@@ -101,6 +101,30 @@ pub struct MergeTreeWriteTreeResult {
     pub conflicted_files: Vec<String>,
 }
 
+/// One edit in a [`GitOperations::ref_transaction`] batch.
+///
+/// `Update { expected_old: None }` requires the ref to not currently exist —
+/// the same semantics `update_ref_cas` gives a `None` expected value.
+/// `Delete { expected_old: None }` deletes whatever is there.
+#[derive(Debug, Clone)]
+pub enum RefEdit {
+    Update {
+        refname: String,
+        new_oid: String,
+        expected_old: Option<String>,
+    },
+    Create {
+        refname: String,
+        new_oid: String,
+    },
+    Delete {
+        refname: String,
+        expected_old: Option<String>,
+    },
+}
+
+const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+
 /// Per-path merge stages: `(path, base_oid, ours_oid, theirs_oid)`. A stage is
 /// `None` when that side does not have the path (a delete/modify conflict has
 /// no ours or no theirs; an add/add has no base). Same shape as
@@ -1959,6 +1983,96 @@ impl GitOperations {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
+        Ok(())
+    }
+
+    /// Apply every edit in `edits` as one atomic git ref transaction.
+    ///
+    /// `git update-ref --stdin` applies a batch all-or-nothing: if any
+    /// compare-and-swap in it fails, none of the edits land. That is what makes
+    /// it worth using over a sequence of `update_ref_cas` calls — publishing an
+    /// environment build moves several refs that must agree with each other
+    /// (the branch itself, its archived previous tip, the build anchor), and a
+    /// crash between separate updates leaves a state nobody designed.
+    ///
+    /// Input is NUL-delimited (`-z`) so a ref name can never be misread,
+    /// whatever it contains. `reason` becomes the reflog message for every
+    /// edit in the batch.
+    ///
+    /// Like `hash_object_bytes`/`make_blob_tree`, this is plumbing-only
+    /// (`update-ref` touches nothing but the object/ref database), so it
+    /// layers `GIT_CONFIG_NOSYSTEM=1` on top of the shared `git_command`
+    /// builder rather than using `run_git_command`/`run_git_plumbing_command`,
+    /// since it needs piped stdin rather than a one-shot `output()` call.
+    pub fn ref_transaction(&self, edits: &[RefEdit], reason: &str) -> Result<()> {
+        if edits.is_empty() {
+            return Ok(());
+        }
+
+        let mut input: Vec<u8> = Vec::new();
+        for edit in edits {
+            match edit {
+                RefEdit::Update {
+                    refname,
+                    new_oid,
+                    expected_old,
+                } => {
+                    input.extend_from_slice(b"update ");
+                    input.extend_from_slice(refname.as_bytes());
+                    input.push(0);
+                    input.extend_from_slice(new_oid.as_bytes());
+                    input.push(0);
+                    input.extend_from_slice(expected_old.as_deref().unwrap_or(ZERO_OID).as_bytes());
+                    input.push(0);
+                }
+                RefEdit::Create { refname, new_oid } => {
+                    input.extend_from_slice(b"create ");
+                    input.extend_from_slice(refname.as_bytes());
+                    input.push(0);
+                    input.extend_from_slice(new_oid.as_bytes());
+                    input.push(0);
+                }
+                RefEdit::Delete {
+                    refname,
+                    expected_old,
+                } => {
+                    input.extend_from_slice(b"delete ");
+                    input.extend_from_slice(refname.as_bytes());
+                    input.push(0);
+                    input.extend_from_slice(expected_old.as_deref().unwrap_or("").as_bytes());
+                    input.push(0);
+                }
+            }
+        }
+
+        let mut cmd = self.git_command(&["update-ref", "-m", reason, "-z", "--stdin"]);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("Failed to spawn 'git update-ref --stdin'")?;
+
+        child
+            .stdin
+            .take()
+            .expect("stdin configured as piped")
+            .write_all(&input)
+            .context("Failed to write the ref transaction to git update-ref")?;
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to read output of 'git update-ref --stdin'")?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Ref transaction of {} edit(s) was rejected — no ref was changed: {}",
+                edits.len(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
         Ok(())
     }
 
