@@ -1062,13 +1062,28 @@ pub(crate) fn publish_environment_build(
     ];
 
     if let Some(ref old_sha) = old_env_sha {
-        edits.push(crate::utils::git_operations::RefEdit::Create {
+        // `backup_timestamp` only has 1-second resolution, so two publishes of
+        // the same environment inside one second would otherwise collide on
+        // these ref names. `RefEdit::Create` demands the ref not already
+        // exist, and this batch is all-or-nothing, so a collision here would
+        // abort the environment-branch CAS too — a real, atomic move failing
+        // because of an unrelated archival-ref name clash. Use `Update` with
+        // an *empty* (not `None`) `expected_old` instead: in `git
+        // update-ref`'s wire format an empty old-value means "write
+        // regardless of what's there" (unlike `None`, which this codebase
+        // maps to the zero OID, i.e. "must not exist" — see `RefEdit::Update`'s
+        // doc comment). That reproduces the plain overwrite-if-exists
+        // semantics these refs had before they moved into this transaction,
+        // while keeping them inside the atomic batch.
+        edits.push(crate::utils::git_operations::RefEdit::Update {
             refname: format!("refs/hitch/prev/{}/{}", env_name, backup_timestamp),
             new_oid: old_sha.clone(),
+            expected_old: Some(String::new()),
         });
-        edits.push(crate::utils::git_operations::RefEdit::Create {
+        edits.push(crate::utils::git_operations::RefEdit::Update {
             refname: format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp),
             new_oid: old_sha.clone(),
+            expected_old: Some(String::new()),
         });
     }
 
@@ -1900,4 +1915,143 @@ pub fn check_pre_promote_conflicts(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod publish_environment_build_tests {
+    use super::*;
+    use crate::commands::global_context::GlobalContext;
+    use crate::types::{Environment, HitchConfig};
+    use crate::utils::logging::Logger;
+    use std::sync::Arc;
+
+    /// Test-only raw git invocation — see the identical helper in
+    /// `try_replay_resolution_tests` above for why this bypasses
+    /// `GitOperations`/`run_git_command` deliberately.
+    #[allow(clippy::disallowed_methods)]
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Regression test for the finding on Task 8's `ref_transaction` rollout:
+    /// `refs/hitch/prev/<env>/<backup_timestamp>` and
+    /// `refs/hitch/backup/<env>/<backup_timestamp>` used to be written with
+    /// `RefEdit::Create`, which requires the ref not already exist. Since
+    /// `backup_timestamp` only has 1-second resolution, two publishes of the
+    /// same environment landing in the same second collided on that ref name
+    /// — and because the batch is all-or-nothing, that collision aborted the
+    /// *entire* transaction, including the environment-branch CAS that would
+    /// otherwise have succeeded cleanly.
+    ///
+    /// This forces the worst case directly — two calls to
+    /// `publish_environment_build` with a literally identical
+    /// `backup_timestamp` — rather than relying on real wall-clock timing
+    /// (which the reviewer noted is too fast to reproduce flakily via the
+    /// CLI). It asserts the environment branch still moves on the second
+    /// publish, and that the archival refs end up overwritten (last-write-wins,
+    /// same as the plain `update_ref` these refs had before this task).
+    #[test]
+    fn publish_survives_same_timestamp_archival_ref_collision() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("README.md"), "hi\n")?;
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+
+        // The environment branch, starting at some initial tip.
+        git(repo, &["branch", "dev"]);
+        let sha0 = git(repo, &["rev-parse", "dev"]);
+
+        // `publish_environment_build` ends by updating the environment's
+        // `rebuilt_at` timestamp in `hitch.json`, which requires "dev" to
+        // actually be a configured environment — set that up directly on
+        // `hitch-metadata`, the same way `require_signed_check_fails_closed_on_metadata_health_error`
+        // above does.
+        let mut config = HitchConfig::new();
+        config
+            .environments
+            .insert("dev".to_string(), Environment::new("main".to_string()));
+        git(repo, &["checkout", "-q", "-b", "hitch-metadata"]);
+        std::fs::write(
+            repo.join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
+        git(repo, &["add", "hitch.json"]);
+        git(repo, &["commit", "-q", "-m", "config"]);
+        git(repo, &["checkout", "-q", "-"]);
+
+        // Two candidate new tips for "dev", built without ever checking it out.
+        let tree = git(repo, &["rev-parse", "HEAD^{tree}"]);
+        let sha1 = git(
+            repo,
+            &["commit-tree", &tree, "-p", &sha0, "-m", "publish one"],
+        );
+        let sha2 = git(
+            repo,
+            &["commit-tree", &tree, "-p", &sha1, "-m", "publish two"],
+        );
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let same_timestamp = "20260101120000";
+
+        // First publish: dev has no prior archival refs, so this always
+        // succeeded even before the fix.
+        publish_environment_build(&context, "dev", &sha1, same_timestamp, &None)?;
+        assert_eq!(context.git().rev_parse("refs/heads/dev")?, sha1);
+        assert_eq!(
+            context
+                .git()
+                .rev_parse(&format!("refs/hitch/backup/dev/{}", same_timestamp))?,
+            sha0
+        );
+
+        // Second publish with the SAME backup_timestamp: before the fix, the
+        // archival-ref `Create` edits would collide with the refs the first
+        // publish just wrote, aborting the whole transaction and leaving
+        // "dev" stuck on sha1. The branch move must still land.
+        publish_environment_build(&context, "dev", &sha2, same_timestamp, &None)?;
+        assert_eq!(
+            context.git().rev_parse("refs/heads/dev")?,
+            sha2,
+            "environment branch must move even when the archival ref name collides"
+        );
+
+        // The archival refs should have been overwritten to reflect the most
+        // recent backup (last-write-wins, matching the pre-transaction
+        // `update_ref` behavior these refs used to have).
+        assert_eq!(
+            context
+                .git()
+                .rev_parse(&format!("refs/hitch/backup/dev/{}", same_timestamp))?,
+            sha1
+        );
+        assert_eq!(
+            context
+                .git()
+                .rev_parse(&format!("refs/hitch/prev/dev/{}", same_timestamp))?,
+            sha1
+        );
+
+        Ok(())
+    }
 }
