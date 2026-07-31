@@ -185,16 +185,22 @@ covered.
   the branch it is rebasing is the one the user is standing on. New
   build/merge logic should use the plumbing path; reach for a worktree only
   when a human has to edit the result, and detach it.
-- **Publishing an environment branch is always a CAS `update-ref`**
-  (`publish_environment_build` in `prelude.rs`), never a rename-and-recreate
-  dance. Reuse that function for anything that produces a new environment
-  branch commit; don't hand-roll the publish step again.
+- **Publishing an environment branch is always one atomic ref transaction**
+  (`publish_environment_build` in `prelude.rs`, built on
+  `GitOperations::ref_transaction`), never a rename-and-recreate dance and never
+  a sequence of separate `update-ref` calls. The batch moves `refs/heads/<env>`
+  under compare-and-swap, writes the pending-resync intent, and archives the
+  replaced tip under `refs/hitch/prev/<env>/<timestamp>` — all or nothing.
+  Reuse that function for anything that produces a new environment branch
+  commit; don't hand-roll the publish step again.
 - **Moving a branch ref means resyncing every checkout attached to it.**
-  `scan_checkouts_on_branch` before the `update-ref`, `resync_checkouts`
+  `scan_checkouts_on_branch` before the ref transaction, `resync_checkouts`
   after — both in `prelude.rs`, both already wired into
   `publish_environment_build` and `hitch release`. See the gotcha below for
-  why the scan cannot be folded into the resync. Wrap the pair in a
-  `pending_resync::record` / `clear`, so a crash in between is recoverable.
+  why the scan cannot be folded into the resync. The intent is written with
+  `pending_resync::record_blob` so its ref update rides inside that same
+  transaction, then dropped with `pending_resync::clear` once the resync has
+  actually happened, so a crash in between is recoverable.
 - **Compare checkout paths with `GitOperations::same_checkout_path`, never
   `==`.** `git worktree list` reports fully resolved paths; on macOS the temp
   dir and plenty of real project paths sit behind symlinks, so a string

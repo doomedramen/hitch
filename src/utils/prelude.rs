@@ -1032,10 +1032,13 @@ pub(crate) fn publish_environment_build(
     // Must happen before the ref moves — see `scan_checkouts_on_branch`.
     let checkouts = scan_checkouts_on_branch(context, env_name)?;
 
-    // Write the resync down before anything observable changes, so a crash
-    // between the CAS and the resync is recoverable rather than a permanent
-    // silent desync — see `crate::utils::pending_resync`.
-    crate::utils::pending_resync::record(
+    // Everything that must agree with the branch move goes in with it: the
+    // resync intent (so a crash after the move is recoverable — see
+    // `crate::utils::pending_resync`), and the tip being replaced (so rollback
+    // is a one-ref flip). `git update-ref --stdin` applies the batch
+    // all-or-nothing, so there is no longer a window where the branch has moved
+    // but its intent record or its archive is missing.
+    let (resync_ref, resync_blob) = crate::utils::pending_resync::record_blob(
         context,
         &crate::utils::pending_resync::PendingResync {
             branch: env_name.to_string(),
@@ -1045,21 +1048,34 @@ pub(crate) fn publish_environment_build(
         },
     )?;
 
+    let mut edits = vec![
+        crate::utils::git_operations::RefEdit::Update {
+            refname: resync_ref,
+            new_oid: resync_blob,
+            expected_old: None,
+        },
+        crate::utils::git_operations::RefEdit::Update {
+            refname: env_ref.clone(),
+            new_oid: new_sha.to_string(),
+            expected_old: old_env_sha.clone(),
+        },
+    ];
+
     if let Some(ref old_sha) = old_env_sha {
-        let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp);
-        context.git().update_ref(&backup_ref, old_sha)?;
-        context.log_verbose(&format!(
-            "✓ Backed up previous '{}' ({}) to '{}'",
-            env_name, old_sha, backup_ref
-        ));
+        edits.push(crate::utils::git_operations::RefEdit::Create {
+            refname: format!("refs/hitch/prev/{}/{}", env_name, backup_timestamp),
+            new_oid: old_sha.clone(),
+        });
+        edits.push(crate::utils::git_operations::RefEdit::Create {
+            refname: format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp),
+            new_oid: old_sha.clone(),
+        });
     }
 
-    if let Err(e) = context.git().update_ref_cas(
-        &env_ref,
-        new_sha,
-        old_env_sha.as_deref(),
-        &format!("hitch: rebuild {}", env_name),
-    ) {
+    if let Err(e) = context
+        .git()
+        .ref_transaction(&edits, &format!("hitch: rebuild {}", env_name))
+    {
         return Err(anyhow::anyhow!(
             "Failed to publish '{}': {}. The build itself succeeded but could not be \
              published — this usually means another rebuild landed first. Fetch and re-run \
@@ -1067,6 +1083,13 @@ pub(crate) fn publish_environment_build(
             env_name,
             e,
             env_name
+        ));
+    }
+
+    if let Some(ref old_sha) = old_env_sha {
+        context.log_verbose(&format!(
+            "✓ Backed up previous '{}' ({}) to 'refs/hitch/backup/{}/{}'",
+            env_name, old_sha, env_name, backup_timestamp
         ));
     }
 

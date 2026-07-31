@@ -48,13 +48,24 @@ fn ref_name(branch: &str) -> String {
     format!("{}/{}", REF_PREFIX, branch)
 }
 
+/// Hash the payload for `pending` and return `(refname, blob_oid)` without
+/// writing the ref.
+///
+/// Splitting the write lets the caller put the ref update inside a larger
+/// atomic transaction alongside the branch move it describes, instead of doing
+/// it as a separate step with a crash window in between.
+pub fn record_blob(context: &GlobalContext, pending: &PendingResync) -> Result<(String, String)> {
+    let payload = serde_json::to_vec_pretty(pending)?;
+    let blob = context.git().hash_object_bytes(&payload)?;
+    Ok((ref_name(&pending.branch), blob))
+}
+
 /// Record the intent to move `branch` and resync `checkouts`, before anything
 /// observable changes. Blob-backed so the payload is readable with
 /// `git cat-file -p` when diagnosing by hand.
 pub fn record(context: &GlobalContext, pending: &PendingResync) -> Result<()> {
-    let payload = serde_json::to_vec_pretty(pending)?;
-    let blob = context.git().hash_object_bytes(&payload)?;
-    context.git().update_ref(&ref_name(&pending.branch), &blob)
+    let (refname, blob) = record_blob(context, pending)?;
+    context.git().update_ref(&refname, &blob)
 }
 
 /// Drop the record for `branch` — the resync it described has happened.

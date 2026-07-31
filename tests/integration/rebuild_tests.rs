@@ -1007,4 +1007,90 @@ mod tests {
 
         Ok(())
     }
+
+    /// Every rebuild must leave behind the tip it replaced, under
+    /// refs/hitch/prev/<env>/<timestamp> — that ref is what makes rollback a
+    /// one-ref flip instead of an archaeology exercise in the reflog.
+    #[test]
+    fn test_rebuild_archives_previous_tip_under_prev_ref() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git
+                .run(&["checkout", "-b", "feature-1"])?
+                .assert_success();
+            env.fs.write_file("1.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "feature 1"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let first_tip = env
+                .git
+                .run(&["rev-parse", "refs/heads/dev"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // A second rebuild replaces that tip, so it must be archived.
+            env.git
+                .run(&["checkout", "-b", "feature-2"])?
+                .assert_success();
+            env.fs.write_file("2.txt", "two")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "feature 2"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-2", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let prev_refs = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(objectname)",
+                    "refs/hitch/prev/dev",
+                ])?
+                .stdout();
+
+            assert!(
+                prev_refs.lines().any(|line| line.trim() == first_tip),
+                "expected the replaced tip {} under refs/hitch/prev/dev, got:\n{}",
+                first_tip,
+                prev_refs
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
