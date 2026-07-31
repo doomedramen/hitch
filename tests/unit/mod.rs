@@ -1,6 +1,7 @@
 //! Unit tests for Hitch CLI components
 
 pub mod approval_system_tests;
+pub mod config_validation_tests;
 pub mod conflict_report_tests;
 pub mod git_operations_tests;
 pub mod global_context_tests;

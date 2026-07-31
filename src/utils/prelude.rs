@@ -297,17 +297,10 @@ where
         }
     };
 
-    // Parse configuration
+    // Parse and validate configuration. `hitch-metadata` is writable by anyone
+    // with push access, so this is a trust boundary — see `config_validation`.
     let config: HitchConfig =
-        serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
-
-    // Validate configuration
-    if let Err(validation_error) = config.validate() {
-        return Err(anyhow::anyhow!(
-            "Configuration validation failed: {}",
-            validation_error
-        ));
-    }
+        crate::utils::config_validation::parse_untrusted_config(&config_json)?;
 
     context.log_verbose("✓ hitch.json loaded and validated successfully (read-only)");
 
@@ -404,15 +397,7 @@ where
         };
 
         let mut config: HitchConfig =
-            serde_json::from_str(&config_json).context("Failed to parse hitch.json")?;
-
-        // Validate configuration
-        if let Err(validation_error) = config.validate() {
-            return Err(anyhow::anyhow!(
-                "Configuration validation failed: {}",
-                validation_error
-            ));
-        }
+            crate::utils::config_validation::parse_untrusted_config(&config_json)?;
 
         // Refuse to rewrite a config newer than we understand (unless this is a
         // recovery/rollback write, which restores our own captured snapshot).

@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod authorization;
 pub mod command_helpers;
+pub mod config_validation;
 pub mod confirm;
 pub mod conflict_report;
 pub mod diff;
