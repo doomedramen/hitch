@@ -133,9 +133,8 @@ covered.
   Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`,
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
 - `src/core/` — read-only view builders (workspace/status models) consumed
-  by commands; `workspace.rs`'s `build_workspace_model` is currently
-  `#[allow(dead_code)]` — not wired into any live command, don't assume it's
-  in use.
+  by commands; `workspace_index.rs`'s `build_workspace_index_model` is
+  actively used.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
