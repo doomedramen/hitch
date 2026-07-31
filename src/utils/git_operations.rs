@@ -188,8 +188,26 @@ impl GitOperations {
         })
     }
 
-    pub fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
+    /// Flags applied to every git subprocess hitch spawns.
+    ///
+    /// hitch's automation runs under a deploy key that is explicitly allowed to
+    /// bypass the `hitch-protection` ruleset, so anything git executes on its
+    /// behalf inherits push rights to protected branches. Repository-local
+    /// config chooses those programs — `core.hooksPath` picks the hook
+    /// directory, `core.fsmonitor` names a program git runs on status — and
+    /// repository-local config is writable by anyone who can push. So they are
+    /// turned off here rather than trusted.
+    const HARDENING_ARGS: &'static [&'static str] = &[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+    ];
+
+    fn git_command(&self, args: &[&str]) -> Command {
+        #[allow(clippy::disallowed_methods)] // the single blessed spawn point
         let mut cmd = Command::new("git");
+        cmd.args(Self::HARDENING_ARGS);
         cmd.args(args);
         cmd.current_dir(&self.repo_path);
         // Force a stable, English locale so that the stdout/stderr substring checks
@@ -197,6 +215,10 @@ impl GitOperations {
         // to save", fetch "no remote" messages) are not broken by a user's locale.
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
+        // Never let git open an interactive credential prompt: hitch's own
+        // prompts all go through the `Confirm` trait, so a prompt here can only
+        // be a hang waiting on a terminal that may not exist (CI).
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
         // `Command::output()` leaves stdin at its default of inherited, which
         // means git (or anything it shells out to in turn — a GPG/SSH commit
         // signing prompt, a pager, an editor) can block reading from the
@@ -206,8 +228,32 @@ impl GitOperations {
         // /dev/null instead so anything that tries fails fast (or errors)
         // rather than hanging indefinitely.
         cmd.stdin(Stdio::null());
-        cmd.output().context(format!(
+        cmd
+    }
+
+    pub fn run_git_command(&self, args: &[&str]) -> Result<std::process::Output> {
+        self.git_command(args).output().context(format!(
             "Failed to execute git command: git {} in repository at {}",
+            args.join(" "),
+            self.repo_path
+        ))
+    }
+
+    /// Like [`run_git_command`], but additionally ignores the *system* git
+    /// config.
+    ///
+    /// Only for calls that touch nothing but the object database
+    /// (`merge-tree`, `commit-tree`, `mktree`, `hash-object`, `cat-file`,
+    /// `update-ref`): those need no credential helper, and the system config is
+    /// one more place a shared CI image can inject behaviour. Network calls
+    /// must NOT use this — on macOS the system config is where
+    /// `credential.helper = osxkeychain` lives, and dropping it breaks HTTPS
+    /// pushes.
+    pub fn run_git_plumbing_command(&self, args: &[&str]) -> Result<std::process::Output> {
+        let mut cmd = self.git_command(args);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        cmd.output().context(format!(
+            "Failed to execute git plumbing command: git {} in repository at {}",
             args.join(" "),
             self.repo_path
         ))
@@ -226,7 +272,7 @@ impl GitOperations {
         our_tree: &str,
         their_tree: &str,
     ) -> Result<MergeTreeWriteTreeResult> {
-        let output = self.run_git_command(&[
+        let output = self.run_git_plumbing_command(&[
             "merge-tree",
             "--write-tree",
             "--name-only",
@@ -293,7 +339,7 @@ impl GitOperations {
                 Ok(branch_name)
             } else {
                 // Handle detached HEAD - get the commit hash instead
-                let rev_output = self.run_git_command(&["rev-parse", "HEAD"])?;
+                let rev_output = self.run_git_plumbing_command(&["rev-parse", "HEAD"])?;
 
                 if rev_output.status.success() {
                     let commit_hash = String::from_utf8(rev_output.stdout)?.trim().to_string();
@@ -396,7 +442,7 @@ impl GitOperations {
 
     /// Resolve a ref/commit-ish to a full SHA.
     pub fn rev_parse(&self, reference: &str) -> Result<String> {
-        let output = self.run_git_command(&["rev-parse", reference])?;
+        let output = self.run_git_plumbing_command(&["rev-parse", reference])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "git rev-parse {} failed: {}",
@@ -461,7 +507,7 @@ impl GitOperations {
     /// Resolve `branch` to its current commit SHA, or `None` if the branch
     /// does not exist (rather than erroring, unlike `rev_parse`).
     fn rev_parse_branch_opt(&self, branch: &str) -> Result<Option<String>> {
-        let output = self.run_git_command(&[
+        let output = self.run_git_plumbing_command(&[
             "rev-parse",
             "--verify",
             "--quiet",
@@ -649,7 +695,7 @@ impl GitOperations {
         commit_args.push("-m");
         commit_args.push(message);
 
-        let commit_output = self.run_git_command(&commit_args)?;
+        let commit_output = self.run_git_plumbing_command(&commit_args)?;
         if !commit_output.status.success() {
             return Err(anyhow::anyhow!(
                 "git commit-tree failed: {}",
@@ -668,7 +714,7 @@ impl GitOperations {
             .clone()
             .unwrap_or_else(|| "0".repeat(40));
         let update_ref_output =
-            self.run_git_command(&["update-ref", &ref_name, &new_commit, &expected_old])?;
+            self.run_git_plumbing_command(&["update-ref", &ref_name, &new_commit, &expected_old])?;
         if !update_ref_output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}': branch was concurrently modified: {}",
@@ -889,7 +935,7 @@ impl GitOperations {
     pub fn get_branch_commit_sha(&self, branch: &str) -> Result<String> {
         // First try local branch
         let local_ref = format!("refs/heads/{}", branch);
-        let output = self.run_git_command(&["rev-parse", &local_ref]);
+        let output = self.run_git_plumbing_command(&["rev-parse", &local_ref]);
 
         if let Ok(output) = output {
             if output.status.success() {
@@ -900,7 +946,7 @@ impl GitOperations {
 
         // If local doesn't exist, try remote branch
         let remote_ref = format!("refs/remotes/origin/{}", branch);
-        let remote_output = self.run_git_command(&["rev-parse", &remote_ref])?;
+        let remote_output = self.run_git_plumbing_command(&["rev-parse", &remote_ref])?;
 
         if !remote_output.status.success() {
             return Err(anyhow::anyhow!(
@@ -938,8 +984,11 @@ impl GitOperations {
     }
 
     pub fn list_local_branches(&self) -> Result<Vec<String>> {
-        let output =
-            self.run_git_command(&["for-each-ref", "--format=%(refname:short)", "refs/heads"])?;
+        let output = self.run_git_plumbing_command(&[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "git for-each-ref failed: {}",
@@ -1074,7 +1123,7 @@ impl GitOperations {
     }
 
     fn ref_exists(&self, reference: &str) -> bool {
-        self.run_git_command(&["rev-parse", "--verify", reference])
+        self.run_git_plumbing_command(&["rev-parse", "--verify", reference])
             .ok()
             .is_some_and(|o| o.status.success())
     }
@@ -1216,7 +1265,7 @@ impl GitOperations {
                 let ref_path = format!("refs/heads/{}", branch);
                 let direct_args = vec!["update-ref", "-d", &ref_path];
                 let direct_output = self
-                    .run_git_command(&direct_args)
+                    .run_git_plumbing_command(&direct_args)
                     .context(format!("Failed to delete branch ref directly '{}'", branch))?;
 
                 if direct_output.status.success() {
@@ -1350,7 +1399,8 @@ impl GitOperations {
     /// in AGENTS.md — that gotcha applies to callers passing `--merge-base`
     /// explicitly, which this one never does.
     pub fn merge_tree_compose(&self, ours: &str, theirs: &str) -> Result<MergeTreeCompose> {
-        let output = self.run_git_command(&["merge-tree", "--write-tree", "-z", ours, theirs])?;
+        let output =
+            self.run_git_plumbing_command(&["merge-tree", "--write-tree", "-z", ours, theirs])?;
 
         // 0 = clean, 1 = conflicted, anything else is a real failure.
         let code = output.status.code().unwrap_or(2);
@@ -1499,7 +1549,7 @@ impl GitOperations {
         args.push("-m");
         args.push(message);
 
-        let output = self.run_git_command(&args)?;
+        let output = self.run_git_plumbing_command(&args)?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to create commit for tree {}: {}",
@@ -1522,7 +1572,7 @@ impl GitOperations {
     /// valid UTF-8 (a binary conflict has no marker rendering to show).
     pub fn read_text_from_tree(&self, tree: &str, path: &str) -> Result<Option<String>> {
         let spec = format!("{}:{}", tree, path);
-        let output = self.run_git_command(&["cat-file", "blob", &spec])?;
+        let output = self.run_git_plumbing_command(&["cat-file", "blob", &spec])?;
         if !output.status.success() {
             return Ok(None);
         }
@@ -1728,7 +1778,8 @@ impl GitOperations {
 
     /// Full names of every ref under `prefix` (e.g. `refs/hitch/pending-resync`).
     pub fn list_refs_under(&self, prefix: &str) -> Result<Vec<String>> {
-        let output = self.run_git_command(&["for-each-ref", "--format=%(refname)", prefix])?;
+        let output =
+            self.run_git_plumbing_command(&["for-each-ref", "--format=%(refname)", prefix])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to list refs under '{}': {}",
@@ -1745,7 +1796,7 @@ impl GitOperations {
 
     /// Raw bytes of the blob `reference` points at.
     pub fn cat_file_blob(&self, reference: &str) -> Result<Vec<u8>> {
-        let output = self.run_git_command(&["cat-file", "blob", reference])?;
+        let output = self.run_git_plumbing_command(&["cat-file", "blob", reference])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to read blob '{}': {}",
@@ -1788,7 +1839,7 @@ impl GitOperations {
     /// until the user's next fetch.
     pub fn set_remote_tracking_ref(&self, branch: &str, oid: &str) -> Result<()> {
         let refname = format!("refs/remotes/origin/{}", branch);
-        let output = self.run_git_command(&[
+        let output = self.run_git_plumbing_command(&[
             "update-ref",
             "-m",
             "hitch: record pushed tip",
@@ -1821,7 +1872,8 @@ impl GitOperations {
     /// `validate_name` at the boundary, plus every caller always prefixing a
     /// static string rather than passing raw untrusted input first.
     pub fn rev_parse_opt(&self, reference: &str) -> Result<Option<String>> {
-        let output = self.run_git_command(&["rev-parse", "--verify", "--quiet", reference])?;
+        let output =
+            self.run_git_plumbing_command(&["rev-parse", "--verify", "--quiet", reference])?;
         if !output.status.success() {
             return Ok(None);
         }
@@ -1851,8 +1903,15 @@ impl GitOperations {
         reason: &str,
     ) -> Result<()> {
         let old = expected_old_oid.unwrap_or("0000000000000000000000000000000000000000");
-        let output =
-            self.run_git_command(&["update-ref", "-m", reason, "--", refname, new_oid, old])?;
+        let output = self.run_git_plumbing_command(&[
+            "update-ref",
+            "-m",
+            reason,
+            "--",
+            refname,
+            new_oid,
+            old,
+        ])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}' to {} (expected current value {}): {}",
@@ -1872,7 +1931,7 @@ impl GitOperations {
     /// backup ref. Anything that could clobber someone's own state should use
     /// `update_ref_cas` instead.
     pub fn update_ref(&self, refname: &str, new_oid: &str) -> Result<()> {
-        let output = self.run_git_command(&["update-ref", "--", refname, new_oid])?;
+        let output = self.run_git_plumbing_command(&["update-ref", "--", refname, new_oid])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}' to {}: {}",
@@ -2388,7 +2447,7 @@ impl GitOperations {
 
         // Remote counterpart must exist to compare against.
         if !self
-            .run_git_command(&["rev-parse", "--verify", "--quiet", &remote_ref])?
+            .run_git_plumbing_command(&["rev-parse", "--verify", "--quiet", &remote_ref])?
             .status
             .success()
         {
@@ -2449,7 +2508,7 @@ impl GitOperations {
             return Ok(ff.status.success());
         }
 
-        let update = self.run_git_command(&[
+        let update = self.run_git_plumbing_command(&[
             "update-ref",
             "-m",
             "hitch: fast-forward to origin",
@@ -2774,14 +2833,14 @@ impl GitOperations {
         let remote_ref = format!("refs/remotes/origin/{}", branch);
 
         // Check if remote branch exists
-        let remote_output = self.run_git_command(&["rev-parse", &remote_ref])?;
+        let remote_output = self.run_git_plumbing_command(&["rev-parse", &remote_ref])?;
         if !remote_output.status.success() {
             // No remote branch, so can't be behind
             return Ok(false);
         }
 
         // Check if local branch exists
-        let local_output = self.run_git_command(&["rev-parse", &local_ref])?;
+        let local_output = self.run_git_plumbing_command(&["rev-parse", &local_ref])?;
         if !local_output.status.success() {
             // No local branch
             return Err(anyhow::anyhow!("Local branch '{}' does not exist", branch));
@@ -2951,7 +3010,7 @@ impl GitOperations {
     /// Create a parentless commit wrapping `tree` (`git commit-tree`) and
     /// return its OID — the storage object for a resolution ref.
     pub fn commit_tree_parentless(&self, tree: &str, message: &str) -> Result<String> {
-        let output = self.run_git_command(&["commit-tree", tree, "-m", message])?;
+        let output = self.run_git_plumbing_command(&["commit-tree", tree, "-m", message])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "git commit-tree failed: {}",
@@ -2963,7 +3022,7 @@ impl GitOperations {
 
     /// Read a blob's contents as bytes (`git cat-file blob <oid>`).
     pub fn read_blob(&self, oid: &str) -> Result<Vec<u8>> {
-        let output = self.run_git_command(&["cat-file", "blob", oid])?;
+        let output = self.run_git_plumbing_command(&["cat-file", "blob", oid])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "git cat-file blob {} failed: {}",
@@ -2977,8 +3036,11 @@ impl GitOperations {
     /// List every ref under `prefix` (e.g. `refs/hitch/resolutions/`) as
     /// `(full_refname, target_oid)`.
     pub fn list_refs(&self, prefix: &str) -> Result<Vec<(String, String)>> {
-        let output =
-            self.run_git_command(&["for-each-ref", "--format=%(refname) %(objectname)", prefix])?;
+        let output = self.run_git_plumbing_command(&[
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            prefix,
+        ])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "git for-each-ref {} failed: {}",
@@ -2998,7 +3060,7 @@ impl GitOperations {
     /// Delete an arbitrary ref (`git update-ref -d`). Used to forget a
     /// recorded resolution.
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
-        let output = self.run_git_command(&["update-ref", "-d", "--", refname])?;
+        let output = self.run_git_plumbing_command(&["update-ref", "-d", "--", refname])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to delete ref '{}': {}",

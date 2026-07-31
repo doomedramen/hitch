@@ -16,3 +16,4 @@ pub mod resolve_tests;
 pub mod set_tests;
 pub mod status_tests;
 pub mod tree_tests;
+pub mod trust_boundary_tests;
