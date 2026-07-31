@@ -163,6 +163,11 @@ covered.
   (`publish_environment_build` in `prelude.rs`), never a rename-and-recreate
   dance. Reuse that function for anything that produces a new environment
   branch commit; don't hand-roll the publish step again.
+- **Moving a branch ref means resyncing every checkout attached to it.**
+  `scan_checkouts_on_branch` before the `update-ref`, `resync_checkouts`
+  after — both in `prelude.rs`, both already wired into
+  `publish_environment_build` and `hitch release`. See the gotcha below for
+  why the scan cannot be folded into the resync.
 
 ## Concrete gotchas, found the hard way
 
@@ -210,6 +215,39 @@ able to wait on real input. The one deliberate exception is
 interactive. If you add a new `Command::new("git")` or `Command::new("gh")`
 call anywhere in `src/` *or* `tests/test_framework/`, for anything other
 than a genuinely interactive flow, null the stdin.
+
+**`update-ref` desynchronizes every checkout that has the branch attached.**
+Git deliberately does not touch a checkout's index or working tree when a ref
+moves underneath it. So publishing a rebuild/release onto a branch a human is
+standing on leaves their `git status` showing the entire diff as uncommitted
+*reverse* changes, with nothing explaining why. This bit `hitch release`
+(no resync at all) and `hitch rebuild` (resynced only the *main* checkout,
+via `get_current_branch()`, which cannot see linked worktrees). Anything that
+moves `refs/heads/*` must go through `scan_checkouts_on_branch` /
+`resync_checkouts`, built on `GitOperations::list_worktrees()` — never
+`get_current_branch()`, which answers for one checkout out of N.
+
+Two non-obvious constraints, both learned by getting them wrong:
+
+- **Scan before the ref moves, resync after.** Cleanliness is only meaningful
+  beforehand. Once the ref has moved, `git status` in an affected checkout
+  compares an old working tree against the new tip, so *every* affected
+  checkout reports dirty and a naive "skip if dirty" guard skips everything —
+  which is exactly the bug it was meant to fix, now with a warning attached.
+  This is why the scan/resync split exists; don't collapse it.
+- **Detached HEAD is not affected.** Its HEAD names a commit, not the branch,
+  so nothing moved underneath it. `checkouts_on_branch` filters these out on
+  purpose — resyncing them would silently relocate the user's HEAD.
+
+Dirty checkouts are warned about, never reset — `reset --hard` over someone's
+uncommitted work is a worse failure than a stale tree. Related: hitch's
+deploy-key pushes go to an explicit SSH URL rather than the `origin` remote,
+so git does not update `refs/remotes/origin/<branch>` for them;
+`record_pushed_tip` in `prelude.rs` does it explicitly, otherwise `git status`
+reports a just-pushed branch as ahead of origin until the next fetch. Tests
+creating linked worktrees must place them **beside** the repo, not inside it,
+or they show up as untracked content in the repo's own `git status` (the same
+reason `worktree_path_for` picks a sibling directory).
 
 **GitHub deploy key must bypass `hitch-protection` ruleset on push.** `hitch
 setup` creates a GitHub repository ruleset that blocks all direct pushes

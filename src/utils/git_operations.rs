@@ -100,6 +100,20 @@ pub struct MergeTreeWriteTreeResult {
     pub conflicted_files: Vec<String>,
 }
 
+/// One entry of `git worktree list --porcelain`: the main checkout or a
+/// linked worktree, and what it currently has checked out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeInfo {
+    /// Absolute path to the checkout's working directory.
+    pub path: String,
+    /// Commit its HEAD resolves to.
+    pub head: Option<String>,
+    /// Short name of the branch it has attached, if any.
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub bare: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub sha: String,
@@ -1254,6 +1268,137 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Every checkout attached to this repository — the main working tree plus
+    /// every linked worktree — as reported by `git worktree list --porcelain`.
+    ///
+    /// This is the enumeration any operation that moves `refs/heads/*` needs:
+    /// `git update-ref` will happily move a branch that some checkout has
+    /// attached as its HEAD, and git does *not* update that checkout's index or
+    /// working tree to match. Asking only `get_current_branch()` sees the main
+    /// checkout and nothing else.
+    pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        let output = self.run_git_command(&["worktree", "list", "--porcelain"])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to list worktrees: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        Ok(Self::parse_worktree_list(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
+    /// Parse `git worktree list --porcelain` output. Records are separated by
+    /// blank lines; each starts with a `worktree <path>` line and may carry
+    /// `HEAD <oid>`, `branch <ref>`, `detached`, `bare`, plus attributes we
+    /// don't care about (`locked`, `prunable`).
+    pub(crate) fn parse_worktree_list(stdout: &str) -> Vec<WorktreeInfo> {
+        let mut worktrees = Vec::new();
+        let mut current: Option<WorktreeInfo> = None;
+
+        for line in stdout.lines() {
+            let line = line.trim_end();
+            if line.is_empty() {
+                if let Some(wt) = current.take() {
+                    worktrees.push(wt);
+                }
+                continue;
+            }
+
+            let (key, value) = match line.split_once(' ') {
+                Some((k, v)) => (k, v),
+                None => (line, ""),
+            };
+
+            match key {
+                "worktree" => {
+                    if let Some(wt) = current.take() {
+                        worktrees.push(wt);
+                    }
+                    current = Some(WorktreeInfo {
+                        path: value.to_string(),
+                        head: None,
+                        branch: None,
+                        detached: false,
+                        bare: false,
+                    });
+                }
+                "HEAD" => {
+                    if let Some(wt) = current.as_mut() {
+                        wt.head = Some(value.to_string());
+                    }
+                }
+                "branch" => {
+                    if let Some(wt) = current.as_mut() {
+                        wt.branch = Some(
+                            value
+                                .strip_prefix("refs/heads/")
+                                .unwrap_or(value)
+                                .to_string(),
+                        );
+                    }
+                }
+                "detached" => {
+                    if let Some(wt) = current.as_mut() {
+                        wt.detached = true;
+                    }
+                }
+                "bare" => {
+                    if let Some(wt) = current.as_mut() {
+                        wt.bare = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(wt) = current.take() {
+            worktrees.push(wt);
+        }
+
+        worktrees
+    }
+
+    /// The checkouts that currently have `branch` attached as HEAD, in
+    /// `git worktree list` order (the main checkout first).
+    pub fn checkouts_on_branch(&self, branch: &str) -> Result<Vec<WorktreeInfo>> {
+        Ok(self
+            .list_worktrees()?
+            .into_iter()
+            .filter(|wt| !wt.bare && wt.branch.as_deref() == Some(branch))
+            .collect())
+    }
+
+    /// Point `refs/remotes/origin/<branch>` at `oid`.
+    ///
+    /// Called after hitch pushes a branch itself. Git only updates a
+    /// remote-tracking ref for pushes it routes through the normal refspec
+    /// machinery; hitch's deploy-key pushes use an explicit URL, so without
+    /// this the remote-tracking ref keeps its pre-push value and `git status`
+    /// reports a freshly-pushed branch as ahead of (or diverged from) origin
+    /// until the user's next fetch.
+    pub fn set_remote_tracking_ref(&self, branch: &str, oid: &str) -> Result<()> {
+        let refname = format!("refs/remotes/origin/{}", branch);
+        let output = self.run_git_command(&[
+            "update-ref",
+            "-m",
+            "hitch: record pushed tip",
+            &refname,
+            oid,
+        ])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to update '{}' to {}: {}",
+                refname,
+                oid,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
     /// Resolve `reference` to its commit OID, or `None` if it does not exist.
     ///
     /// Unlike `rev_parse`, a missing reference is not an error — this is the
@@ -1277,14 +1422,20 @@ impl GitOperations {
     /// rebuilt environment branch: nothing about the ref is observable as
     /// changed until this one call succeeds, and a concurrent rebuild that
     /// raced us to publish first is detected instead of silently overwritten.
+    ///
+    /// `reason` is recorded in the ref's reflog. Users recovering from a
+    /// surprising rebuild read `git reflog <branch>` first; an entry that says
+    /// what hitch did is the difference between a correct `git reset` and a
+    /// guess that digs the hole deeper.
     pub fn update_ref_cas(
         &self,
         refname: &str,
         new_oid: &str,
         expected_old_oid: Option<&str>,
+        reason: &str,
     ) -> Result<()> {
         let old = expected_old_oid.unwrap_or("0000000000000000000000000000000000000000");
-        let output = self.run_git_command(&["update-ref", refname, new_oid, old])?;
+        let output = self.run_git_command(&["update-ref", "-m", reason, refname, new_oid, old])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}' to {} (expected current value {}): {}",
@@ -1917,15 +2068,39 @@ impl GitOperations {
             return Ok(false); // already up to date
         }
 
-        // Don't rewrite the ref of the currently checked-out branch behind the
-        // working tree's back; fast-forward it through the worktree instead.
-        let current = self.get_current_branch().unwrap_or_default();
-        if current == branch {
-            let ff = self.run_git_command(&["merge", "--ff-only", &remote_ref])?;
+        // Don't rewrite the ref behind a checkout's back — `git update-ref` moves
+        // it without touching that checkout's index or working tree, which is
+        // exactly how a "your tree is mysteriously full of reverse changes" state
+        // is produced. Fast-forward through the checkout itself instead. This has
+        // to consider every worktree, not just the main one: a branch attached in
+        // a linked worktree desynchronizes the same way and is invisible to
+        // `get_current_branch()`.
+        let attached = self.checkouts_on_branch(branch).unwrap_or_default();
+        if let Some(checkout) = attached.first() {
+            let checkout_git = if checkout.path == self.repo_path {
+                None
+            } else {
+                Self::new_at_path(&checkout.path).ok()
+            };
+            let git = checkout_git.as_ref().unwrap_or(self);
+            // A dirty checkout is left alone: a fast-forward here could fail
+            // halfway or surprise the user mid-edit. Building from the slightly
+            // stale local ref is the safer of the two wrong answers, and the
+            // caller treats a `false` return as "nothing done".
+            if !git.is_working_directory_clean().unwrap_or(false) {
+                return Ok(false);
+            }
+            let ff = git.run_git_command(&["merge", "--ff-only", &remote_ref])?;
             return Ok(ff.status.success());
         }
 
-        let update = self.run_git_command(&["update-ref", &local_ref, &remote_ref])?;
+        let update = self.run_git_command(&[
+            "update-ref",
+            "-m",
+            "hitch: fast-forward to origin",
+            &local_ref,
+            &remote_ref,
+        ])?;
         if !update.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to fast-forward '{}' to origin: {}",

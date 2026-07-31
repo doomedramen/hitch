@@ -1448,4 +1448,100 @@ mod tests {
 
         Ok(())
     }
+
+    // Worktree enumeration — the primitive every ref-moving operation needs to
+    // know which checkouts it is about to desynchronize.
+
+    #[test]
+    fn test_list_worktrees_reports_main_and_linked_checkouts() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "init"])?;
+            env.git.run(&["branch", "side"])?;
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            let only_main = git_ops.list_worktrees()?;
+            assert_eq!(only_main.len(), 1, "expected just the main checkout");
+            assert_eq!(only_main[0].branch.as_deref(), Some("main"));
+            assert!(!only_main[0].detached);
+            assert!(only_main[0].head.is_some());
+
+            let wt_path = env.temp_dir.join("linked");
+            env.git
+                .run(&["worktree", "add", &wt_path.to_string_lossy(), "side"])?
+                .assert_success();
+
+            let both = git_ops.list_worktrees()?;
+            assert_eq!(both.len(), 2, "linked worktree not reported: {:?}", both);
+            assert_eq!(
+                git_ops.checkouts_on_branch("side")?.len(),
+                1,
+                "checkouts_on_branch missed the linked worktree"
+            );
+            assert!(
+                git_ops.checkouts_on_branch("does-not-exist")?.is_empty(),
+                "checkouts_on_branch matched a branch nothing has attached"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_worktrees_ignores_detached_head_checkouts() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "init"])?;
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let head = git_ops.rev_parse("HEAD")?;
+
+            let wt_path = env.temp_dir.join("detached");
+            env.git
+                .run(&[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    &wt_path.to_string_lossy(),
+                    &head,
+                ])?
+                .assert_success();
+
+            let worktrees = git_ops.list_worktrees()?;
+            assert_eq!(worktrees.len(), 2);
+            let detached = worktrees
+                .iter()
+                .find(|w| w.branch.is_none())
+                .expect("detached worktree not reported");
+            assert!(detached.detached);
+
+            // A detached checkout names a commit, not a branch, so moving
+            // 'main' cannot desynchronize it and it must not be resynced.
+            assert!(
+                git_ops
+                    .checkouts_on_branch("main")?
+                    .iter()
+                    .all(|w| w.branch.as_deref() == Some("main")),
+                "detached checkout wrongly reported as attached to 'main'"
+            );
+            assert_eq!(git_ops.checkouts_on_branch("main")?.len(), 1);
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

@@ -5,6 +5,21 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
 
+    /// A path next to the test repository rather than inside it. Worktrees
+    /// created inside the repo appear as untracked content in its own
+    /// `git status`, which is not how anyone actually uses them.
+    fn sibling_path(env: &TestEnvironment, name: &str) -> std::path::PathBuf {
+        let repo_name = env
+            .temp_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "repo".to_string());
+        env.temp_dir
+            .parent()
+            .expect("test repo has no parent directory")
+            .join(format!("{}-{}", repo_name, name))
+    }
+
     #[test]
     fn test_hitch_release_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -911,6 +926,125 @@ mod tests {
             env.git
                 .run(&["cat-file", "-e", "main:a.txt"])?
                 .assert_failure(); // feat-a's file must not be on main
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Releasing to the branch the user is standing on must leave their
+    /// checkout matching it. `update-ref` moves the branch without touching
+    /// the index or working tree, so without an explicit resync the entire
+    /// release diff shows up as uncommitted reverse changes in `git status`.
+    #[test]
+    fn test_hitch_release_resyncs_checked_out_target_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("released.txt", "released content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add released.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // The user is sitting on the release target.
+            env.git.run(&["checkout", "main"])?;
+            assert!(!env.fs.file_exists("released.txt"));
+
+            env.hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success();
+
+            let status = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                status.stdout().trim().is_empty(),
+                "release left the checked-out target branch desynchronized: '{}'",
+                status.stdout().trim()
+            );
+            assert!(
+                env.fs.file_exists("released.txt"),
+                "released file is missing from the working tree after release"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A *dirty* checkout of the release target must be left alone — the
+    /// user's uncommitted work outranks tidiness — but they must be told.
+    /// The main checkout can't be the dirty one (release requires it clean),
+    /// so this uses a linked worktree sitting on the release target.
+    #[test]
+    fn test_hitch_release_warns_instead_of_clobbering_dirty_target_checkout() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Release to a branch other than the one the main checkout is on,
+            // so the target can be attached in a linked worktree.
+            env.git.run(&["branch", "production"])?.assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("released.txt", "released content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add released.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Sibling of the repo, not inside it: a worktree nested in the
+            // repository shows up as untracked content in `git status` and
+            // trips the clean-working-tree precondition.
+            let wt_path = sibling_path(env, "prod-worktree");
+            env.git
+                .run(&["worktree", "add", &wt_path.to_string_lossy(), "production"])?
+                .assert_success();
+            std::fs::write(wt_path.join("scratch.txt"), "precious uncommitted work")?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "production", "--force"])
+                .execute()?
+                .assert_success();
+
+            assert_eq!(
+                std::fs::read_to_string(wt_path.join("scratch.txt"))?,
+                "precious uncommitted work",
+                "release destroyed uncommitted work in the target checkout"
+            );
+            assert!(
+                result.stdout().contains("uncommitted changes")
+                    || result.stderr().contains("uncommitted changes"),
+                "release silently skipped resyncing a dirty checkout without warning"
+            );
 
             Ok::<(), anyhow::Error>(())
         });

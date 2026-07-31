@@ -836,16 +836,6 @@ pub fn rebuild_environment_opts(
     cleanup_worktree();
     publish_result?;
 
-    if let Ok(current) = context.git().get_current_branch() {
-        if current == env_name {
-            context.log_verbose(&format!(
-                "Updating local '{}' working tree to match rebuilt ref",
-                env_name
-            ));
-            let _ = context.git().reset_hard_to("HEAD");
-        }
-    }
-
     logger.complete();
 
     context.log_verbose(&format!(
@@ -864,28 +854,42 @@ pub(crate) fn force_push_with_deploy_key_if_configured(
     env_name: &str,
     remote_sha_before: &Option<String>,
 ) -> Result<()> {
-    let (owner, repo) = match crate::utils::gh::owner_repo_from_remote() {
-        Ok(pair) => pair,
-        Err(_) => {
-            return context
-                .git()
-                .force_push_with_lease(env_name, remote_sha_before.as_deref());
+    let result = match crate::utils::gh::owner_repo_from_remote() {
+        Ok((owner, repo)) if crate::utils::setup::is_setup(&owner, &repo) => {
+            let key_path = crate::utils::setup::key_path(&owner, &repo);
+            let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
+            context.git().force_push_with_ssh_identity(
+                env_name,
+                remote_sha_before.as_deref(),
+                &key_path.to_string_lossy(),
+                &ssh_url,
+            )
         }
+        _ => context
+            .git()
+            .force_push_with_lease(env_name, remote_sha_before.as_deref()),
     };
 
-    if crate::utils::setup::is_setup(&owner, &repo) {
-        let key_path = crate::utils::setup::key_path(&owner, &repo);
-        let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
-        context.git().force_push_with_ssh_identity(
-            env_name,
-            remote_sha_before.as_deref(),
-            &key_path.to_string_lossy(),
-            &ssh_url,
-        )
-    } else {
-        context
-            .git()
-            .force_push_with_lease(env_name, remote_sha_before.as_deref())
+    if result.is_ok() {
+        record_pushed_tip(context, env_name);
+    }
+    result
+}
+
+/// Point `refs/remotes/origin/<branch>` at whatever hitch just pushed.
+///
+/// The deploy-key pushes go to an explicit SSH URL rather than the `origin`
+/// remote, so git does not update the remote-tracking ref for them. Left
+/// alone, `git status` then reports a branch hitch has just synchronized as
+/// ahead of — or diverged from — origin until the user's next fetch, which
+/// reads exactly like the desync bug this is all trying to eliminate.
+/// Best-effort: a failure here is cosmetic and must not fail a landed push.
+fn record_pushed_tip(context: &GlobalContext, branch: &str) {
+    if let Ok(Some(sha)) = context
+        .git()
+        .rev_parse_opt(&format!("refs/heads/{}", branch))
+    {
+        let _ = context.git().set_remote_tracking_ref(branch, &sha);
     }
 }
 
@@ -897,21 +901,132 @@ pub(crate) fn push_branch_with_deploy_key_if_configured(
     context: &GlobalContext,
     branch: &str,
 ) -> Result<()> {
-    let (owner, repo) = match crate::utils::gh::owner_repo_from_remote() {
-        Ok(pair) => pair,
-        Err(_) => {
-            return context.git().push_branch(branch);
+    let result = match crate::utils::gh::owner_repo_from_remote() {
+        Ok((owner, repo)) if crate::utils::setup::is_setup(&owner, &repo) => {
+            let key_path = crate::utils::setup::key_path(&owner, &repo);
+            let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
+            context
+                .git()
+                .push_with_ssh_identity(branch, &key_path.to_string_lossy(), &ssh_url)
         }
+        _ => context.git().push_branch(branch),
     };
 
-    if crate::utils::setup::is_setup(&owner, &repo) {
-        let key_path = crate::utils::setup::key_path(&owner, &repo);
-        let ssh_url = format!("git@github.com:{}/{}.git", owner, repo);
-        context
-            .git()
-            .push_with_ssh_identity(branch, &key_path.to_string_lossy(), &ssh_url)
+    if result.is_ok() {
+        record_pushed_tip(context, branch);
+    }
+    result
+}
+
+/// A checkout that has some branch attached as HEAD, captured *before* that
+/// branch's ref is moved. See `scan_checkouts_on_branch`.
+pub(crate) struct CheckoutState {
+    path: String,
+    /// Whether the working tree was clean at scan time — i.e. before the ref
+    /// moved. Asking afterwards is useless: every affected checkout reports
+    /// dirty, because `git status` is then comparing an old working tree
+    /// against the new tip.
+    clean: bool,
+}
+
+/// Record which checkouts have `branch` attached, and whether each was clean,
+/// *before* anything moves the ref.
+///
+/// This must be called ahead of the `update-ref` and its result handed to
+/// `resync_checkouts`. The ordering is the whole point: once the ref has
+/// moved, the difference between "the user has uncommitted work here" and
+/// "this checkout is simply stale" is no longer observable.
+pub(crate) fn scan_checkouts_on_branch(
+    context: &GlobalContext,
+    branch: &str,
+) -> Result<Vec<CheckoutState>> {
+    let mut states = Vec::new();
+
+    for checkout in context.git().checkouts_on_branch(branch)? {
+        let clean = match checkout_git(context, &checkout.path) {
+            Some(git) => git.is_working_directory_clean().unwrap_or(false),
+            None => false,
+        };
+        states.push(CheckoutState {
+            path: checkout.path,
+            clean,
+        });
+    }
+
+    Ok(states)
+}
+
+/// Open a `GitOperations` for `path`, reusing the context's own instance when
+/// that path *is* the main checkout. `git worktree list` reports fully
+/// resolved paths, so compare canonically rather than by string.
+fn checkout_git(context: &GlobalContext, path: &str) -> Option<GitOperations> {
+    let same_as_main = std::fs::canonicalize(path)
+        .ok()
+        .zip(std::fs::canonicalize(context.git().workdir()).ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+
+    if same_as_main {
+        // Cheap to reopen and keeps the return type uniform; the main checkout
+        // is a normal repository path like any other.
+        GitOperations::new_at_path(context.git().workdir()).ok()
     } else {
-        context.git().push_branch(branch)
+        GitOperations::new_at_path(path).ok()
+    }
+}
+
+/// Bring every checkout in `scanned` back in line with the ref hitch just
+/// moved to `new_sha`.
+///
+/// `git update-ref` moves a branch without touching the index or working tree
+/// of any checkout that has it attached as HEAD — git leaves those alone by
+/// design. So a user sitting on `production` when `hitch release` publishes
+/// sees the entire release diff appear as uncommitted *reverse* changes in
+/// `git status`, with no indication of why. This is the repair, and it must be
+/// called from every site that lands a new commit on a branch a human might be
+/// standing on (`publish_environment_build` and `hitch release`).
+///
+/// Checkouts that were clean at scan time are hard-reset to `new_sha` (their
+/// HEAD symref already resolves there; only index and working tree are stale).
+/// Ones that were already dirty are deliberately **not** touched — the user's
+/// uncommitted work outranks tidiness — and get a warning naming the path and
+/// the exact recovery command. Detached-HEAD checkouts never appear here at
+/// all: their HEAD names a commit, not the branch, so nothing moved underneath
+/// them.
+pub(crate) fn resync_checkouts(
+    context: &GlobalContext,
+    branch: &str,
+    new_sha: &str,
+    scanned: &[CheckoutState],
+) {
+    for checkout in scanned {
+        if !checkout.clean {
+            context.log_warning(&format!(
+                "'{}' is checked out at '{}' with uncommitted changes, so it was NOT \
+                 updated to the rebuilt branch. Your changes are safe, but that working \
+                 tree no longer matches '{}'. To reconcile it:\n  \
+                 cd {} && git stash && git reset --hard {} && git stash pop",
+                branch, checkout.path, branch, checkout.path, branch
+            ));
+            continue;
+        }
+
+        let result = match checkout_git(context, &checkout.path) {
+            Some(git) => git.reset_hard_to(new_sha),
+            None => Err(anyhow::anyhow!("could not open the repository there")),
+        };
+
+        match result {
+            Ok(()) => context.log_verbose(&format!(
+                "✓ Updated working tree at '{}' to rebuilt '{}'",
+                checkout.path, branch
+            )),
+            Err(e) => context.log_warning(&format!(
+                "Failed to update the working tree at '{}' to the rebuilt '{}': {}. \
+                 Reconcile it with:\n  cd {} && git reset --hard {}",
+                checkout.path, branch, e, checkout.path, branch
+            )),
+        }
     }
 }
 
@@ -938,6 +1053,9 @@ pub(crate) fn publish_environment_build(
     let env_ref = format!("refs/heads/{}", env_name);
     let old_env_sha = context.git().rev_parse_opt(&env_ref)?;
 
+    // Must happen before the ref moves — see `scan_checkouts_on_branch`.
+    let checkouts = scan_checkouts_on_branch(context, env_name)?;
+
     if let Some(ref old_sha) = old_env_sha {
         let backup_ref = format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp);
         context.git().update_ref(&backup_ref, old_sha)?;
@@ -947,10 +1065,12 @@ pub(crate) fn publish_environment_build(
         ));
     }
 
-    if let Err(e) = context
-        .git()
-        .update_ref_cas(&env_ref, new_sha, old_env_sha.as_deref())
-    {
+    if let Err(e) = context.git().update_ref_cas(
+        &env_ref,
+        new_sha,
+        old_env_sha.as_deref(),
+        &format!("hitch: rebuild {}", env_name),
+    ) {
         return Err(anyhow::anyhow!(
             "Failed to publish '{}': {}. The build itself succeeded but could not be \
              published — this usually means another rebuild landed first. Fetch and re-run \
@@ -962,6 +1082,11 @@ pub(crate) fn publish_environment_build(
     }
 
     context.log_verbose(&format!("✓ Published '{}' ({})", env_name, new_sha));
+
+    // The ref has moved; any checkout standing on it is now stale. Do this
+    // before pushing so the local repository is coherent even if the push
+    // fails or the user declines it.
+    resync_checkouts(context, env_name, new_sha, &checkouts);
 
     if context.should_push() {
         context.log_warning(&format!(

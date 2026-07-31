@@ -231,6 +231,12 @@ fn perform_release_core(
     // Snapshot the target branch SHA before building — CAS old value.
     let target_sha = context.git().get_branch_commit_sha(target_branch)?;
 
+    // A release target is the branch a human is most likely to be standing on
+    // (`main`, `production`). Moving the ref does not update their index or
+    // working tree, so record what needs resyncing while it is still
+    // observable — after the ref moves, every affected checkout looks dirty.
+    let target_checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, target_branch)?;
+
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let temp_branch = format!("hitch-release-{}-{}", target_branch, timestamp);
     let repo_path = PathBuf::from(context.git().workdir());
@@ -325,10 +331,12 @@ fn perform_release_core(
 
     // Publish the target branch atomically with CAS.
     let env_ref = format!("refs/heads/{}", target_branch);
-    if let Err(e) = context
-        .git()
-        .update_ref_cas(&env_ref, &new_sha, Some(&target_sha))
-    {
+    if let Err(e) = context.git().update_ref_cas(
+        &env_ref,
+        &new_sha,
+        Some(&target_sha),
+        &format!("hitch: release {} to {}", env_name, target_branch),
+    ) {
         cleanup();
         return Err(anyhow::anyhow!(
             "Failed to publish '{}': {}. The release built successfully but could not \
@@ -340,6 +348,8 @@ fn perform_release_core(
         ));
     }
     context.log_verbose(&format!("✓ Published '{}' ({})", target_branch, new_sha));
+
+    crate::utils::prelude::resync_checkouts(context, target_branch, &new_sha, &target_checkouts);
 
     // Push if enabled. A push failure must NOT abort the release — the merge
     // and tag are already committed locally. Warn and tell the user how to

@@ -5,6 +5,21 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
 
+    /// A path next to the test repository rather than inside it. Worktrees
+    /// created inside the repo appear as untracked content in its own
+    /// `git status`, which is not how anyone actually uses them.
+    fn sibling_path(env: &TestEnvironment, name: &str) -> std::path::PathBuf {
+        let repo_name = env
+            .temp_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "repo".to_string());
+        env.temp_dir
+            .parent()
+            .expect("test repo has no parent directory")
+            .join(format!("{}-{}", repo_name, name))
+    }
+
     /// Helper: inject branches into hitch.json on hitch-metadata without using `hitch promote`.
     fn inject_branches_into_metadata(
         env: &TestEnvironment,
@@ -684,6 +699,123 @@ mod tests {
             assert!(
                 status.stdout().trim().is_empty(),
                 "expected a clean working tree after rebuild, got '{}'",
+                status.stdout().trim()
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Rebuilding while standing on the environment branch itself must leave
+    /// the checkout matching the rebuilt ref, not showing the whole rebuild as
+    /// uncommitted reverse changes.
+    #[test]
+    fn test_hitch_rebuild_resyncs_checked_out_environment_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("feature.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Stand on the environment branch, then rebuild it.
+            env.git.run(&["checkout", "dev"])?.assert_success();
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let status = env.git.run(&["status", "--porcelain"])?;
+            assert!(
+                status.stdout().trim().is_empty(),
+                "rebuild left the checked-out environment branch desynchronized: '{}'",
+                status.stdout().trim()
+            );
+            assert!(
+                env.fs.file_exists("feature.txt"),
+                "promoted file is missing from the working tree after rebuild"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The environment branch can be attached in a *linked worktree* rather
+    /// than the main checkout. `get_current_branch()` cannot see that, so this
+    /// desynchronization used to be permanent and invisible.
+    #[test]
+    fn test_hitch_rebuild_resyncs_linked_worktree_on_environment_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("feature.txt", "feature content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature.txt"])?;
+            env.git.run(&["checkout", "-b", "feature-2"])?;
+            env.fs.write_file("feature2.txt", "feature 2 content")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature2.txt"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // First promotion creates the 'dev' branch...
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            // ...which the *user* then checks out in their own linked worktree.
+            // Sibling of the repo, not inside it — a nested worktree would
+            // show up as untracked content in the repo's own `git status`.
+            let wt_path = sibling_path(env, "user-worktree");
+            let wt_path_str = wt_path.to_string_lossy().to_string();
+            env.git
+                .run(&["worktree", "add", &wt_path_str, "dev"])?
+                .assert_success();
+
+            // The second promotion rebuilds 'dev' underneath that worktree.
+            env.hitch
+                .run()
+                .args(&["promote", "feature-2", "dev"])
+                .execute()?
+                .assert_success();
+
+            assert!(
+                wt_path.join("feature2.txt").exists(),
+                "linked worktree on 'dev' was not updated to the rebuilt branch"
+            );
+
+            let wt_git = GitCommandRunner::new(&wt_path)?;
+            let status = wt_git.run(&["status", "--porcelain"])?;
+            assert!(
+                status.stdout().trim().is_empty(),
+                "linked worktree left desynchronized after rebuild: '{}'",
                 status.stdout().trim()
             );
 
