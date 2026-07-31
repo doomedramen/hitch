@@ -1842,7 +1842,8 @@ impl GitOperations {
         reason: &str,
     ) -> Result<()> {
         let old = expected_old_oid.unwrap_or("0000000000000000000000000000000000000000");
-        let output = self.run_git_command(&["update-ref", "-m", reason, refname, new_oid, old])?;
+        let output =
+            self.run_git_command(&["update-ref", "-m", reason, "--", refname, new_oid, old])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}' to {} (expected current value {}): {}",
@@ -1862,7 +1863,7 @@ impl GitOperations {
     /// backup ref. Anything that could clobber someone's own state should use
     /// `update_ref_cas` instead.
     pub fn update_ref(&self, refname: &str, new_oid: &str) -> Result<()> {
-        let output = self.run_git_command(&["update-ref", refname, new_oid])?;
+        let output = self.run_git_command(&["update-ref", "--", refname, new_oid])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to update '{}' to {}: {}",
@@ -2988,7 +2989,7 @@ impl GitOperations {
     /// Delete an arbitrary ref (`git update-ref -d`). Used to forget a
     /// recorded resolution.
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
-        let output = self.run_git_command(&["update-ref", "-d", refname])?;
+        let output = self.run_git_command(&["update-ref", "-d", "--", refname])?;
         if !output.status.success() {
             return Err(anyhow::anyhow!(
                 "Failed to delete ref '{}': {}",

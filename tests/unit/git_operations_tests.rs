@@ -1766,4 +1766,46 @@ mod tests {
 
         Ok(())
     }
+
+    /// A ref whose *name* is option-shaped must be handled as a name, not a
+    /// flag. This is defence in depth behind `validate_name`: `--` makes the
+    /// argv unambiguous no matter what reaches it.
+    #[test]
+    fn test_update_ref_treats_option_shaped_name_as_a_name() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            env.git.init()?;
+            env.git.config_user("Test User", "test@example.com")?;
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "init"])?.assert_success();
+
+            let git = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let head = git.rev_parse("HEAD")?;
+
+            // With `--` as a separator in update-ref and delete-ref, an option-shaped
+            // ref name must be accepted as a name, not parsed as an option. This is
+            // defence in depth: even if a name slips past validation, `--` ensures
+            // git never interprets it as a flag.
+            let result = git.update_ref("refs/hitch/--upload-pack=x", &head);
+            assert!(
+                result.is_ok(),
+                "an option-shaped ref name must succeed with -- separator"
+            );
+
+            // Verify the ref was actually created by checking with git rev-parse
+            // (without the -- separator, since git rev-parse doesn't support the
+            // standard GNU -- syntax; it interprets -- as a revision to print)
+            let created_ref = git.rev_parse("refs/hitch/--upload-pack=x")?;
+            assert!(
+                !created_ref.is_empty(),
+                "the option-shaped ref must be created"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
