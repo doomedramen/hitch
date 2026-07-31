@@ -1770,6 +1770,19 @@ mod tests {
     /// A ref whose *name* is option-shaped must be handled as a name, not a
     /// flag. This is defence in depth behind `validate_name`: `--` makes the
     /// argv unambiguous no matter what reaches it.
+    ///
+    /// The name here must itself start with `-` (option-shaped to git's own
+    /// argv parser), not merely *contain* `--something` after a leading path
+    /// segment like `refs/hitch/`. `refs/hitch/--upload-pack=x` is never
+    /// treated as a flag by git regardless of whether `--` is present, so a
+    /// test using it passes identically whether or not the `--` separator
+    /// exists — it exercises nothing. `--upload pack=x` (space keeps it an
+    /// invalid ref name so this doesn't leave a stray top-level ref behind)
+    /// is option-shaped at argv position 0: without `--`, git's own parser
+    /// rejects it as an unrecognized option before ever consulting ref-name
+    /// rules; with `--`, git treats it purely as a (still invalid) ref name
+    /// and rejects it as a bad ref name instead. That difference in *why* it
+    /// fails is what proves `--` is doing its job.
     #[test]
     fn test_update_ref_treats_option_shaped_name_as_a_name() -> Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -1784,23 +1797,22 @@ mod tests {
             let git = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
             let head = git.rev_parse("HEAD")?;
 
-            // With `--` as a separator in update-ref and delete-ref, an option-shaped
-            // ref name must be accepted as a name, not parsed as an option. This is
-            // defence in depth: even if a name slips past validation, `--` ensures
-            // git never interprets it as a flag.
-            let result = git.update_ref("refs/hitch/--upload-pack=x", &head);
-            assert!(
-                result.is_ok(),
-                "an option-shaped ref name must succeed with -- separator"
-            );
+            // Not a valid ref name either way, so this must always fail — but
+            // *how* it fails is the whole point of the `--` separator.
+            let result = git.update_ref("--upload pack=x", &head);
+            let err = result
+                .expect_err("not a valid ref name, must be rejected")
+                .to_string();
 
-            // Verify the ref was actually created by checking with git rev-parse
-            // (without the -- separator, since git rev-parse doesn't support the
-            // standard GNU -- syntax; it interprets -- as a revision to print)
-            let created_ref = git.rev_parse("refs/hitch/--upload-pack=x")?;
             assert!(
-                !created_ref.is_empty(),
-                "the option-shaped ref must be created"
+                !err.to_lowercase().contains("unknown option"),
+                "with `--` in place, git must never parse the ref name as a flag; got: {}",
+                err
+            );
+            assert!(
+                err.to_lowercase().contains("bad name") || err.to_lowercase().contains("bad ref"),
+                "expected a bad-ref-name rejection (proving `--` reached git), got: {}",
+                err
             );
 
             Ok::<(), anyhow::Error>(())

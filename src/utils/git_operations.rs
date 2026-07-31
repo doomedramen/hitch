@@ -1811,6 +1811,15 @@ impl GitOperations {
     /// Unlike `rev_parse`, a missing reference is not an error — this is the
     /// primary way to ask "does this ref exist, and if so what does it point
     /// at" in one call (e.g. an environment branch that hasn't been built yet).
+    ///
+    /// Deliberately has no `--` separator, unlike `update_ref`/`update_ref_cas`/
+    /// `delete_ref`: for `git rev-parse`, `--` means "the rest are pathspecs,
+    /// not revisions", not "end of options", so adding one would break every
+    /// caller here, which all pass computed revision expressions (e.g.
+    /// `<sha>^{tree}`) rather than a bare refname at argv position 0. The
+    /// option-shaped-input gap this closes elsewhere is closed here instead by
+    /// `validate_name` at the boundary, plus every caller always prefixing a
+    /// static string rather than passing raw untrusted input first.
     pub fn rev_parse_opt(&self, reference: &str) -> Result<Option<String>> {
         let output = self.run_git_command(&["rev-parse", "--verify", "--quiet", reference])?;
         if !output.status.success() {
