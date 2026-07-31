@@ -1886,35 +1886,72 @@ git commit -m "feat: publish an environment build in one atomic ref transaction"
 
 ### Task 10: Bound the archive refs
 
-`refs/hitch/backup/*` already accumulates without limit; Task 9 adds a second namespace beside it. Unbounded ref growth is a real production problem (ref listing and fetch negotiation both degrade). `hitch cleanup` already exists as the pruning command; extend what it prunes.
+**Revised during Phase 2 execution.** The plan originally assumed `hitch
+cleanup` already pruned `refs/hitch/backup/*` on some existing retention
+policy that Task 10 would just extend to the new `refs/hitch/prev/*`
+namespace. That assumption was wrong: `src/commands/cleanup.rs` (read in
+full during Phase 2 pre-flight) only ever deletes stale *feature branches*
+not currently promoted to any environment — it has never touched
+`refs/hitch/backup/*`, which `publish_environment_build` has been writing,
+unbounded, since before this plan existed. There is no existing policy to
+mirror. Confirmed via the human: design a new one now, rather than defer or
+narrow scope, since unbounded ref growth is a real production problem (ref
+listing and fetch negotiation both degrade) that both namespaces share.
+
+**Policy**: count-based, not age-based. A hyperactive environment can
+rebuild many times in a day (age-based would let it blow past any bound); a
+quiet environment's one rollback point is worth keeping even if old
+(age-based would prune it). Keep the `N` most recent refs *per environment,
+per namespace* — `refs/hitch/backup/<env>/*` and `refs/hitch/prev/<env>/*`
+are pruned independently of each other and of every other environment's
+refs, each down to its own most-recent-`N`. "Most recent" is determined by
+the timestamp segment already embedded in the ref name
+(`refs/hitch/{backup,prev}/<env>/<timestamp>`, the same `backup_timestamp`
+`publish_environment_build` already generates) — sorting ref names
+lexically under a fixed-width timestamp format sorts them chronologically,
+so no extra `for-each-ref --sort` or commit-date lookup is needed.
+`N = 10` is the default (keeps roughly the last 10 rebuilds' rollback
+points per environment, which is generous for manual rollback while still
+bounding growth).
 
 **Files:**
 - Modify: `src/commands/cleanup.rs`
 - Test: `tests/integration/cleanup_tests.rs`
 
 **Interfaces:**
-- Consumes: `refs/hitch/prev/<env>/<timestamp>` from Task 9.
-- Produces: no signature change — `hitch cleanup` prunes `refs/hitch/prev/*` on the same policy it already applies to `refs/hitch/backup/*`.
+- Consumes: `refs/hitch/prev/<env>/<timestamp>` from Task 9,
+  `GitOperations::list_refs_under`/`delete_ref` (both pre-existing).
+- Produces: no CLI-visible signature change — `hitch cleanup --apply` now
+  also prunes old archive refs (both namespaces) alongside its existing
+  stale-branch deletion; dry-run (no `--apply`) lists what it would prune
+  the same way it already lists candidate branches.
 
-- [ ] **Step 1: Read the existing policy**
+- [ ] **Step 1: Write the failing test**
 
-Read `src/commands/cleanup.rs` in full and find where it enumerates `refs/hitch/backup/`. Note the retention rule it applies (count-based or age-based) — the new namespace must use the *same* rule, not a second invented one.
-
-- [ ] **Step 2: Write the failing test**
-
-Append to the `mod tests` block in `tests/integration/cleanup_tests.rs`, mirroring the existing backup-ref pruning test in that file (read it first and copy its structure exactly, substituting the namespace):
+Read `src/commands/cleanup.rs` and `tests/integration/cleanup_tests.rs` in
+full first, so the new test matches this file's actual test style (helper
+functions, `TestSetup` variant used, assertion style) rather than
+guessing. Append to the `mod tests` block in
+`tests/integration/cleanup_tests.rs`:
 
 ```rust
-    /// refs/hitch/prev/* accumulates one ref per rebuild, so cleanup must prune
-    /// it on the same policy it already applies to refs/hitch/backup/*.
+    /// refs/hitch/backup/* and refs/hitch/prev/* both accumulate one ref per
+    /// rebuild with no existing bound — `hitch cleanup --apply` must prune
+    /// each namespace down to its N-most-recent-per-environment, independent
+    /// of the other namespace and of other environments.
     #[test]
-    fn test_cleanup_prunes_prev_refs() -> anyhow::Result<()> {
+    fn test_cleanup_prunes_old_archive_refs_per_env_per_namespace() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.hitch
                 .run()
                 .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
                 .execute()?
                 .assert_success();
 
@@ -1925,35 +1962,61 @@ Append to the `mod tests` block in `tests/integration/cleanup_tests.rs`, mirrori
                 .trim()
                 .to_string();
 
-            // Plant more prev refs than the retention policy keeps.
-            for i in 0..12 {
-                env.git
-                    .run(&[
-                        "update-ref",
-                        &format!("refs/hitch/prev/dev/2020010100000{}", i),
-                        &head,
-                    ])?
-                    .assert_success();
+            // Plant more refs than the retention policy keeps, in both
+            // namespaces, across two environments, so the test also proves
+            // pruning is scoped per-env (dev's excess doesn't affect qa's
+            // count and vice versa).
+            for namespace in ["backup", "prev"] {
+                for env_name in ["dev", "qa"] {
+                    for i in 0..15 {
+                        env.git
+                            .run(&[
+                                "update-ref",
+                                &format!(
+                                    "refs/hitch/{}/{}/2020010100{:04}",
+                                    namespace, env_name, i
+                                ),
+                                &head,
+                            ])?
+                            .assert_success();
+                    }
+                }
             }
 
             env.hitch
                 .run()
-                .args(&["cleanup", "--yes"])
+                .args(&["cleanup", "--apply"])
                 .execute()?
                 .assert_success();
 
-            let remaining = env
-                .git
-                .run(&["for-each-ref", "--format=%(refname)", "refs/hitch/prev/dev"])?
-                .stdout();
-            let count = remaining.lines().filter(|l| !l.trim().is_empty()).count();
-
-            assert!(
-                count < 12,
-                "cleanup left all {} prev refs in place:\n{}",
-                count,
-                remaining
-            );
+            for namespace in ["backup", "prev"] {
+                for env_name in ["dev", "qa"] {
+                    let remaining = env
+                        .git
+                        .run(&[
+                            "for-each-ref",
+                            "--format=%(refname)",
+                            &format!("refs/hitch/{}/{}", namespace, env_name),
+                        ])?
+                        .stdout();
+                    let count = remaining.lines().filter(|l| !l.trim().is_empty()).count();
+                    assert!(
+                        count <= 10,
+                        "cleanup left {} refs under refs/hitch/{}/{}, expected <= 10:\n{}",
+                        count,
+                        namespace,
+                        env_name,
+                        remaining
+                    );
+                    assert!(
+                        count > 0,
+                        "cleanup pruned every ref under refs/hitch/{}/{} — some of the \
+                         most-recent 10 must survive",
+                        namespace,
+                        env_name
+                    );
+                }
+            }
 
             Ok(())
         });
@@ -1962,24 +2025,90 @@ Append to the `mod tests` block in `tests/integration/cleanup_tests.rs`, mirrori
     }
 ```
 
-If `hitch cleanup` takes different flags than `--yes`, use the flags the existing cleanup tests in this file use — do not invent a flag.
+If `hitch cleanup`'s actual flags differ from `--apply` (check
+`src/commands/cleanup.rs`'s `CleanupCommand` struct — as of this plan's
+writing it's `--apply` plus an optional `--env`, not `--yes`), use the real
+flags. Do not invent a flag.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p hitch cleanup_prunes_prev_refs -- --nocapture`
-Expected: FAIL — `cleanup left all 12 prev refs in place`.
+Run: `cargo test -p hitch cleanup_prunes_old_archive_refs -- --nocapture`
+Expected: FAIL — some `refs/hitch/{backup,prev}/{dev,qa}` count assertion
+reports 15 refs remaining (nothing pruned).
 
-- [ ] **Step 4: Extend the prune**
+- [ ] **Step 3: Implement the retention policy**
 
-In `src/commands/cleanup.rs`, wherever `refs/hitch/backup/` is enumerated, apply the identical logic to `refs/hitch/prev/`. If the code has a single constant for the prefix, add a second and loop over both rather than duplicating the block — two call sites of the same rule is the point where a loop is warranted, not premature.
+In `src/commands/cleanup.rs`, add a helper and call it from `run` alongside
+the existing branch-cleanup logic (same `args.apply`-gated dry-run/apply
+split the branch logic already has — list candidates always, only delete
+under `--apply`):
 
-- [ ] **Step 5: Run tests to verify they pass**
+```rust
+/// Environments whose archive refs get pruned. `--env` scopes this exactly
+/// like it already scopes branch cleanup.
+fn envs_in_scope(config: &crate::types::HitchConfig, env_filter: Option<&str>) -> Vec<String> {
+    config
+        .environments
+        .keys()
+        .filter(|e| env_filter.map(|f| f == e.as_str()).unwrap_or(true))
+        .cloned()
+        .collect()
+}
 
-Run: `cargo test -p hitch cleanup_prunes_prev_refs`
+/// How many of the most recent archive refs to keep per (namespace,
+/// environment). Chosen to comfortably cover manual rollback while bounding
+/// unconditional growth — see Task 10 in the production-hardening plan for
+/// the reasoning against an age-based alternative.
+const ARCHIVE_REF_RETENTION: usize = 10;
+
+/// Refs older than the most recent `ARCHIVE_REF_RETENTION` under
+/// `refs/hitch/<namespace>/<env>/*`, for every namespace/env pair in scope.
+/// Ref names sort chronologically because the timestamp segment is
+/// fixed-width, so this needs no extra date lookup.
+fn stale_archive_refs(
+    context: &GlobalContext,
+    envs: &[String],
+) -> Result<Vec<String>> {
+    let mut stale = Vec::new();
+    for namespace in ["backup", "prev"] {
+        for env_name in envs {
+            let prefix = format!("refs/hitch/{}/{}/", namespace, env_name);
+            let mut refs = context.git().list_refs_under(&prefix)?;
+            refs.sort(); // chronological: fixed-width timestamp suffix
+            if refs.len() > ARCHIVE_REF_RETENTION {
+                stale.extend(refs.into_iter().rev().skip(ARCHIVE_REF_RETENTION));
+            }
+        }
+    }
+    Ok(stale)
+}
+```
+
+Wire it into `run`: compute `envs_in_scope` and `stale_archive_refs` after
+the existing branch-candidate collection, report the count in the dry-run
+listing (mirroring how branch candidates are printed), and under
+`args.apply` delete each via `context.git().delete_ref(...)`, logging
+success/failure per ref the same way branch deletion already logs per
+branch. Read the existing `run` function's exact structure before editing
+so the new block matches its style (log macros used, ordering of dry-run
+vs apply text) rather than diverging.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p hitch cleanup_prunes_old_archive_refs -- --nocapture`
 Expected: PASS.
 
 Run: `just test`
 Expected: PASS.
+
+- [ ] **Step 5: Manual end-to-end check**
+
+```bash
+just build && cd /tmp && rm -rf hitch-cleanup && mkdir hitch-cleanup && cd hitch-cleanup && git init -q && git commit -q --allow-empty -m init && /Users/martin/Developer/hitch/target/release/hitch init && /Users/martin/Developer/hitch/target/release/hitch add dev && for i in $(seq -w 1 12); do git update-ref refs/hitch/prev/dev/2020010100000$i $(git rev-parse HEAD); done && /Users/martin/Developer/hitch/target/release/hitch cleanup && /Users/martin/Developer/hitch/target/release/hitch cleanup --apply && git for-each-ref refs/hitch/prev/dev | wc -l
+```
+
+Expected: dry-run output mentions the archive refs it would prune; after
+`--apply`, at most 10 remain.
 
 - [ ] **Step 6: Format, lint, commit**
 
@@ -1989,7 +2118,7 @@ just format && just format-check && just lint
 
 ```bash
 git add src/commands/cleanup.rs tests/integration/cleanup_tests.rs
-git commit -m "feat: prune refs/hitch/prev alongside refs/hitch/backup in cleanup"
+git commit -m "feat: bound refs/hitch/backup and refs/hitch/prev to 10 most recent per env"
 ```
 
 ---
