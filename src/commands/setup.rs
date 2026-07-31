@@ -237,6 +237,9 @@ fn discover_branches(
 }
 
 fn gh_put(gh_path: &str, endpoint: &str, body: &str) -> Result<String> {
+    // Piped stdin is the point here (the JSON body is written to `gh`, then
+    // the pipe is closed), so this cannot use a null-stdin builder.
+    #[allow(clippy::disallowed_methods)]
     let mut child = std::process::Command::new(gh_path)
         .args(["api", endpoint, "--input", "-", "-X", "PUT"])
         .stdin(std::process::Stdio::piped())

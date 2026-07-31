@@ -922,6 +922,10 @@ fn has_leftover_markers(worktree_git: &GitOperations) -> bool {
 
 fn run_mergetool(worktree_path: &str) {
     use std::process::Command;
+    // The one deliberate exception to "never let git block on a real
+    // terminal" (see AGENTS.md): `hitch resolve --tool` exists specifically
+    // to hand the user an interactive `git mergetool` session.
+    #[allow(clippy::disallowed_methods)]
     let _ = Command::new("git")
         .args(["mergetool"])
         .current_dir(worktree_path)

@@ -825,19 +825,13 @@ impl GitOperations {
     ) -> Result<()> {
         let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
 
-        // Not routed through `git_command`/`run_git_plumbing_command`: this is
-        // a network push over an explicit SSH identity, so it needs
-        // `GIT_SSH_COMMAND` and must NOT get `GIT_CONFIG_NOSYSTEM` (that would
-        // drop system-level credential-helper config on some machines). But it
-        // still runs under a deploy key that bypasses branch protection, so
-        // the same hooks/fsmonitor hardening applies directly.
-        let mut cmd = Command::new("git");
-        cmd.args(Self::HARDENING_ARGS);
-        cmd.args(["push", remote_url, &target]);
-        cmd.current_dir(&self.repo_path);
-        cmd.env("LC_ALL", "C");
-        cmd.env("LANG", "C");
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        // Built on `git_command` (hooks/fsmonitor hardening, locale,
+        // GIT_TERMINAL_PROMPT, null stdin) rather than
+        // `run_git_plumbing_command`: this is a network push over an explicit
+        // SSH identity, so it needs `GIT_SSH_COMMAND` layered on top and must
+        // NOT get `GIT_CONFIG_NOSYSTEM` (that would drop system-level
+        // credential-helper config on some machines).
+        let mut cmd = self.git_command(&["push", remote_url, &target]);
         cmd.env(
             "GIT_SSH_COMMAND",
             format!(
@@ -845,7 +839,6 @@ impl GitOperations {
                 ssh_identity_file
             ),
         );
-        cmd.stdin(Stdio::null());
 
         let output = cmd.output().with_context(|| {
             format!(
@@ -1999,16 +1992,9 @@ impl GitOperations {
         let lease = format!("--force-with-lease={}:{}", refname, expect);
         let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
 
-        // See push_with_ssh_identity: network push, needs GIT_SSH_COMMAND,
-        // must NOT get GIT_CONFIG_NOSYSTEM, but does get the same
-        // hooks/fsmonitor hardening and terminal-prompt suppression directly.
-        let mut cmd = Command::new("git");
-        cmd.args(Self::HARDENING_ARGS);
-        cmd.args(["push", remote_url, &target, &lease]);
-        cmd.current_dir(&self.repo_path);
-        cmd.env("LC_ALL", "C");
-        cmd.env("LANG", "C");
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        // See push_with_ssh_identity: built on `git_command`, needs
+        // GIT_SSH_COMMAND layered on top, must NOT get GIT_CONFIG_NOSYSTEM.
+        let mut cmd = self.git_command(&["push", remote_url, &target, &lease]);
         cmd.env(
             "GIT_SSH_COMMAND",
             format!(
@@ -2016,7 +2002,6 @@ impl GitOperations {
                 ssh_identity_file
             ),
         );
-        cmd.stdin(Stdio::null());
 
         let output = cmd.output().with_context(|| {
             format!(

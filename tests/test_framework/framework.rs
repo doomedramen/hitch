@@ -241,9 +241,14 @@ impl HitchTestFramework {
 
         // Try to build hitch if not found
         println!("Hitch binary not found, attempting to build...");
+        // Test-harness bootstrap: spawns `cargo` (neither git nor gh) to
+        // build the binary under test when it isn't already there; nulled
+        // stdin for the same "never inherit a real terminal" reason.
+        #[allow(clippy::disallowed_methods)]
         let output = Command::new("cargo")
             .args(["build", "--bin", "hitch"])
             .current_dir(project_root)
+            .stdin(std::process::Stdio::null())
             .output()?;
 
         if !output.status.success() {

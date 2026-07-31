@@ -91,14 +91,20 @@ covered.
   need rather than the whole file.
 - `src/utils/git_operations.rs` — the *only* place that shells out to `git`.
   Every git primitive is a named method (`merge_tree_compose`, `commit_tree`,
-  `update_ref_cas`, ...), all via `run_git_command` (which forces
-  `LC_ALL=C`/`LANG=C` since several call sites match English stderr
-  substrings, and `stdin(Stdio::null())` since `Command::output()` otherwise
-  leaves stdin inherited from the caller — see the gotcha below — never
-  bypass either by calling `git` directly from a command module). The `git2`
-  dependency is present but effectively dead — only used for repo discovery,
-  never for merges — real work always shells out to the `git` binary. Don't
-  introduce new git2 usage without a specific reason.
+  `update_ref_cas`, ...). All of them build their subprocess through
+  `git_command`, which forces `LC_ALL=C`/`LANG=C` (several call sites match
+  English stderr substrings), `GIT_TERMINAL_PROMPT=0`, `stdin(Stdio::null())`
+  (see the gotcha below), and the hardening flags `core.hooksPath=/dev/null`
+  and `core.fsmonitor=false` — hitch runs under a deploy key that bypasses
+  branch protection, so anything repo-local config can make git execute
+  inherits those rights. `run_git_plumbing_command` adds
+  `GIT_CONFIG_NOSYSTEM=1` and is for object-database-only calls; network calls
+  must not use it, because on macOS the system config is where
+  `credential.helper` lives. `clippy.toml` denies `std::process::Command::new`
+  outright, so a new spawn point must carry an explicit
+  `#[allow(clippy::disallowed_methods)]` — that annotation is the review
+  signal. The `git2` dependency is present but effectively dead — only used
+  for repo discovery, never for merges.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
 - `src/utils/pending_resync.rs` — crash recovery for the one window
@@ -257,6 +263,16 @@ able to wait on real input. The one deliberate exception is
 interactive. If you add a new `Command::new("git")` or `Command::new("gh")`
 call anywhere in `src/` *or* `tests/test_framework/`, for anything other
 than a genuinely interactive flow, null the stdin.
+
+This is now machine-enforced, not just documented: `clippy.toml` denies
+`std::process::Command::new` crate-wide (`-D warnings` in `just lint` turns
+it into a hard build failure), so *any* new spawn point — not only in
+`git_operations.rs`/`gh.rs`, but anywhere in `src/` or `tests/` — must carry
+an explicit `#[allow(clippy::disallowed_methods)]` plus a one-line reason
+(piped stdin needed, deliberately interactive, test harness simulating a
+user, ...). Treat the annotation as the review signal it's meant to be: if
+you can't articulate the reason in one line, route the call through
+`GitOperations::git_command`/`run_git_command` instead of blessing it.
 
 **`update-ref` desynchronizes every checkout that has the branch attached.**
 Git deliberately does not touch a checkout's index or working tree when a ref

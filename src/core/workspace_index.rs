@@ -130,9 +130,14 @@ mod tests {
     use std::sync::Arc;
 
     fn run_git(repo: &std::path::Path, args: &[&str]) {
+        // Test-only helper that simulates plain git usage against a scratch
+        // repo; nulls stdin for the same reason as the shared test harness in
+        // tests/test_framework/command_runners.rs.
+        #[allow(clippy::disallowed_methods)]
         let out = Command::new("git")
             .args(args)
             .current_dir(repo)
+            .stdin(std::process::Stdio::null())
             .output()
             .expect("failed to run git");
         assert!(

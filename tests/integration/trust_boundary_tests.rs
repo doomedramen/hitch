@@ -168,9 +168,14 @@ mod tests {
 
             let bare_path = sibling_path(env, "bare-remote.git");
             std::fs::create_dir_all(&bare_path)?;
+            // Test-only: sets up a scratch bare remote for the red-team
+            // scenario, so it deliberately spawns plain git rather than
+            // going through GitOperations (which has no repo here yet).
+            #[allow(clippy::disallowed_methods)]
             let init = std::process::Command::new("git")
                 .args(["init", "--bare"])
                 .current_dir(&bare_path)
+                .stdin(std::process::Stdio::null())
                 .output()?;
             assert!(init.status.success(), "failed to init bare remote repo");
 
@@ -216,9 +221,14 @@ mod tests {
 
             let bare_path = sibling_path(env, "bare-remote-force.git");
             std::fs::create_dir_all(&bare_path)?;
+            // Test-only: sets up a scratch bare remote for the red-team
+            // scenario, so it deliberately spawns plain git rather than
+            // going through GitOperations (which has no repo here yet).
+            #[allow(clippy::disallowed_methods)]
             let init = std::process::Command::new("git")
                 .args(["init", "--bare"])
                 .current_dir(&bare_path)
+                .stdin(std::process::Stdio::null())
                 .output()?;
             assert!(init.status.success(), "failed to init bare remote repo");
 

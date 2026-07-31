@@ -129,6 +129,9 @@ impl<'a> HitchCommandBuilder<'a> {
 
     /// Execute the hitch command
     pub fn execute(self) -> Result<HitchCommandResult> {
+        // The harness spawns the actual hitch binary under test; it is a
+        // blessed spawn point with its own null-stdin handling (see below).
+        #[allow(clippy::disallowed_methods)]
         let mut cmd = Command::new(self.binary_path);
         cmd.args(&self.args);
 
@@ -293,6 +296,9 @@ impl GitCommandRunner {
 
     /// Run git command with arguments
     pub fn run(&self, args: &[&str]) -> Result<GitCommandResult> {
+        // The harness deliberately spawns plain git to simulate what a user
+        // types; it is a blessed spawn point with its own null-stdin handling.
+        #[allow(clippy::disallowed_methods)]
         let mut cmd = Command::new("git");
         cmd.args(args);
         cmd.current_dir(&self.repo_path);

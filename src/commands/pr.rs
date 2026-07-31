@@ -127,6 +127,11 @@ pub(crate) fn run_gh_pr_create(
         }
     };
 
+    // Deliberately interactive: `hitch pr` is a human running a terminal
+    // command, and `gh pr create` itself prompts for a title/body when they
+    // aren't supplied via flags — that prompt must reach the real terminal,
+    // so stdin/stdout/stderr all stay inherited here.
+    #[allow(clippy::disallowed_methods)]
     let mut cmd = Command::new(&gh_path);
     cmd.arg("pr").arg("create");
     cmd.arg("--head").arg(head);

@@ -28,6 +28,10 @@ pub fn generate_deploy_key(owner: &str, repo: &str) -> Result<()> {
         std::fs::create_dir_all(parent).context("Failed to create .ssh directory")?;
     }
 
+    // ssh-keygen is neither git nor gh, but the same "never inherit a real
+    // terminal's stdin" discipline applies — `-N ""` and the existence check
+    // above already avoid every interactive prompt this could hit.
+    #[allow(clippy::disallowed_methods)]
     let status = Command::new("ssh-keygen")
         .args([
             "-t",
@@ -40,6 +44,7 @@ pub fn generate_deploy_key(owner: &str, repo: &str) -> Result<()> {
             "",
             "-q",
         ])
+        .stdin(std::process::Stdio::null())
         .status()
         .context("Failed to run ssh-keygen. Is ssh-keygen installed?")?;
 
@@ -68,6 +73,9 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
     let body_str = serde_json::to_string(&body)?;
     let endpoint = format!("/repos/{}/{}/keys", owner, repo);
 
+    // Piped stdin is the point here (the JSON body is written to `gh`, then
+    // the pipe is closed), so this cannot use a null-stdin builder.
+    #[allow(clippy::disallowed_methods)]
     let output = Command::new(gh_path)
         .args([
             "api",
@@ -99,6 +107,9 @@ pub fn add_deploy_key_to_repo(owner: &str, repo: &str, gh_path: &str) -> Result<
 
     if !write_ok {
         drop(output);
+        // `gh` is a separate binary with its own auth flow; stdin is nulled
+        // (below) just like git so it can never block on a terminal.
+        #[allow(clippy::disallowed_methods)]
         let fallback = Command::new(gh_path)
             .args([
                 "api",
@@ -172,6 +183,9 @@ pub fn lookup_deploy_key_id(owner: &str, repo: &str, gh_path: &str) -> Option<u6
     let endpoint = format!("/repos/{}/{}/keys", owner, repo);
     // Do NOT use --silent here: on some gh versions it suppresses the
     // JSON response for GET requests, not just the progress indicator.
+    // `gh` is a separate binary with its own auth flow; stdin is nulled
+    // (below) just like git so it can never block on a terminal.
+    #[allow(clippy::disallowed_methods)]
     let output = Command::new(gh_path)
         .args([
             "api",
@@ -222,6 +236,9 @@ pub fn lookup_deploy_key_id(owner: &str, repo: &str, gh_path: &str) -> Option<u6
         ".[] | select(.title == \"{}\") | .id",
         title.replace('"', "\\\"")
     );
+    // `gh` is a separate binary with its own auth flow; stdin is nulled
+    // (below) just like git so it can never block on a terminal.
+    #[allow(clippy::disallowed_methods)]
     let output = Command::new(gh_path)
         .args([
             "api",
@@ -253,9 +270,11 @@ pub fn configure_git_ssh(owner: &str, repo: &str) -> Result<()> {
     let path = key_path(owner, repo);
     let ssh_command = format!("ssh -i {} -o IdentitiesOnly=yes", path.display());
 
-    Command::new("git")
-        .args(["config", "--local", "core.sshCommand", &ssh_command])
-        .status()
+    // Route through GitOperations rather than a raw Command::new("git") so
+    // this is anchored to the repo (not the process's cwd) and gets the same
+    // locale/hardening/stdin discipline as every other git call.
+    let git = crate::utils::git_operations::GitOperations::new()?;
+    git.run_git_command(&["config", "--local", "core.sshCommand", &ssh_command])
         .context("Failed to configure git sshCommand")?;
 
     Ok(())

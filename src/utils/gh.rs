@@ -12,7 +12,15 @@ use std::process::Command;
 
 /// Locate the `gh` binary. Returns `None` if it isn't on PATH / runnable.
 pub fn find_gh() -> Option<String> {
-    let output = Command::new("which").arg("gh").output().ok()?;
+    // `which` is neither git nor gh, but the same "never inherit a real
+    // terminal's stdin" discipline applies to every subprocess this module
+    // spawns — it just never has any reason to read stdin.
+    #[allow(clippy::disallowed_methods)]
+    let output = Command::new("which")
+        .arg("gh")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
 
     if output.status.success() {
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -23,8 +31,12 @@ pub fn find_gh() -> Option<String> {
 
     // `which` itself may be unavailable (unlikely, but cheap to guard); fall
     // back to just trying to run `gh --version` directly.
+    // `gh` is a separate binary with its own auth flow; stdin is nulled just
+    // like git so it can never block on a terminal.
+    #[allow(clippy::disallowed_methods)]
     let status = Command::new("gh")
         .arg("--version")
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -63,7 +75,14 @@ pub struct GhAuthStatus {
 /// isn't a stable contract, so callers should treat `accounts` as a helpful
 /// summary and fall back to `raw_output` when something looks unparsed.
 pub fn check_auth_status(gh_path: &str) -> GhAuthStatus {
-    let output = Command::new(gh_path).arg("auth").arg("status").output();
+    // `gh` is a separate binary with its own auth flow; stdin is nulled just
+    // like git so it can never block on a terminal.
+    #[allow(clippy::disallowed_methods)]
+    let output = Command::new(gh_path)
+        .arg("auth")
+        .arg("status")
+        .stdin(std::process::Stdio::null())
+        .output();
 
     let (authenticated, raw_output) = match output {
         Ok(out) => {
@@ -148,6 +167,9 @@ fn parse_auth_status(raw: &str) -> Vec<GhAuthAccount> {
 /// Run `gh api <endpoint>` and return the raw JSON output.
 fn gh_api(endpoint: &str, flags: &[&str]) -> Result<String> {
     let gh = find_gh().context("gh CLI not found on PATH")?;
+    // `gh` is a separate binary with its own auth flow; stdin is nulled
+    // (below) just like git so it can never block on a terminal.
+    #[allow(clippy::disallowed_methods)]
     let mut cmd = Command::new(&gh);
     cmd.arg("api");
     cmd.arg(endpoint);
@@ -184,6 +206,9 @@ fn gh_api_with_body(
     default_method: &str,
 ) -> Result<String> {
     let gh = find_gh().context("gh CLI not found on PATH")?;
+    // Piped stdin is the point here (the JSON body is written to `gh`, then
+    // the pipe is closed), so this cannot use a null-stdin builder.
+    #[allow(clippy::disallowed_methods)]
     let mut cmd = Command::new(&gh);
     cmd.arg("api");
     cmd.arg(endpoint);
@@ -231,11 +256,12 @@ fn gh_api_with_body(
 
 /// Extract owner/repo from a git remote URL.
 pub fn owner_repo_from_remote() -> Result<(String, String)> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .context("Failed to get origin remote URL")?;
+    // No current_dir here historically, which meant this answered for the
+    // process's cwd rather than the repository; run it through GitOperations
+    // so it is anchored to the repo and gets the same locale/stdin discipline
+    // as every other git call.
+    let git = crate::utils::git_operations::GitOperations::new()?;
+    let output = git.run_git_command(&["remote", "get-url", "origin"])?;
 
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
 

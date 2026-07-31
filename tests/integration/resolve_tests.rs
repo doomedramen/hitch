@@ -320,9 +320,14 @@ mod tests {
 
             std::fs::write(worktree_path.join("shared.txt"), "resolved-both\n")?;
             let git_in_worktree = |args: &[&str]| {
-                std::process::Command::new("git")
-                    .args(args)
+                // Test-only: simulates a user editing files and staging them
+                // by hand in the resolve worktree, so it deliberately spawns
+                // plain git rather than going through GitOperations.
+                #[allow(clippy::disallowed_methods)]
+                let mut cmd = std::process::Command::new("git");
+                cmd.args(args)
                     .current_dir(&worktree_path)
+                    .stdin(std::process::Stdio::null())
                     .status()
             };
             git_in_worktree(&["add", "shared.txt"])?;
@@ -552,9 +557,14 @@ mod tests {
             env.temp_dir.file_name().unwrap().to_string_lossy()
         ));
         std::fs::write(worktree_path.join("shared.txt"), "resolved-both\n")?;
+        // Test-only: simulates a user staging their edited file by hand in
+        // the resolve worktree, so it deliberately spawns plain git rather
+        // than going through GitOperations.
+        #[allow(clippy::disallowed_methods)]
         std::process::Command::new("git")
             .args(["add", "shared.txt"])
             .current_dir(&worktree_path)
+            .stdin(std::process::Stdio::null())
             .status()?;
 
         env.hitch

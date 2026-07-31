@@ -929,8 +929,13 @@ mod tests {
 
         // Initialize git repo in temp directory
         std::env::set_current_dir(&temp_path)?;
+        // Test-only: bootstraps a scratch repo before GitOperations exists
+        // for it, so it deliberately spawns plain git rather than going
+        // through the builder.
+        #[allow(clippy::disallowed_methods)]
         std::process::Command::new("git")
             .args(["init"])
+            .stdin(std::process::Stdio::null())
             .output()
             .context("Failed to initialize git repo")?;
 
