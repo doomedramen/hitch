@@ -1180,9 +1180,18 @@ fn try_replay_resolution(
     // it must carry a signature from a signer the repository trusts —
     // `recorded_by` alone is self-reported by whoever wrote the ref and
     // proves nothing.
+    // Whether signing is even required is itself read from `hitch.json`, so a
+    // failure to read metadata here (e.g. `check_metadata_health` reporting
+    // hitch-metadata is behind remote) must not silently resolve to "not
+    // required" — that would fail open on the one question that decides
+    // whether the whole signature gate is active. Propagate instead: the
+    // caller (`rebuild_environment_opts`) already aborts the whole rebuild on
+    // any `Err` from this function (see the `?` at its call site), which
+    // matches how a `Halt`-policy conflict already aborts the rebuild — this
+    // is not a "hold this branch and keep going" situation, since we cannot
+    // even determine whether replay is authorized.
     let require_signed =
-        access_metadata_read_only(context, |config| Ok(config.require_signed_resolutions))
-            .unwrap_or(false);
+        access_metadata_read_only(context, |config| Ok(config.require_signed_resolutions))?;
     if require_signed && !resolutions::verify_resolution_signature(context.git(), &res)? {
         context.log_warning(&format!(
             "Recorded resolution {} for '{}' is not signed by a trusted signer and this \
@@ -1277,6 +1286,163 @@ fn try_replay_resolution(
             ));
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod try_replay_resolution_tests {
+    use super::*;
+    use crate::commands::global_context::GlobalContext;
+    use crate::utils::git_operations::{MergeStages, MergeTreeCompose};
+    use crate::utils::logging::Logger;
+    use crate::utils::resolutions::{self, PendingConflict};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    /// Test-only raw git invocation: this builds a throwaway repo to drive
+    /// `try_replay_resolution` directly, not hitch's own automation surface,
+    /// so it deliberately bypasses `GitOperations`/`run_git_command` (see the
+    /// stdin-inheritance gotcha in AGENTS.md for why that convention exists
+    /// elsewhere).
+    #[allow(clippy::disallowed_methods)]
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Regression test for the bug this module's `require_signed` check used
+    /// to have: reading `hitch.json` to decide whether signing is required
+    /// used `.unwrap_or(false)`, so ANY failure to read metadata — including
+    /// `check_metadata_health` reporting hitch-metadata is behind its
+    /// remote-tracking ref, exactly the "someone pushed to it concurrently"
+    /// condition that check exists to catch — silently resolved to "signing
+    /// not required" instead of surfacing. That fails open on the one
+    /// question that decides whether the whole signature gate is active.
+    ///
+    /// This constructs a repo where `refs/remotes/origin/hitch-metadata` is
+    /// ahead of local `hitch-metadata` — no real "origin" remote or network
+    /// fetch needed, since `is_branch_behind_remote` only ever compares those
+    /// two local refs — and a recorded (unsigned) resolution matching a
+    /// fabricated conflict, so `try_replay_resolution` gets past the
+    /// `load_resolution` lookup and reaches the `require_signed` read. Before
+    /// the fix this returned `Ok(None)` (silently held, signing bypassed);
+    /// after the fix it must return `Err` mentioning the metadata problem.
+    #[test]
+    fn require_signed_check_fails_closed_on_metadata_health_error() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("README.md"), "hi\n")?;
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+
+        // `hitch-metadata` branch, opted into signed resolutions.
+        git(repo, &["checkout", "-q", "-b", "hitch-metadata"]);
+        std::fs::write(
+            repo.join("hitch.json"),
+            r#"{"version":"1.0","environments":{},"require_signed_resolutions":true}"#,
+        )?;
+        git(repo, &["add", "hitch.json"]);
+        git(repo, &["commit", "-q", "-m", "config"]);
+        git(repo, &["checkout", "-q", "-"]);
+
+        // Simulate "hitch-metadata moved on origin since we last synced":
+        // a child commit of the local tip, referenced only via the local
+        // remote-tracking ref — exactly what `check_metadata_health`'s
+        // behind-remote check inspects, with no actual remote required.
+        let metadata_sha = git(repo, &["rev-parse", "hitch-metadata"]);
+        let tree = git(repo, &["rev-parse", &format!("{metadata_sha}^{{tree}}")]);
+        let ahead_sha = git(
+            repo,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &metadata_sha,
+                "-m",
+                "concurrent update",
+            ],
+        );
+        git(
+            repo,
+            &[
+                "update-ref",
+                "refs/remotes/origin/hitch-metadata",
+                &ahead_sha,
+            ],
+        );
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        // A recorded (unsigned) resolution matching a fabricated conflict on
+        // "shared.txt", so `try_replay_resolution` finds a hit and reaches
+        // the `require_signed` check rather than returning early on a miss.
+        let stages: Vec<MergeStages> = vec![(
+            "shared.txt".to_string(),
+            Some("base-oid".to_string()),
+            Some("ours-oid".to_string()),
+            Some("theirs-oid".to_string()),
+        )];
+        let resolved_dir = tempfile::tempdir()?;
+        std::fs::write(resolved_dir.path().join("shared.txt"), "resolved\n")?;
+        let pending = PendingConflict {
+            env: "dev".to_string(),
+            branch: "branch-b".to_string(),
+            conflicts_with: "branch-a".to_string(),
+            source_branch_head: metadata_sha.clone(),
+            stages: stages.clone(),
+        };
+        resolutions::record_resolution(
+            context.git(),
+            &pending,
+            resolved_dir.path(),
+            "tester@example.com",
+            "2026-01-01T00:00:00Z",
+        )?;
+
+        let outcome = MergeTreeCompose {
+            tree_oid: tree,
+            conflicted_stages: stages,
+        };
+        let mut confirmed = HashSet::new();
+
+        let result = try_replay_resolution(
+            &context,
+            &metadata_sha,
+            "branch-b",
+            "merge message",
+            &outcome,
+            &mut confirmed,
+        );
+
+        let err = result.expect_err(
+            "an unreadable/health-failing hitch-metadata during a replay attempt must surface \
+             as an error, not silently disable the signing requirement",
+        );
+        assert!(
+            err.to_string().contains("behind remote"),
+            "expected the metadata health failure to surface, got: {}",
+            err
+        );
+
+        Ok(())
     }
 }
 
