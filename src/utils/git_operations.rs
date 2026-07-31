@@ -2003,6 +2003,18 @@ impl GitOperations {
     /// (the branch itself, its archived previous tip, the build anchor), and a
     /// crash between separate updates leaves a state nobody designed.
     ///
+    /// The batch is bracketed with explicit `start`/`commit` transaction verbs
+    /// rather than relying on plain EOF to commit. `update-ref --stdin` treats
+    /// EOF as an implicit commit of whatever complete records it has already
+    /// received — so if this process dies mid-`write_all` (a signal, killed
+    /// between building the two halves of the input), git can commit a
+    /// genuinely partial batch, silently contradicting the all-or-nothing
+    /// claim above (which only holds for CAS failures, not for truncated
+    /// input). `start\0` opens an explicit transaction and `commit\0` closes
+    /// it; an EOF anywhere before the `commit` line then aborts instead of
+    /// applying a prefix. Available since git 2.27, under this codebase's 2.30
+    /// floor.
+    ///
     /// Input is NUL-delimited (`-z`) so a ref name can never be misread,
     /// whatever it contains. `reason` becomes the reflog message for every
     /// edit in the batch.
@@ -2018,6 +2030,8 @@ impl GitOperations {
         }
 
         let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(b"start");
+        input.push(0);
         for edit in edits {
             match edit {
                 RefEdit::Update {
@@ -2052,6 +2066,8 @@ impl GitOperations {
                 }
             }
         }
+        input.extend_from_slice(b"commit");
+        input.push(0);
 
         let mut cmd = self.git_command(&["update-ref", "-m", reason, "-z", "--stdin"]);
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
