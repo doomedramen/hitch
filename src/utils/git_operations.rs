@@ -523,18 +523,20 @@ impl GitOperations {
     /// Run a git command against a scratch index file instead of the repo's
     /// real index, so it can never touch the working directory or staging
     /// area of whatever branch is currently checked out.
+    ///
+    /// Built on `git_command` (hooks/fsmonitor disabled, terminal prompt
+    /// disabled, stdin null) with `GIT_CONFIG_NOSYSTEM` layered on top like
+    /// `run_git_plumbing_command` — every call site here (`read-tree`,
+    /// `update-index`, `write-tree`) touches only the scratch index and the
+    /// object database, never the network, so ignoring system config is safe.
     fn run_git_command_with_index(
         &self,
         index_path: &std::path::Path,
         args: &[&str],
     ) -> Result<std::process::Output> {
-        let mut cmd = Command::new("git");
-        cmd.args(args);
-        cmd.current_dir(&self.repo_path);
-        cmd.env("LC_ALL", "C");
-        cmd.env("LANG", "C");
+        let mut cmd = self.git_command(args);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
         cmd.env("GIT_INDEX_FILE", index_path);
-        cmd.stdin(Stdio::null()); // see run_git_command — never inherit a real terminal
         cmd.output().context(format!(
             "Failed to execute git command: git {} in repository at {}",
             args.join(" "),
@@ -598,11 +600,9 @@ impl GitOperations {
     /// straight into the object database via `git hash-object -w` — no
     /// working-directory file is ever created.
     fn stage_file_in_pending_write(&self, file: &str, content: &str) -> Result<()> {
-        let mut child = Command::new("git")
-            .args(["hash-object", "-w", "--stdin"])
-            .current_dir(&self.repo_path)
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
+        let mut cmd = self.git_command(&["hash-object", "-w", "--stdin"]);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -825,11 +825,19 @@ impl GitOperations {
     ) -> Result<()> {
         let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
 
+        // Not routed through `git_command`/`run_git_plumbing_command`: this is
+        // a network push over an explicit SSH identity, so it needs
+        // `GIT_SSH_COMMAND` and must NOT get `GIT_CONFIG_NOSYSTEM` (that would
+        // drop system-level credential-helper config on some machines). But it
+        // still runs under a deploy key that bypasses branch protection, so
+        // the same hooks/fsmonitor hardening applies directly.
         let mut cmd = Command::new("git");
+        cmd.args(Self::HARDENING_ARGS);
         cmd.args(["push", remote_url, &target]);
         cmd.current_dir(&self.repo_path);
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
         cmd.env(
             "GIT_SSH_COMMAND",
             format!(
@@ -1991,11 +1999,16 @@ impl GitOperations {
         let lease = format!("--force-with-lease={}:{}", refname, expect);
         let target = format!("refs/heads/{}:refs/heads/{}", branch, branch);
 
+        // See push_with_ssh_identity: network push, needs GIT_SSH_COMMAND,
+        // must NOT get GIT_CONFIG_NOSYSTEM, but does get the same
+        // hooks/fsmonitor hardening and terminal-prompt suppression directly.
         let mut cmd = Command::new("git");
+        cmd.args(Self::HARDENING_ARGS);
         cmd.args(["push", remote_url, &target, &lease]);
         cmd.current_dir(&self.repo_path);
         cmd.env("LC_ALL", "C");
         cmd.env("LANG", "C");
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
         cmd.env(
             "GIT_SSH_COMMAND",
             format!(
@@ -2943,11 +2956,9 @@ impl GitOperations {
     /// (`git hash-object -w --stdin`), without touching the working tree or
     /// index. Used to store a recorded resolution's payload.
     pub fn hash_object_bytes(&self, content: &[u8]) -> Result<String> {
-        let mut child = Command::new("git")
-            .args(["hash-object", "-w", "--stdin"])
-            .current_dir(&self.repo_path)
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
+        let mut cmd = self.git_command(&["hash-object", "-w", "--stdin"]);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -2979,11 +2990,9 @@ impl GitOperations {
         for (name, oid) in entries {
             input.push_str(&format!("100644 blob {}\t{}\n", oid, name));
         }
-        let mut child = Command::new("git")
-            .args(["mktree"])
-            .current_dir(&self.repo_path)
-            .env("LC_ALL", "C")
-            .env("LANG", "C")
+        let mut cmd = self.git_command(&["mktree"]);
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

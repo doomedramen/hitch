@@ -1,11 +1,22 @@
-//! Red-team tests: each one performs an actual attack against the built
-//! binary and asserts hitch is inert. These are regression guards for the
-//! trust-boundary work, not documentation.
+//! Red-team tests: each one performs an actual attack and asserts hitch is
+//! inert. These are regression guards for the trust-boundary work, not
+//! documentation.
+//!
+//! Most tests here drive the built `hitch` binary directly. The two
+//! deploy-key push tests instead call `GitOperations::push_with_ssh_identity`
+//! / `force_push_with_ssh_identity` directly against a local bare "remote":
+//! exercising them through the CLI would need a real `hitch setup` (a GitHub
+//! repo, a ruleset, an actual deploy key) which isn't available to a local
+//! test run, but the function under test is exactly the same code hitch's
+//! push path calls, and a local-path push still triggers the client-side
+//! `pre-push` hook this suite is guarding against — GIT_SSH_COMMAND is simply
+//! unused when the destination isn't an SSH URL.
 
 #[cfg(test)]
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
+    use hitch::utils::git_operations::GitOperations;
 
     /// A path next to the test repository rather than inside it. The hook
     /// directory and its sentinel must not live inside `env.temp_dir` (the
@@ -23,6 +34,24 @@ mod tests {
             .parent()
             .expect("test repo has no parent directory")
             .join(format!("{}-{}", repo_name, name))
+    }
+
+    /// Write an executable hook script at `hooks_dir/name` that touches
+    /// `sentinel` when it runs.
+    fn write_hook(hooks_dir: &std::path::Path, name: &str, sentinel: &std::path::Path) {
+        std::fs::create_dir_all(hooks_dir).expect("create evil hooks dir");
+        let hook = hooks_dir.join(name);
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\ntouch {}\n", sentinel.to_string_lossy()),
+        )
+        .expect("write hook script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+                .expect("make hook executable");
+        }
     }
 
     /// A repository-local `core.hooksPath` must not get hitch to execute a
@@ -74,6 +103,138 @@ mod tests {
             assert!(
                 !sentinel.exists(),
                 "a repo-local hook executed inside hitch's process"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `post-index-change` fires after `read-tree`/`update-index` touch the
+    /// index — exactly what `begin_branch_write`/`stage_file_in_pending_write`
+    /// use under the hood for every `modify_metadata` call, i.e. hitch's most
+    /// common mutating operation. Regression guard for a gap where
+    /// `run_git_command_with_index` built its own `Command` instead of
+    /// going through the shared hardened builder.
+    #[test]
+    fn test_repo_local_hooks_path_does_not_execute_via_scratch_index_writes() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let sentinel = sibling_path(env, "PWNED-index");
+            let hooks_dir = sibling_path(env, "evil-hooks-index");
+            write_hook(&hooks_dir, "post-index-change", &sentinel);
+
+            env.git
+                .run(&["config", "core.hooksPath", &hooks_dir.to_string_lossy()])?
+                .assert_success();
+
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            assert!(
+                !sentinel.exists(),
+                "a repo-local post-index-change hook executed during a scratch-index write"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// See the module doc comment for why this calls `GitOperations` directly
+    /// rather than driving the CLI: `push_with_ssh_identity` is the deploy-key
+    /// push path (AGENTS.md documents it as the only correct way to push a
+    /// protected branch), and it built its own unhardened `Command` — a
+    /// repo-local `pre-push` hook fired on an equivalent unguarded push.
+    #[test]
+    fn test_repo_local_hooks_path_does_not_execute_via_ssh_identity_push() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let sentinel = sibling_path(env, "PWNED-push");
+            let hooks_dir = sibling_path(env, "evil-hooks-push");
+            write_hook(&hooks_dir, "pre-push", &sentinel);
+
+            env.git
+                .run(&["config", "core.hooksPath", &hooks_dir.to_string_lossy()])?
+                .assert_success();
+
+            let bare_path = sibling_path(env, "bare-remote.git");
+            std::fs::create_dir_all(&bare_path)?;
+            let init = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&bare_path)
+                .output()?;
+            assert!(init.status.success(), "failed to init bare remote repo");
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let branch = git_ops.get_current_branch()?;
+
+            // remote_url is a plain local path rather than an ssh:// URL, so
+            // GIT_SSH_COMMAND is simply unused — this still exercises the
+            // client-side pre-push hook, which fires regardless of transport.
+            git_ops.push_with_ssh_identity(
+                &branch,
+                "/nonexistent/dummy-identity",
+                &bare_path.to_string_lossy(),
+            )?;
+
+            assert!(
+                !sentinel.exists(),
+                "a repo-local pre-push hook executed during push_with_ssh_identity"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// See `test_repo_local_hooks_path_does_not_execute_via_ssh_identity_push`
+    /// — same gap and same rationale, for the force-push (lease) variant used
+    /// when hitch has to overwrite a protected branch's tip.
+    #[test]
+    fn test_repo_local_hooks_path_does_not_execute_via_ssh_identity_force_push(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let sentinel = sibling_path(env, "PWNED-force-push");
+            let hooks_dir = sibling_path(env, "evil-hooks-force-push");
+            write_hook(&hooks_dir, "pre-push", &sentinel);
+
+            env.git
+                .run(&["config", "core.hooksPath", &hooks_dir.to_string_lossy()])?
+                .assert_success();
+
+            let bare_path = sibling_path(env, "bare-remote-force.git");
+            std::fs::create_dir_all(&bare_path)?;
+            let init = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&bare_path)
+                .output()?;
+            assert!(init.status.success(), "failed to init bare remote repo");
+
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let branch = git_ops.get_current_branch()?;
+
+            git_ops.force_push_with_ssh_identity(
+                &branch,
+                None,
+                "/nonexistent/dummy-identity",
+                &bare_path.to_string_lossy(),
+            )?;
+
+            assert!(
+                !sentinel.exists(),
+                "a repo-local pre-push hook executed during force_push_with_ssh_identity"
             );
 
             Ok::<(), anyhow::Error>(())
