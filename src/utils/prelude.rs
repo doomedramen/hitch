@@ -1052,7 +1052,21 @@ pub(crate) fn publish_environment_build(
         crate::utils::git_operations::RefEdit::Update {
             refname: resync_ref,
             new_oid: resync_blob,
-            expected_old: None,
+            // An empty (not `None`) `expected_old` means "write regardless of
+            // what's there" (see `RefEdit::Update`'s doc comment), not the
+            // "must not currently exist" CAS `None` maps to. A leftover
+            // pending-resync record can legitimately already exist —
+            // `pending_resync`'s own module doc says a stale record is
+            // recoverable and deliberately not something to fail a command
+            // over. Using the must-not-exist CAS here would turn that benign
+            // leftover into a permanent wedge: every subsequent publish for
+            // this environment would fail this edit, and since the whole
+            // batch is all-or-nothing, that would also fail the
+            // environment-branch CAS below, which is otherwise fine. This ref
+            // has no concurrency of its own to guard — the repo-wide flock
+            // already serializes publishes, and the branch CAS is what
+            // actually detects a lost race.
+            expected_old: Some(String::new()),
         },
         crate::utils::git_operations::RefEdit::Update {
             refname: env_ref.clone(),
@@ -1092,11 +1106,18 @@ pub(crate) fn publish_environment_build(
         .ref_transaction(&edits, &format!("hitch: rebuild {}", env_name))
     {
         return Err(anyhow::anyhow!(
-            "Failed to publish '{}': {}. The build itself succeeded but could not be \
-             published — this usually means another rebuild landed first. Fetch and re-run \
-             'hitch rebuild {}'.",
+            "Failed to publish '{}': {}. The build itself succeeded but the publish \
+             transaction was rejected — most commonly because another rebuild landed \
+             first and moved '{}' out from under this one's compare-and-swap. Fetch and \
+             re-run 'hitch rebuild {}'.\n\
+             \n\
+             If that keeps happening, a stale ref may be involved; inspect it and, if you \
+             confirm it's safe, remove it with:\n  \
+             git update-ref -d refs/hitch/pending-resync/{}",
             env_name,
             e,
+            env_name,
+            env_name,
             env_name
         ));
     }
@@ -2050,6 +2071,99 @@ mod publish_environment_build_tests {
                 .git()
                 .rev_parse(&format!("refs/hitch/prev/dev/{}", same_timestamp))?,
             sha1
+        );
+
+        Ok(())
+    }
+
+    /// Regression test for the phase-2 final-review Critical finding: the
+    /// pending-resync ref edit used `RefEdit::Update { expected_old: None,
+    /// .. }`, which `ref_transaction` maps to "this ref must not currently
+    /// exist" (see `RefEdit::Update`'s doc comment). But a leftover
+    /// pending-resync record CAN legitimately already exist — `pending_resync`'s
+    /// own module doc says exactly that, and that it is deliberately not
+    /// something to fail a command over (recovery just re-reads it and finds
+    /// nothing to do). Wrapped into the must-not-exist CAS, that turned into a
+    /// self-perpetuating wedge: any record `pending_resync::recover` doesn't
+    /// clear (e.g. one it can't parse, which it deliberately `continue`s past
+    /// rather than deletes) made every subsequent publish for that environment
+    /// fail the *whole* transaction — including the environment-branch CAS,
+    /// which was otherwise fine — with a misleading "another rebuild landed
+    /// first" error.
+    ///
+    /// This plants a leftover record directly, bypassing `recover` (which
+    /// would otherwise clear a well-formed one before a real command ran —
+    /// this simulates the unparseable case recovery deliberately leaves
+    /// alone), and asserts the publish still succeeds and the branch still
+    /// moves.
+    #[test]
+    fn publish_survives_leftover_pending_resync_ref() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("README.md"), "hi\n")?;
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+
+        git(repo, &["branch", "dev"]);
+        let sha0 = git(repo, &["rev-parse", "dev"]);
+
+        let mut config = HitchConfig::new();
+        config
+            .environments
+            .insert("dev".to_string(), Environment::new("main".to_string()));
+        git(repo, &["checkout", "-q", "-b", "hitch-metadata"]);
+        std::fs::write(
+            repo.join("hitch.json"),
+            serde_json::to_string_pretty(&config)?,
+        )?;
+        git(repo, &["add", "hitch.json"]);
+        git(repo, &["commit", "-q", "-m", "config"]);
+        git(repo, &["checkout", "-q", "-"]);
+
+        let tree = git(repo, &["rev-parse", "HEAD^{tree}"]);
+        let sha1 = git(
+            repo,
+            &["commit-tree", &tree, "-p", &sha0, "-m", "publish one"],
+        );
+
+        // A leftover pending-resync record — content is deliberately garbage,
+        // standing in for the unparseable case `pending_resync::recover`
+        // leaves alone on purpose (it `continue`s rather than deletes). Only
+        // the ref's existence matters for this test.
+        let junk_path = repo.join("junk-pending-resync.json");
+        std::fs::write(&junk_path, "not valid pending-resync json")?;
+        let stale_blob = git(
+            repo,
+            &[
+                "hash-object",
+                "-w",
+                junk_path.to_str().expect("temp path is valid UTF-8"),
+            ],
+        );
+        git(
+            repo,
+            &["update-ref", "refs/hitch/pending-resync/dev", &stale_blob],
+        );
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let timestamp = "20260101130000";
+
+        // Before the fix, this failed the whole transaction (including the
+        // environment-branch CAS) because the leftover ref already existed.
+        publish_environment_build(&context, "dev", &sha1, timestamp, &None)?;
+
+        assert_eq!(
+            context.git().rev_parse("refs/heads/dev")?,
+            sha1,
+            "publish must succeed and move the branch even with a leftover pending-resync ref"
         );
 
         Ok(())

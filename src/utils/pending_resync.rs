@@ -33,12 +33,16 @@ const REF_PREFIX: &str = "refs/hitch/pending-resync";
 /// checkouts it still owed an update to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingResync {
+    #[serde(default)]
     pub branch: String,
     /// The branch tip before the publish. A checkout still holding exactly
     /// this content is provably stale rather than edited.
+    #[serde(default)]
     pub from_sha: Option<String>,
+    #[serde(default)]
     pub to_sha: String,
     /// Checkout paths that had the branch attached when the publish started.
+    #[serde(default)]
     pub checkouts: Vec<String>,
 }
 
