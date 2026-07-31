@@ -394,7 +394,12 @@ journal record is left behind. It is a differential test against an oracle
 run, in the same spirit as
 `test_merge_tree_compose_matches_real_merge_across_scenarios`. If you add a
 step to a publish, add an abort point for it — a step with no abort point is
-a recovery path with no test. Two things learned writing it:
+a recovery path with no test. This coverage is `rebuild`-only: `release` and
+`resolve` call no `maybe_abort_for_test` at all, so they have zero crash-fuzz
+coverage — a deliberate scope boundary, not an oversight of this gotcha
+(their records' `push_owed` field is functionally dead anyway, since both
+`clear()` the record unconditionally before running their own push). Two
+things learned writing it:
 
 - The convergence check compares `<branch>^{tree}`, not the branch's commit
   SHA. `commit-tree` stamps the ambient wall-clock time with no

@@ -37,6 +37,55 @@ mod tests {
         Ok(())
     }
 
+    /// Build on `setup`, then promote a *second* branch with `--no-rebuild`
+    /// and check the repo out onto `dev` at its pre-second-promotion content.
+    /// Returns that `dev` tip — the `from_sha` an interrupted rebuild below
+    /// is expected to move away from.
+    ///
+    /// The second promotion is what makes the checkout attached to `dev`
+    /// worth resyncing at all. `setup` alone leaves `dev` already fully
+    /// built, so a *second*, uninterrupted `rebuild dev` recomposes
+    /// byte-identical content under a fresh commit SHA (see `tree_oid`'s doc
+    /// comment) — a checkout standing on it would report "clean" throughout
+    /// no matter what recovery does, because the tree never actually
+    /// changes. Promoting `feature-2` with `--no-rebuild` means the
+    /// interrupted `rebuild dev` call genuinely changes the tree (adds
+    /// `2.txt`), so a checkout on `dev` truly diverges between the ref move
+    /// and the resync, and `repair_checkout`'s stale-tree `reset_hard_to`
+    /// path — not just its "already consistent" no-op — is what actually
+    /// gets exercised.
+    fn setup_with_pending_second_promotion(env: &TestEnvironment) -> anyhow::Result<String> {
+        setup(env)?;
+
+        env.git
+            .run(&["checkout", "-b", "feature-2"])?
+            .assert_success();
+        env.fs.write_file("2.txt", "two")?;
+        env.git.run(&["add", "."])?.assert_success();
+        env.git
+            .run(&["commit", "-m", "feature 2"])?
+            .assert_success();
+        env.git.run(&["checkout", "main"])?.assert_success();
+
+        env.hitch
+            .run()
+            .args(&["promote", "feature-2", "dev", "--no-rebuild"])
+            .execute()?
+            .assert_success();
+
+        // Stand on 'dev' before the interrupted rebuild advances it, so
+        // `scan_checkouts_on_branch("dev")` finds this checkout attached and
+        // `repair_checkout` has real work to prove and do.
+        env.git.run(&["checkout", "dev"])?.assert_success();
+
+        Ok(env
+            .git
+            .run(&["rev-parse", "dev"])?
+            .stdout()
+            .trim()
+            .to_string())
+    }
+
     /// The tree a branch points at, not the commit SHA. Every rebuild
     /// recomposes from the declaration and creates a fresh `commit-tree` with
     /// the ambient wall-clock time as its author/committer date (hitch sets
@@ -61,6 +110,13 @@ mod tests {
     /// A rebuild aborted after each step, then re-run, must land on the same
     /// dev content as a rebuild that was never interrupted, and must leave no
     /// journal record behind.
+    ///
+    /// Beyond convergence, this also asserts the abort actually landed the
+    /// observable state each step name claims *before* recovery gets a
+    /// chance to run — otherwise a disabled or no-op `maybe_abort_for_test`
+    /// (or a test whose checkout was never attached to `dev` in the first
+    /// place, which used to be the case here) could pass this test for the
+    /// wrong reason: a normal, uninterrupted rebuild converges trivially.
     #[test]
     fn test_publish_converges_after_abort_at_each_step() -> anyhow::Result<()> {
         // The oracle: an uninterrupted run.
@@ -68,7 +124,7 @@ mod tests {
             let framework = HitchTestFramework::new()?;
             let mut tree = String::new();
             let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-                setup(env)?;
+                setup_with_pending_second_promotion(env)?;
                 env.hitch
                     .run()
                     .args(&["rebuild", "dev"])
@@ -86,15 +142,102 @@ mod tests {
             let framework = HitchTestFramework::new()?;
 
             let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-                setup(env)?;
+                let from_sha = setup_with_pending_second_promotion(env)?;
 
                 // Interrupted run: expected to die, not to succeed.
-                let _ = env
+                let interrupted = env
                     .hitch
                     .run()
                     .args(&["rebuild", "dev"])
                     .env("HITCH_TEST_ABORT_AFTER", abort_after)
-                    .execute();
+                    .execute()?;
+                assert!(
+                    !interrupted.success(),
+                    "aborting after '{}' should have crashed the process, but it exited \
+                     successfully — the abort hook did not fire.\nstdout: {}\nstderr: {}",
+                    abort_after,
+                    interrupted.stdout(),
+                    interrupted.stderr()
+                );
+
+                // Prove the abort actually landed the state its name claims,
+                // before recovery runs and (correctly) erases the evidence.
+                let dev_after_abort = env
+                    .git
+                    .run(&["rev-parse", "dev"])?
+                    .stdout()
+                    .trim()
+                    .to_string();
+                let journal_oid = env
+                    .git
+                    .run(&[
+                        "for-each-ref",
+                        "--format=%(objectname)",
+                        "refs/hitch/publish/dev",
+                    ])?
+                    .stdout()
+                    .trim()
+                    .to_string();
+
+                match abort_after {
+                    "journal-written" => {
+                        // This point fires before the atomic ref transaction
+                        // that writes both the journal ref and moves 'dev' —
+                        // record_blob only hashes the payload into the object
+                        // database at this step, it does not point any ref at
+                        // it. So neither ref should have moved yet.
+                        assert!(
+                            journal_oid.is_empty(),
+                            "aborting after 'journal-written' should leave no journal ref \
+                             yet (it is only written as part of the same atomic transaction \
+                             as the branch move, which happens later), found one"
+                        );
+                        assert_eq!(
+                            dev_after_abort, from_sha,
+                            "aborting after 'journal-written' should leave 'dev' unmoved"
+                        );
+                    }
+                    "ref-moved" | "resync-done" => {
+                        assert!(
+                            !journal_oid.is_empty(),
+                            "aborting after '{}' should leave a journal record behind, \
+                             found none",
+                            abort_after
+                        );
+                        let payload = env.git.run(&["cat-file", "-p", &journal_oid])?.stdout();
+                        let record: serde_json::Value = serde_json::from_str(&payload)?;
+                        assert_eq!(record["branch"], "dev");
+                        assert_eq!(record["to_sha"], dev_after_abort);
+                        assert_eq!(record["push_owed"], false);
+                        assert_ne!(
+                            dev_after_abort, from_sha,
+                            "aborting after '{}' should have already moved 'dev'",
+                            abort_after
+                        );
+
+                        // The whole point of `setup_with_pending_second_promotion`:
+                        // 'dev' now composes both branches, but this checkout
+                        // was standing on the pre-second-promotion content, so
+                        // whether it has caught up is real, observable signal
+                        // for whether the resync step ran before the abort.
+                        let checkout_caught_up = env.fs.file_exists("2.txt");
+                        if abort_after == "ref-moved" {
+                            assert!(
+                                !checkout_caught_up,
+                                "aborting after 'ref-moved' should leave this checkout \
+                                 stale — the ref moved but resync hasn't run yet"
+                            );
+                        } else {
+                            assert!(
+                                checkout_caught_up,
+                                "aborting after 'resync-done' should have already brought \
+                                 this checkout up to date, since resync runs before this \
+                                 abort point"
+                            );
+                        }
+                    }
+                    other => panic!("unexpected abort point '{}'", other),
+                }
 
                 // Recovery runs at the start of any mutating command. `--force`
                 // is needed here for a reason that has nothing to do with the
@@ -116,6 +259,12 @@ mod tests {
                 assert_eq!(
                     tree, expected_tree,
                     "aborting after '{}' did not converge to the uninterrupted content",
+                    abort_after
+                );
+                assert!(
+                    env.fs.file_exists("2.txt"),
+                    "aborting after '{}': recovery must leave this checkout with the fully \
+                     composed content, not just a matching branch tip",
                     abort_after
                 );
 
