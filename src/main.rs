@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // never race a publish that is still in flight, and only ever repairs a
     // working tree it can prove is stale rather than edited.
     if _repo_lock.is_some() {
-        if let Err(e) = hitch::utils::pending_resync::recover(&context) {
+        if let Err(e) = hitch::utils::publish_journal::recover(&context) {
             context.log_verbose(&format!("Could not check for interrupted publishes: {}", e));
         }
     }

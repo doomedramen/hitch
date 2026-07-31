@@ -400,9 +400,9 @@ fn finish_mode_a(
     // first so an interruption is recoverable, CAS so a branch that moved
     // under us is detected rather than clobbered, then resync the checkouts.
     let checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, branch)?;
-    crate::utils::pending_resync::record(
+    crate::utils::publish_journal::record(
         context,
-        &crate::utils::pending_resync::PendingResync {
+        &crate::utils::publish_journal::PublishRecord {
             branch: branch.to_string(),
             from_sha: Some(from_sha.to_string()),
             to_sha: new_sha.to_string(),
@@ -419,7 +419,7 @@ fn finish_mode_a(
             &format!("hitch: resolve — rebase {} onto {}", branch, base),
         )
         .map_err(|e| {
-            crate::utils::pending_resync::clear(context, branch);
+            crate::utils::publish_journal::clear(context, branch);
             anyhow::anyhow!(
                 "'{}' rebased cleanly, but could not be updated: {}. It moved while the rebase \
                  was running — fetch and rerun 'hitch resolve {} --branch {}'.",
@@ -431,7 +431,7 @@ fn finish_mode_a(
         })?;
 
     crate::utils::prelude::resync_checkouts(context, branch, new_sha, &checkouts);
-    crate::utils::pending_resync::clear(context, branch);
+    crate::utils::publish_journal::clear(context, branch);
 
     context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
 

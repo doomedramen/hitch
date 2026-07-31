@@ -1034,13 +1034,13 @@ pub(crate) fn publish_environment_build(
 
     // Everything that must agree with the branch move goes in with it: the
     // resync intent (so a crash after the move is recoverable — see
-    // `crate::utils::pending_resync`), and the tip being replaced (so rollback
+    // `crate::utils::publish_journal`), and the tip being replaced (so rollback
     // is a one-ref flip). `git update-ref --stdin` applies the batch
     // all-or-nothing, so there is no longer a window where the branch has moved
     // but its intent record or its archive is missing.
-    let (resync_ref, resync_blob) = crate::utils::pending_resync::record_blob(
+    let (resync_ref, resync_blob) = crate::utils::publish_journal::record_blob(
         context,
-        &crate::utils::pending_resync::PendingResync {
+        &crate::utils::publish_journal::PublishRecord {
             branch: env_name.to_string(),
             from_sha: old_env_sha.clone(),
             to_sha: new_sha.to_string(),
@@ -1056,7 +1056,7 @@ pub(crate) fn publish_environment_build(
             // what's there" (see `RefEdit::Update`'s doc comment), not the
             // "must not currently exist" CAS `None` maps to. A leftover
             // pending-resync record can legitimately already exist —
-            // `pending_resync`'s own module doc says a stale record is
+            // `publish_journal`'s own module doc says a stale record is
             // recoverable and deliberately not something to fail a command
             // over. Using the must-not-exist CAS here would turn that benign
             // leftover into a permanent wedge: every subsequent publish for
@@ -1158,7 +1158,7 @@ pub(crate) fn publish_environment_build(
     // before pushing so the local repository is coherent even if the push
     // fails or the user declines it.
     resync_checkouts(context, env_name, new_sha, &checkouts);
-    crate::utils::pending_resync::clear(context, env_name);
+    crate::utils::publish_journal::clear(context, env_name);
 
     if context.should_push() {
         context.log_warning(&format!(
@@ -2103,11 +2103,11 @@ mod publish_environment_build_tests {
     /// pending-resync ref edit used `RefEdit::Update { expected_old: None,
     /// .. }`, which `ref_transaction` maps to "this ref must not currently
     /// exist" (see `RefEdit::Update`'s doc comment). But a leftover
-    /// pending-resync record CAN legitimately already exist — `pending_resync`'s
+    /// pending-resync record CAN legitimately already exist — `publish_journal`'s
     /// own module doc says exactly that, and that it is deliberately not
     /// something to fail a command over (recovery just re-reads it and finds
     /// nothing to do). Wrapped into the must-not-exist CAS, that turned into a
-    /// self-perpetuating wedge: any record `pending_resync::recover` doesn't
+    /// self-perpetuating wedge: any record `publish_journal::recover` doesn't
     /// clear (e.g. one it can't parse, which it deliberately `continue`s past
     /// rather than deletes) made every subsequent publish for that environment
     /// fail the *whole* transaction — including the environment-branch CAS,
@@ -2120,7 +2120,7 @@ mod publish_environment_build_tests {
     /// alone), and asserts the publish still succeeds and the branch still
     /// moves.
     #[test]
-    fn publish_survives_leftover_pending_resync_ref() -> anyhow::Result<()> {
+    fn publish_survives_leftover_publish_journal_ref() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
@@ -2154,7 +2154,7 @@ mod publish_environment_build_tests {
         );
 
         // A leftover pending-resync record — content is deliberately garbage,
-        // standing in for the unparseable case `pending_resync::recover`
+        // standing in for the unparseable case `publish_journal::recover`
         // leaves alone on purpose (it `continue`s rather than deletes). Only
         // the ref's existence matters for this test.
         let junk_path = repo.join("junk-pending-resync.json");

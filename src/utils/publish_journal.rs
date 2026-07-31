@@ -32,7 +32,7 @@ const REF_PREFIX: &str = "refs/hitch/pending-resync";
 /// A publish that had moved (or was about to move) a branch ref, and the
 /// checkouts it still owed an update to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingResync {
+pub struct PublishRecord {
     #[serde(default)]
     pub branch: String,
     /// The branch tip before the publish. A checkout still holding exactly
@@ -58,7 +58,7 @@ fn ref_name(branch: &str) -> String {
 /// Splitting the write lets the caller put the ref update inside a larger
 /// atomic transaction alongside the branch move it describes, instead of doing
 /// it as a separate step with a crash window in between.
-pub fn record_blob(context: &GlobalContext, pending: &PendingResync) -> Result<(String, String)> {
+pub fn record_blob(context: &GlobalContext, pending: &PublishRecord) -> Result<(String, String)> {
     let payload = serde_json::to_vec_pretty(pending)?;
     let blob = context.git().hash_object_bytes(&payload)?;
     Ok((ref_name(&pending.branch), blob))
@@ -67,7 +67,7 @@ pub fn record_blob(context: &GlobalContext, pending: &PendingResync) -> Result<(
 /// Record the intent to move `branch` and resync `checkouts`, before anything
 /// observable changes. Blob-backed so the payload is readable with
 /// `git cat-file -p` when diagnosing by hand.
-pub fn record(context: &GlobalContext, pending: &PendingResync) -> Result<()> {
+pub fn record(context: &GlobalContext, pending: &PublishRecord) -> Result<()> {
     let (refname, blob) = record_blob(context, pending)?;
     context.git().update_ref(&refname, &blob)
 }
@@ -81,14 +81,14 @@ pub fn clear(context: &GlobalContext, branch: &str) {
 }
 
 /// Every pending record currently in the repository.
-pub fn list(git: &GitOperations) -> Result<Vec<(String, PendingResync)>> {
+pub fn list(git: &GitOperations) -> Result<Vec<(String, PublishRecord)>> {
     let mut found = Vec::new();
 
     for refname in git.list_refs_under(REF_PREFIX)? {
         let Ok(payload) = git.cat_file_blob(&refname) else {
             continue;
         };
-        match serde_json::from_slice::<PendingResync>(&payload) {
+        match serde_json::from_slice::<PublishRecord>(&payload) {
             Ok(pending) => found.push((refname, pending)),
             // A record we can't parse is not something to act on, but it is
             // also not something to delete silently — leave it for `doctor`.
@@ -132,7 +132,7 @@ pub fn recover(context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
-fn repair_checkout(context: &GlobalContext, record: &PendingResync, path: &str) {
+fn repair_checkout(context: &GlobalContext, record: &PublishRecord, path: &str) {
     // Only act on a checkout that still has the branch attached — the user may
     // have switched away since, in which case nothing is out of sync.
     let attached = context
@@ -178,7 +178,7 @@ fn repair_checkout(context: &GlobalContext, record: &PendingResync, path: &str) 
     }
 }
 
-fn warn_manual(context: &GlobalContext, record: &PendingResync, path: &str) {
+fn warn_manual(context: &GlobalContext, record: &PublishRecord, path: &str) {
     context.log_warning(&format!(
         "A previous '{}' publish was interrupted before it could update the working \
          tree at '{}', and that tree has since been modified — it was left alone. \

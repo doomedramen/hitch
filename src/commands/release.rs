@@ -327,10 +327,10 @@ fn perform_release_core(
 
     // Publish the target branch atomically with CAS.
     // Durable intent, so a crash between the CAS and the resync below is
-    // recoverable — see `crate::utils::pending_resync`.
-    crate::utils::pending_resync::record(
+    // recoverable — see `crate::utils::publish_journal`.
+    crate::utils::publish_journal::record(
         context,
-        &crate::utils::pending_resync::PendingResync {
+        &crate::utils::publish_journal::PublishRecord {
             branch: target_branch.to_string(),
             from_sha: Some(target_sha.clone()),
             to_sha: new_sha.clone(),
@@ -358,7 +358,7 @@ fn perform_release_core(
     context.log_verbose(&format!("✓ Published '{}' ({})", target_branch, new_sha));
 
     crate::utils::prelude::resync_checkouts(context, target_branch, &new_sha, &target_checkouts);
-    crate::utils::pending_resync::clear(context, target_branch);
+    crate::utils::publish_journal::clear(context, target_branch);
 
     // Push if enabled. A push failure must NOT abort the release — the merge
     // and tag are already committed locally. Warn and tell the user how to
