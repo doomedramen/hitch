@@ -1175,6 +1175,26 @@ fn try_replay_resolution(
         return Ok(None);
     };
 
+    // A recorded resolution is content nobody on this machine reviewed,
+    // spliced into a branch that deploys. When the repository has opted in,
+    // it must carry a signature from a signer the repository trusts —
+    // `recorded_by` alone is self-reported by whoever wrote the ref and
+    // proves nothing.
+    let require_signed =
+        access_metadata_read_only(context, |config| Ok(config.require_signed_resolutions))
+            .unwrap_or(false);
+    if require_signed && !resolutions::verify_resolution_signature(context.git(), &res)? {
+        context.log_warning(&format!(
+            "Recorded resolution {} for '{}' is not signed by a trusted signer and this \
+             repository requires signed resolutions — holding '{}' instead. To inspect it:\n  \
+             hitch resolutions",
+            &key[..12.min(key.len())],
+            branch,
+            branch
+        ));
+        return Ok(None);
+    }
+
     // Authorize. The exact-OID match guarantees identical inputs, but a
     // recorded resolution is still someone else's content landing on a
     // deployable branch, so gate it: prompt once per key without --yes;

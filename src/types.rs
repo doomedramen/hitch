@@ -403,6 +403,16 @@ pub struct HitchConfig {
     /// List of approval requests
     #[serde(default)]
     pub approval_requests: Vec<ApprovalRequest>,
+
+    /// Require every recorded conflict resolution to carry a verifiable SSH
+    /// signature before `hitch rebuild --replay-resolutions` will apply it.
+    ///
+    /// Off by default so existing repositories keep working. On, it closes the
+    /// one path by which content nobody reviewed lands on a deployable branch:
+    /// `refs/hitch/resolutions/*` is writable by anyone with push access, and
+    /// `--replay-resolutions --yes` (the CI shape) has no human in the loop.
+    #[serde(default)]
+    pub require_signed_resolutions: bool,
 }
 
 impl HitchConfig {
@@ -411,6 +421,7 @@ impl HitchConfig {
             version: "1.0".to_string(),
             environments: std::collections::HashMap::new(),
             approval_requests: Vec::new(),
+            require_signed_resolutions: false,
         }
     }
 

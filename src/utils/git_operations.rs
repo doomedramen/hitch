@@ -3001,6 +3001,128 @@ impl GitOperations {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Sign `payload` with the repository's configured SSH signing key
+    /// (`git config user.signingkey`, gated on `git config gpg.format ==
+    /// "ssh"`), returning the armored `ssh-keygen -Y sign` signature.
+    ///
+    /// Returns `Ok(None)` when the repository has no SSH signing key
+    /// configured — signing is opt-in (`require_signed_resolutions`), and an
+    /// unconfigured key is a configuration state, not an error, so every
+    /// existing repository keeps recording unsigned resolutions exactly as
+    /// before.
+    pub fn sign_bytes_ssh(&self, payload: &[u8]) -> Result<Option<String>> {
+        let format = self.run_git_command(&["config", "--get", "gpg.format"])?;
+        if String::from_utf8_lossy(&format.stdout).trim() != "ssh" {
+            return Ok(None);
+        }
+        let key = self.run_git_command(&["config", "--get", "user.signingkey"])?;
+        let key = String::from_utf8_lossy(&key.stdout).trim().to_string();
+        if key.is_empty() {
+            return Ok(None);
+        }
+
+        let mut payload_file = tempfile::NamedTempFile::new()
+            .context("Failed to create a temporary file for signing")?;
+        payload_file
+            .write_all(payload)
+            .context("Failed to write signing payload")?;
+        let payload_path = payload_file.path().to_string_lossy().to_string();
+
+        // ssh-keygen is not git; blessed spawn point for SSH signature
+        // operations — it writes the armored signature to `<payload>.sig`
+        // beside the payload file, since `-Y sign` has no stdout mode.
+        #[allow(clippy::disallowed_methods)]
+        let signed = Command::new("ssh-keygen")
+            .args([
+                "-Y",
+                "sign",
+                "-f",
+                key.as_str(),
+                "-n",
+                "hitch-resolution",
+                payload_path.as_str(),
+            ])
+            .current_dir(&self.repo_path)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .output()
+            .context("Failed to run 'ssh-keygen -Y sign'")?;
+        if !signed.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to sign the resolution with key '{}': {}",
+                key,
+                String::from_utf8_lossy(&signed.stderr).trim()
+            ));
+        }
+
+        let sig_path = format!("{}.sig", payload_path);
+        let sig = std::fs::read_to_string(&sig_path)
+            .context("ssh-keygen reported success but wrote no signature file")?;
+        let _ = std::fs::remove_file(&sig_path);
+        Ok(Some(sig))
+    }
+
+    /// Verify `signature` over `payload` against the repository's configured
+    /// allowed-signers file (`git config gpg.ssh.allowedSignersFile`), for the
+    /// claimed identity `signer`.
+    ///
+    /// Returns `Ok(false)` for any failure to verify — a missing
+    /// allowed-signers file, an unknown signer, a tampered payload. This must
+    /// fail closed: a resolution with a defect anywhere in the verification
+    /// chain is treated as unsigned, never as verified.
+    pub fn verify_signature_ssh(
+        &self,
+        payload: &[u8],
+        signature: &str,
+        signer: &str,
+    ) -> Result<bool> {
+        let allowed = self.run_git_command(&["config", "--get", "gpg.ssh.allowedSignersFile"])?;
+        let allowed = String::from_utf8_lossy(&allowed.stdout).trim().to_string();
+        if allowed.is_empty() {
+            return Ok(false);
+        }
+
+        let mut payload_file = tempfile::NamedTempFile::new()
+            .context("Failed to create a temporary file for verification")?;
+        payload_file
+            .write_all(payload)
+            .context("Failed to write verification payload")?;
+
+        let mut sig_file = tempfile::NamedTempFile::new()
+            .context("Failed to create a temporary file for the signature")?;
+        sig_file
+            .write_all(signature.as_bytes())
+            .context("Failed to write signature")?;
+        let sig_path = sig_file.path().to_string_lossy().to_string();
+
+        let payload_handle = std::fs::File::open(payload_file.path())
+            .context("Failed to reopen the verification payload")?;
+
+        // ssh-keygen is not git; blessed spawn point for SSH signature
+        // operations — `-Y verify` reads the signed payload from stdin.
+        #[allow(clippy::disallowed_methods)]
+        let verified = Command::new("ssh-keygen")
+            .args([
+                "-Y",
+                "verify",
+                "-f",
+                allowed.as_str(),
+                "-I",
+                signer,
+                "-n",
+                "hitch-resolution",
+                "-s",
+                sig_path.as_str(),
+            ])
+            .current_dir(&self.repo_path)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::from(payload_handle))
+            .output()
+            .context("Failed to run 'ssh-keygen -Y verify'")?;
+
+        Ok(verified.status.success())
+    }
+
     /// Create a parentless commit wrapping `tree` (`git commit-tree`) and
     /// return its OID — the storage object for a resolution ref.
     pub fn commit_tree_parentless(&self, tree: &str, message: &str) -> Result<String> {

@@ -73,6 +73,14 @@ pub struct ResolutionMeta {
     /// The content-addressed key (also the ref's basename).
     pub key: String,
     pub files: Vec<ConflictStage>,
+    /// Armored SSH signature (`ssh-keygen -Y sign`) over this struct
+    /// serialized with `signature` set to `None` — the canonical unsigned
+    /// payload, so verification can reconstruct exactly these bytes.
+    /// `None` for resolutions recorded before signing existed, or recorded on
+    /// a machine with no SSH signing key configured (`sign_bytes_ssh`
+    /// returns `None` rather than erroring in that case).
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// A recorded resolution, loaded from its ref.
@@ -167,7 +175,7 @@ pub fn record_resolution(
         });
     }
 
-    let meta = ResolutionMeta {
+    let mut meta = ResolutionMeta {
         env: pending.env.clone(),
         branch: pending.branch.clone(),
         conflicts_with: pending.conflicts_with.clone(),
@@ -177,7 +185,14 @@ pub fn record_resolution(
         hitch_version: env!("CARGO_PKG_VERSION").to_string(),
         key: key.clone(),
         files,
+        signature: None,
     };
+    // Sign the meta payload as it stands *without* the signature field, so
+    // verification can reconstruct exactly these bytes. `sign_bytes_ssh`
+    // returns `None` (not an error) when this machine has no SSH signing key
+    // configured, so recording still succeeds unsigned.
+    let unsigned = serde_json::to_vec_pretty(&meta)?;
+    meta.signature = git.sign_bytes_ssh(&unsigned)?;
     let meta_json = serde_json::to_vec_pretty(&meta)?;
     let meta_oid = git.hash_object_bytes(&meta_json)?;
     tree_entries.push(("meta.json".to_string(), meta_oid));
@@ -275,6 +290,24 @@ pub fn read_pending(worktree_git: &GitOperations) -> Result<Option<PendingConfli
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Verify a loaded resolution's signature.
+///
+/// Reconstructs the exact payload that was signed (the meta with `signature`
+/// cleared) and checks it against the repository's allowed-signers file, with
+/// `recorded_by` as the claimed signer identity. Any failure — no signature,
+/// no allowed-signers file, unknown signer, altered content — is `false`;
+/// this must fail closed, since it gates whether unreviewed content gets
+/// spliced into a build.
+pub fn verify_resolution_signature(git: &GitOperations, res: &Resolution) -> Result<bool> {
+    let Some(signature) = res.meta.signature.as_deref() else {
+        return Ok(false);
+    };
+    let mut unsigned = res.meta.clone();
+    unsigned.signature = None;
+    let payload = serde_json::to_vec_pretty(&unsigned)?;
+    git.verify_signature_ssh(&payload, signature, &res.meta.recorded_by)
 }
 
 #[cfg(test)]

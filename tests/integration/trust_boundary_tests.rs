@@ -252,4 +252,409 @@ mod tests {
 
         Ok(())
     }
+
+    /// With `require_signed_resolutions` on, a planted resolution ref — the
+    /// shape an attacker with push access creates — must not be replayed into
+    /// a build, even under `--yes --replay-resolutions`.
+    #[test]
+    fn test_unsigned_resolution_is_not_replayed_when_signing_required() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // Build two branches that conflict on the same file. `hitch
+            // promote` runs a pre-promote compatibility preflight that would
+            // reject the second branch outright, so — exactly as
+            // `resolve_tests.rs`'s `setup_and_record` does — the branches are
+            // injected directly into `hitch.json` to get them both into the
+            // environment's promoted list without going through that gate.
+            for (branch, content) in [("feat-a", "A\n"), ("feat-b", "B\n")] {
+                env.git.run(&["checkout", "main"])?.assert_success();
+                env.git.run(&["checkout", "-b", branch])?.assert_success();
+                env.fs.write_file("clash.txt", content)?;
+                env.git.run(&["add", "."])?.assert_success();
+                env.git
+                    .run(&["commit", "-m", &format!("{} edits clash.txt", branch)])?
+                    .assert_success();
+                env.git.run(&["checkout", "main"])?.assert_success();
+            }
+
+            env.git
+                .run(&["checkout", "hitch-metadata"])?
+                .assert_success();
+            let raw = env.fs.read_file("hitch.json")?;
+            let mut config: serde_json::Value = serde_json::from_str(&raw)?;
+            config["require_signed_resolutions"] = serde_json::Value::Bool(true);
+            config["environments"]["dev"]["branches"] = serde_json::json!(["feat-a", "feat-b"]);
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "test: require signed resolutions"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+
+            // Rebuild with replay enabled. There is no signed resolution, so
+            // the conflicting branch must be held, not silently composed.
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                    "--yes",
+                ])
+                .execute()?;
+
+            let combined = format!("{}{}", result.stdout(), result.stderr());
+            assert!(
+                !combined.contains("Applying recorded resolution"),
+                "an unsigned resolution was replayed while signing was required:\n{}",
+                combined
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Set up `dev` with `branch-a`/`branch-b` conflicting on `shared.txt` and
+    /// start a Mode B resolve session on `branch-b`, staging `resolved-both`
+    /// as the fix. Returns the resolve worktree path so the caller can decide
+    /// whether to configure SSH signing before `--continue --record`.
+    fn setup_conflict_and_start_resolve(
+        env: &TestEnvironment,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        env.hitch
+            .run()
+            .args(&["add", "dev"])
+            .execute()?
+            .assert_success();
+
+        env.fs.write_file("shared.txt", "base\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?.assert_success();
+        env.git.run(&["commit", "-m", "base"])?.assert_success();
+
+        env.git
+            .run(&["checkout", "-b", "branch-a"])?
+            .assert_success();
+        env.fs.write_file("shared.txt", "from-a\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?.assert_success();
+        env.git.run(&["commit", "-m", "a"])?.assert_success();
+        env.git.run(&["checkout", "main"])?.assert_success();
+
+        env.git
+            .run(&["checkout", "-b", "branch-b"])?
+            .assert_success();
+        env.fs.write_file("shared.txt", "from-b\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?.assert_success();
+        env.git.run(&["commit", "-m", "b"])?.assert_success();
+        env.git.run(&["checkout", "main"])?.assert_success();
+
+        env.git
+            .run(&["checkout", "hitch-metadata"])?
+            .assert_success();
+        let config_str = env.fs.read_file("hitch.json")?;
+        let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+        config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?.assert_success();
+        env.git
+            .run(&["commit", "-m", "test: inject branches"])?
+            .assert_success();
+        env.git.run(&["checkout", "main"])?.assert_success();
+
+        env.hitch
+            .run()
+            .args(&["--no-push", "resolve", "dev", "--branch", "branch-b"])
+            .execute()?
+            .assert_success();
+
+        let worktree_path = env.temp_dir.parent().unwrap().join(format!(
+            ".hitch-resolve-{}-dev-branch-b",
+            env.temp_dir.file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::write(worktree_path.join("shared.txt"), "resolved-both\n")?;
+        // Test-only: simulates a user staging their edited file by hand in
+        // the resolve worktree, so it deliberately spawns plain git rather
+        // than going through GitOperations.
+        #[allow(clippy::disallowed_methods)]
+        std::process::Command::new("git")
+            .args(["add", "shared.txt"])
+            .current_dir(&worktree_path)
+            .stdin(std::process::Stdio::null())
+            .status()?;
+
+        Ok(worktree_path)
+    }
+
+    /// Flip `require_signed_resolutions` on in `hitch.json`, from `main`,
+    /// leaving the checkout back on `main` when done.
+    fn require_signed_resolutions(env: &TestEnvironment) -> anyhow::Result<()> {
+        env.git
+            .run(&["checkout", "hitch-metadata"])?
+            .assert_success();
+        let raw = env.fs.read_file("hitch.json")?;
+        let mut config: serde_json::Value = serde_json::from_str(&raw)?;
+        config["require_signed_resolutions"] = serde_json::Value::Bool(true);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?.assert_success();
+        env.git
+            .run(&["commit", "-m", "test: require signed resolutions"])?
+            .assert_success();
+        env.git.run(&["checkout", "main"])?.assert_success();
+        Ok(())
+    }
+
+    /// Generate a throwaway SSH keypair (never the host's real identity) in
+    /// `dir` and configure this repo to sign with it and trust it, under the
+    /// given principal name. Returns the allowed-signers file path.
+    fn configure_ssh_signing(
+        env: &TestEnvironment,
+        dir: &std::path::Path,
+        principal: &str,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        std::fs::create_dir_all(dir)?;
+        let key_path = dir.join("id_hitch_test");
+
+        // ssh-keygen is not git; test-only throwaway key generation, not part
+        // of hitch's own subprocess surface.
+        #[allow(clippy::disallowed_methods)]
+        let keygen = std::process::Command::new("ssh-keygen")
+            .args([
+                "-t",
+                "ed25519",
+                "-f",
+                &key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-C",
+                principal,
+                "-q",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        assert!(
+            keygen.status.success(),
+            "failed to generate test SSH keypair: {}",
+            String::from_utf8_lossy(&keygen.stderr)
+        );
+
+        let pub_key_path = dir.join("id_hitch_test.pub");
+        let pub_key = std::fs::read_to_string(&pub_key_path)?;
+        let allowed_signers_path = dir.join("allowed_signers");
+        std::fs::write(&allowed_signers_path, format!("{} {}", principal, pub_key))?;
+
+        env.git
+            .run(&["config", "gpg.format", "ssh"])?
+            .assert_success();
+        env.git
+            .run(&["config", "user.signingkey", &pub_key_path.to_string_lossy()])?
+            .assert_success();
+        env.git
+            .run(&[
+                "config",
+                "gpg.ssh.allowedSignersFile",
+                &allowed_signers_path.to_string_lossy(),
+            ])?
+            .assert_success();
+
+        Ok(allowed_signers_path)
+    }
+
+    /// A resolution recorded with no SSH signing key configured has no
+    /// signature (`sign_bytes_ssh` returns `None`). When the repository
+    /// later requires signed resolutions, that unsigned resolution must be
+    /// held rather than replayed — this is the exact attack the feature
+    /// exists to close: `refs/hitch/resolutions/*` is writable by anyone
+    /// with push access, and `recorded_by` alone is self-reported.
+    #[test]
+    fn test_unsigned_recorded_resolution_is_held_when_signing_required() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_conflict_and_start_resolve(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            require_signed_resolutions(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?;
+
+            let combined = format!("{}{}", result.stdout(), result.stderr());
+            assert!(
+                !combined.contains("Reused recorded resolution"),
+                "an unsigned resolution was replayed while signing was required:\n{}",
+                combined
+            );
+            assert!(
+                combined.contains("held") || combined.contains("not signed"),
+                "expected 'branch-b' to be held, not replayed:\n{}",
+                combined
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The positive case: a resolution signed with a key present in the
+    /// repository's allowed-signers file replays cleanly under
+    /// `require_signed_resolutions` — proving the gate is a real signature
+    /// check, not a blanket "never replay recorded resolutions".
+    #[test]
+    fn test_signed_recorded_resolution_replays_when_signer_is_trusted() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let keys_dir = sibling_path(env, "ssh-keys-trusted");
+            configure_ssh_signing(env, &keys_dir, "hitch-test@example.com")?;
+            env.git
+                .run(&["config", "user.email", "hitch-test@example.com"])?
+                .assert_success();
+
+            setup_conflict_and_start_resolve(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            require_signed_resolutions(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Reused recorded resolution");
+
+            assert_eq!(
+                env.git.run(&["show", "dev:shared.txt"])?.stdout().trim(),
+                "resolved-both"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A resolution signed by a real, verifiable key that is *not* the
+    /// principal the repository's allowed-signers file trusts must still be
+    /// held — an unknown signer is exactly as untrusted as no signature at
+    /// all, never a partial pass.
+    #[test]
+    fn test_signed_recorded_resolution_is_held_when_signer_is_untrusted() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let keys_dir = sibling_path(env, "ssh-keys-untrusted");
+            // The key signs as "hitch-test@example.com", but the
+            // allowed-signers file only trusts a *different* principal — so
+            // verification must fail even though the signature is otherwise
+            // perfectly valid.
+            configure_ssh_signing(env, &keys_dir, "hitch-test@example.com")?;
+            let allowed_signers_path = keys_dir.join("allowed_signers");
+            std::fs::write(
+                &allowed_signers_path,
+                format!(
+                    "someone-else@example.com {}",
+                    std::fs::read_to_string(keys_dir.join("id_hitch_test.pub"))?
+                ),
+            )?;
+            env.git
+                .run(&["config", "user.email", "hitch-test@example.com"])?
+                .assert_success();
+
+            setup_conflict_and_start_resolve(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                    "--record",
+                ])
+                .execute()?
+                .assert_success();
+
+            require_signed_resolutions(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?;
+
+            let combined = format!("{}{}", result.stdout(), result.stderr());
+            assert!(
+                !combined.contains("Reused recorded resolution"),
+                "a resolution signed by an untrusted signer was replayed:\n{}",
+                combined
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
