@@ -66,6 +66,20 @@ pub struct PublishRecord {
     pub push_owed: bool,
 }
 
+/// Abort the process at a named point in the publish sequence, if the
+/// environment asks for it.
+///
+/// This exists solely so the crash-fuzz tests can interrupt a publish at each
+/// step and assert that recovery converges. `std::process::abort` rather than a
+/// normal exit, because the whole point is to skip every destructor and
+/// cleanup path exactly as a `kill -9` would.
+pub fn maybe_abort_for_test(point: &str) {
+    if std::env::var("HITCH_TEST_ABORT_AFTER").as_deref() == Ok(point) {
+        eprintln!("hitch: aborting after '{}' (HITCH_TEST_ABORT_AFTER)", point);
+        std::process::abort();
+    }
+}
+
 fn ref_name(branch: &str) -> String {
     // Branch names contain '/'; the ref path nests accordingly, which is fine
     // for a ref hierarchy and keeps the branch recoverable from the ref name.

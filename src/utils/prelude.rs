@@ -1048,6 +1048,7 @@ pub(crate) fn publish_environment_build(
             push_owed: context.should_push(),
         },
     )?;
+    crate::utils::publish_journal::maybe_abort_for_test("journal-written");
 
     let mut edits = vec![
         crate::utils::git_operations::RefEdit::Update {
@@ -1145,6 +1146,7 @@ pub(crate) fn publish_environment_build(
             env_name
         ));
     }
+    crate::utils::publish_journal::maybe_abort_for_test("ref-moved");
 
     if let Some(ref old_sha) = old_env_sha {
         context.log_verbose(&format!(
@@ -1159,6 +1161,7 @@ pub(crate) fn publish_environment_build(
     // before pushing so the local repository is coherent even if the push
     // fails or the user declines it.
     resync_checkouts(context, env_name, new_sha, &checkouts);
+    crate::utils::publish_journal::maybe_abort_for_test("resync-done");
     if !context.should_push() {
         // Nothing else is owed — drop the record now.
         crate::utils::publish_journal::clear(context, env_name);
@@ -1186,6 +1189,7 @@ pub(crate) fn publish_environment_build(
                         "✓ Force pushed rebuilt '{}' branch to remote",
                         env_name
                     ));
+                    crate::utils::publish_journal::maybe_abort_for_test("push-succeeded");
                     let _ = crate::utils::publish_journal::mark_push_done(context, env_name);
                     crate::utils::publish_journal::clear(context, env_name);
                 }

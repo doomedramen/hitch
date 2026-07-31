@@ -5,6 +5,7 @@ pub mod approval_workflow_tests;
 pub mod branch_tests;
 pub mod cleanup_tests;
 pub mod conflicts_tests;
+pub mod crash_recovery_tests;
 pub mod diff_tests;
 pub mod guard_tests;
 pub mod init_tests;

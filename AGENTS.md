@@ -392,3 +392,50 @@ faking it would break `test_merge_tree_compose_matches_real_merge_across_scenari
 which is the load-bearing correctness guarantee). Treat any repository that
 configures a merge driver as one where composition executes that program, and
 do not add config-based "mitigations" that silently change merge semantics.
+
+**Recovery is tested by interruption, not by inspection.**
+`tests/integration/crash_recovery_tests.rs` runs the publish sequence with
+`HITCH_TEST_ABORT_AFTER` set to each of four named steps —
+`journal-written`, `ref-moved`, `resync-done`, `push-succeeded` —
+`std::process::abort`s there, then re-runs the command and asserts the
+resulting content equals what an uninterrupted run produces and that no
+journal record is left behind. It is a differential test against an oracle
+run, in the same spirit as
+`test_merge_tree_compose_matches_real_merge_across_scenarios`. If you add a
+step to a publish, add an abort point for it — a step with no abort point is
+a recovery path with no test. Two things learned writing it:
+
+- The convergence check compares `<branch>^{tree}`, not the branch's commit
+  SHA. `commit-tree` stamps the ambient wall-clock time with no
+  `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` override, so two rebuilds of
+  identical inputs a second apart legitimately get different commit OIDs —
+  comparing SHAs (especially across the separate `HitchTestFramework`
+  instances the oracle and each loop iteration use) is not a meaningful
+  "did it converge" check and would fail/flake for a reason unrelated to
+  recovery. The tree is pure content and timestamp-independent.
+- The "next `hitch` invocation" that triggers recovery needs `--force`:
+  `with_locked_env` locks the environment before `rebuild_environment_opts`
+  ever runs, and `maybe_abort_for_test` always fires deep inside that
+  closure, so every abort point also skips the unlock-on-exit and leaves the
+  environment persistently locked — a separate mechanism from the publish
+  journal (see the locking-discipline entry in Conventions above). Note
+  `--force` bypasses `with_locked_env` entirely (`rebuild.rs` calls
+  `rebuild_environment_opts` directly rather than through it when
+  `args.force`), so a `--force` recovery after a crash leaves the
+  environment locked afterward too — clearing it needs a manual
+  `hitch unlock`. This is arguably correct given `locked`'s documented role
+  as a human-facing signal rather than an automatically-managed one, but it
+  is a real interaction nobody had exercised before this test, and is worth
+  a second look.
+
+The `push-succeeded` abort point (added in Task 12, past what the original
+plan specified) confirmed a real, minor find: `publish_journal::recover`'s
+"ahead of origin" warning fires whenever a record's `push_owed` is still
+`true`, with no way to distinguish "the push never happened" from "the push
+landed but the journal wasn't told yet" (the process can die between
+`force_push_with_deploy_key_if_configured` returning `Ok(())` and
+`mark_push_done`/`clear` running). In the latter case the branch is not
+actually ahead of origin, so the warning's suggested fix
+(`hitch push <branch> -f`) is redundant, not wrong — the exact text was
+observed in the test and is left as-is; fixing it is a follow-up, not part
+of this task.
