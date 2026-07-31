@@ -105,6 +105,14 @@ pub struct MergeTreeWriteTreeResult {
 ///
 /// `Update { expected_old: None }` requires the ref to not currently exist —
 /// the same semantics `update_ref_cas` gives a `None` expected value.
+/// `Update { expected_old: Some(String::new()) }` (an empty string, not
+/// `None`) is a different thing: git's `update-ref --stdin -z` treats an
+/// empty old-value field as "no compare-and-swap, write unconditionally" —
+/// the ref is written whether it currently exists or not, and whatever it
+/// currently holds is not checked. Use this for a ref that is fine to
+/// overwrite (a timestamped archival ref where a same-second collision
+/// should replace rather than fail the whole batch), not for anything where
+/// last-writer-wins could silently discard someone else's state.
 /// `Delete { expected_old: None }` deletes whatever is there.
 #[derive(Debug, Clone)]
 pub enum RefEdit {

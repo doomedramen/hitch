@@ -192,7 +192,16 @@ covered.
   under compare-and-swap, writes the pending-resync intent, and archives the
   replaced tip under `refs/hitch/prev/<env>/<timestamp>` — all or nothing.
   Reuse that function for anything that produces a new environment branch
-  commit; don't hand-roll the publish step again.
+  commit; don't hand-roll the publish step again. `refs/hitch/prev/*` and
+  `refs/hitch/backup/*` are written with unconditional-overwrite semantics
+  (`RefEdit::Update { expected_old: Some(String::new()) }`, not `Create`) so
+  that a same-second collision on the timestamped ref name can't fail the
+  whole transaction — see the doc comment on `RefEdit`. The trade-off: two
+  publishes of the same environment landing in the same second leave only
+  the later tip archived under that timestamp; the earlier one is not lost
+  from the object database, just no longer reachable via this ref. `prev/`'s
+  "rollback is a one-ref flip" guarantee is therefore per-timestamp, not
+  per-publish, in that rare case.
 - **Moving a branch ref means resyncing every checkout attached to it.**
   `scan_checkouts_on_branch` before the ref transaction, `resync_checkouts`
   after — both in `prelude.rs`, both already wired into
