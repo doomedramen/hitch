@@ -31,6 +31,19 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
         ));
     }
 
+    // Control characters, DEL and any whitespace break stderr/stdout parsing and
+    // can smuggle terminal escapes into hitch's own output.
+    if name
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\u{7f}')
+    {
+        return Err(anyhow::anyhow!(
+            "{} name cannot contain whitespace or control characters: '{}'",
+            name_type,
+            name.escape_debug()
+        ));
+    }
+
     // Check for invalid characters that would cause issues in git
     let invalid_chars = ["..", "@{", ":", "[", "]", "\\", "^", "~", "?", "*"];
     for invalid in &invalid_chars {
@@ -42,6 +55,13 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
                 name
             ));
         }
+    }
+
+    if name == "@" {
+        return Err(anyhow::anyhow!(
+            "{} name cannot be '@' (reserved by git)",
+            name_type
+        ));
     }
 
     // Cannot start or end with slash
@@ -57,6 +77,33 @@ pub fn validate_name(name: &str, name_type: &str) -> Result<()> {
     if name.contains("//") {
         return Err(anyhow::anyhow!(
             "{} name cannot contain consecutive slashes: '{}'",
+            name_type,
+            name
+        ));
+    }
+
+    // Per-component rules git enforces in check-ref-format: no component may
+    // begin with '.' or end with '.lock', and none may be empty.
+    for component in name.split('/') {
+        if component.starts_with('.') {
+            return Err(anyhow::anyhow!(
+                "{} name cannot have a path component starting with '.': '{}'",
+                name_type,
+                name
+            ));
+        }
+        if component.ends_with(".lock") {
+            return Err(anyhow::anyhow!(
+                "{} name cannot have a path component ending with '.lock': '{}'",
+                name_type,
+                name
+            ));
+        }
+    }
+
+    if name.ends_with('.') {
+        return Err(anyhow::anyhow!(
+            "{} name cannot end with '.': '{}'",
             name_type,
             name
         ));
