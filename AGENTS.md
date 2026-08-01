@@ -134,7 +134,7 @@ covered.
   module header for why that matters), stored as `refs/hitch/resolutions/*`.
   Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`
   (replay also requires `source_branch_head` lineage — the current tip must
-  descend from the recorded head, not just match on stage OIDs),
+  be that commit or a descendant of it, not just match on stage OIDs),
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
 - `src/core/` — read-only view builders (workspace/status models).
   `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`

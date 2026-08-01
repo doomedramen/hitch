@@ -1781,9 +1781,9 @@ mod try_replay_resolution_tests {
         // `current_head` is passed directly as `branch_b_head` — the SHA
         // this test built for branch-b's real tip — rather than relying on
         // `try_replay_resolution` re-reading `refs/heads/branch-b` itself;
-        // the function no longer does that read at all (see Fix 4's doc
-        // comment on the lineage check for why: it uses the caller's already
-        // -pinned SHA, matching every other value the compose loop uses).
+        // the function doesn't do that read at all (see the lineage check's
+        // own doc comment: it uses the caller's already-pinned SHA, matching
+        // every other value the compose loop uses).
         let mut confirmed = HashSet::new();
         let replay_result = try_replay_resolution(
             &context,
