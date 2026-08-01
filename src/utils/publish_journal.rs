@@ -492,3 +492,131 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod repair_checkout_tests {
+    use super::*;
+    use crate::commands::global_context::GlobalContext;
+    use crate::utils::logging::Logger;
+    use std::sync::Arc;
+
+    #[allow(clippy::disallowed_methods)] // test-only scratch repo bootstrap, mirrors prelude.rs's raw-git test helpers
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// A checkout whose working tree happens to match a commit's tree
+    /// content byte for byte, but whose SHA never actually appears in
+    /// `dev`'s own reflog — a forged/adversarial `from_sha`, standing in for
+    /// a corrupted publish record. `repair_checkout` must NOT silently reset
+    /// it; it should warn instead, exactly as it already does for a
+    /// genuinely dirty checkout.
+    ///
+    /// Getting this fabrication right is the whole point of the test: the
+    /// naive way to build it — `git reset --hard <fabricated>` while
+    /// standing on `dev` — actually *writes* the fabricated SHA into dev's
+    /// own reflog as a side effect, and dev~1's real SHA is already in
+    /// dev's reflog from dev's own creation, so neither an unrelated
+    /// fabricated commit nor dev~1 itself makes a usable adversarial
+    /// `from_sha` that way. Instead, the working tree is pushed into the
+    /// fabricated state with a path-scoped `checkout <sha> -- .`, which
+    /// touches only the working tree and index, never a ref or its reflog —
+    /// so dev's reflog stays exactly what dev's own real history produced.
+    #[test]
+    fn repair_checkout_declines_a_tree_match_the_reflog_contradicts() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("f.txt"), "one\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "one"]);
+
+        // dev's real history: one -> two. Its reflog holds only those two
+        // SHAs, from dev's own creation and its one commit.
+        git(repo, &["checkout", "-q", "-b", "dev"]);
+        std::fs::write(repo.join("f.txt"), "two\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "two"]);
+        let real_to_sha = git(repo, &["rev-parse", "dev"]);
+
+        // A "spoof" commit with tree content identical to dev's own root
+        // commit ("one"), built by amending a checkout of dev~1 with a
+        // different message on an unrelated branch — same tree, but a
+        // different commit SHA that dev's ref has never held.
+        git(repo, &["checkout", "-q", "-b", "spoof", "dev~1"]);
+        git(
+            repo,
+            &["commit", "--amend", "-q", "-m", "spoofed: not really dev~1"],
+        );
+        let spoof_sha = git(repo, &["rev-parse", "spoof"]);
+        let dev_root_sha = git(repo, &["rev-parse", "dev~1"]);
+        assert_ne!(
+            spoof_sha, dev_root_sha,
+            "test setup bug: spoof must be a different commit object from dev~1"
+        );
+        // Confirm the fabrication actually has matching tree content before
+        // relying on it below.
+        let dev_root_tree = git(repo, &["rev-parse", "dev~1^{tree}"]);
+        let spoof_tree = git(repo, &["rev-parse", &format!("{spoof_sha}^{{tree}}")]);
+        assert_eq!(
+            dev_root_tree, spoof_tree,
+            "test setup bug: spoof's tree must match dev~1's tree exactly"
+        );
+
+        // Put the checkout under test into the fabricated state: standing on
+        // 'dev' (HEAD attached, dev's ref untouched at real_to_sha), but
+        // with working tree + index content matching spoof's tree.
+        git(repo, &["checkout", "-q", "dev"]);
+        git(repo, &["checkout", &spoof_sha, "--", "."]);
+
+        // Confirm the fabrication didn't leak into dev's own reflog — the
+        // premise the whole test depends on.
+        let dev_reflog = git(repo, &["reflog", "show", "--format=%H", "refs/heads/dev"]);
+        assert!(
+            !dev_reflog.lines().any(|line| line == spoof_sha),
+            "test setup bug: spoof_sha must never appear in dev's own reflog"
+        );
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let record = PublishRecord {
+            branch: "dev".to_string(),
+            from_sha: Some(spoof_sha),
+            to_sha: real_to_sha,
+            checkouts: vec![repo.to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        repair_checkout(&context, &record, &repo.to_string_lossy());
+
+        // If repair_checkout wrongly trusted the tree match, f.txt would now
+        // read "two" (reset to dev's real tip). Since the reflog contradicts
+        // the fabricated from_sha, it must have declined and left the
+        // working tree exactly where the fabrication put it.
+        let content = std::fs::read_to_string(repo.join("f.txt"))?;
+        assert_eq!(
+            content, "one\n",
+            "repair_checkout applied a reset despite the reflog contradicting from_sha"
+        );
+
+        Ok(())
+    }
+}
