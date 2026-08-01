@@ -122,13 +122,14 @@ fn check_resolution_debt(context: &GlobalContext, max_age_days: Option<i64>) -> 
             .map(|d| format!("{}d old", d))
             .unwrap_or_else(|| "age unknown".to_string());
         context.log_info(&format!(
-            "  {} {} vs {} ({}, env {}) — {}",
+            "  {} {} vs {} ({}, env {}) — {}, {}",
             &r.meta.key[..12.min(r.meta.key.len())],
             r.meta.branch,
             r.meta.conflicts_with,
             age_str,
             r.meta.env,
-            r.meta.recorded_by
+            r.meta.recorded_by,
+            format_source_branch_head_note(&r.meta.source_branch_head)
         ));
         if let (Some(max), Some(age)) = (max_age_days, age_days) {
             if age > max {
@@ -211,6 +212,17 @@ fn check_pending_publishes(context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
+/// A short note naming the commit a resolution was recorded against, for
+/// the per-resolution report line in `check_resolution_debt` — makes the
+/// lineage check Task 1 of this plan added to replay visible at a glance,
+/// without requiring a separate doctor pass.
+fn format_source_branch_head_note(source_branch_head: &str) -> String {
+    format!(
+        "recorded against {}",
+        &source_branch_head[..12.min(source_branch_head.len())]
+    )
+}
+
 /// Age in whole days of an RFC3339 timestamp relative to `now`, or `None` if
 /// it doesn't parse (a malformed timestamp is treated as "unknown age", never
 /// as stale, so a parse quirk can't trip the CI gate).
@@ -243,6 +255,15 @@ fn indent(text: &str) -> String {
 mod tests {
     use super::age_in_days;
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn source_branch_head_report_line_names_the_recorded_commit() {
+        // format_source_branch_head_note is a pure formatting function —
+        // test its output shape directly rather than standing up a full
+        // repo + GlobalContext for a one-line report addition.
+        let note = super::format_source_branch_head_note("abcdef1234567890");
+        assert!(note.contains("abcdef123456"));
+    }
 
     #[test]
     fn age_in_days_computes_and_gates() {
