@@ -162,9 +162,16 @@ mod tests {
     /// The safety property `--force-with-lease` exists for: `hitch push
     /// <branch> -f` must still refuse to overwrite a remote branch that has
     /// moved since hitch last observed it (a concurrent push from
-    /// elsewhere), rather than blindly forcing through. Leasing against the
-    /// real observed tip (the fix for the bug above) must not have weakened
-    /// this into an unconditional force-push.
+    /// elsewhere), rather than blindly forcing through.
+    ///
+    /// This does NOT have differential power against the bug the test above
+    /// regresses — leasing against `None` also rejects an existing remote
+    /// branch unconditionally, so this test passes on that old code too, for
+    /// the wrong reason. What it does catch: `push.rs` regressing to an
+    /// actual unconditional `--force` (no lease at all), or re-fetching
+    /// before leasing and thereby self-healing the staleness this test
+    /// stages. Verified by hand: swapping `push.rs`'s force branch for a
+    /// bare `force_push_branch` call (no lease) makes this test fail.
     #[test]
     fn test_hitch_push_force_rejects_when_remote_moved_since_last_observed() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
