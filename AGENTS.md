@@ -114,10 +114,14 @@ covered.
   signal. `git2` is used for the read-only plumbing primitives (`rev_parse`,
   `rev_parse_opt`, `cat_file_blob`, `read_blob`, `get_merge_base`) via the
   `Repository` handle `GitOperations` already opens in both constructors —
-  no subprocess for those five. Everything else, including every primitive
-  touching the ORT merge engine (`merge_tree_compose` and siblings) and
-  anything hitting a remote, still shells out to the real `git`/`gh` binaries;
-  see the differential tests in `tests/unit/git_operations_tests.rs`
+  no subprocess for those five. git2 bypasses `HARDENING_ARGS`/
+  `GIT_CONFIG_NOSYSTEM` entirely — safe here because pure object reads
+  execute nothing, so don't migrate a primitive to git2 where the hardening
+  itself is the point (anything that could run a configured program, like a
+  merge driver). Everything else, including every primitive touching the
+  ORT merge engine (`merge_tree_compose` and siblings) and anything hitting
+  a remote, still shells out to the real `git`/`gh` binaries; see the
+  differential tests in `tests/unit/git_operations_tests.rs`
   (`*_agrees_with_git_cli`) for why that boundary is where it is.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
