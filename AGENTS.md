@@ -181,30 +181,40 @@ covered.
   the branch it is rebasing is the one the user is standing on. New
   build/merge logic should use the plumbing path; reach for a worktree only
   when a human has to edit the result, and detach it.
-- **Only `publish_environment_build` (used by `hitch rebuild`) lands in one
-  atomic ref transaction; `hitch release` and `hitch resolve` do not — yet.**
-  `publish_environment_build` in `prelude.rs`, built on
-  `GitOperations::ref_transaction`, moves `refs/heads/<env>` under
-  compare-and-swap, writes the publish-journal intent (including whether a
-  push is owed), and archives the replaced tip in the same batch — no
-  rename-and-recreate dance, no sequence of separate `update-ref` calls, all
-  or nothing. Reuse that function for anything that produces a new
-  environment branch commit rather than hand-rolling the publish step again.
-  But `hitch release` (`src/commands/release.rs`) and `hitch resolve`'s
-  branch-landing path (`src/commands/resolve.rs`) still use the older
-  two-step sequence — `publish_journal::record()` followed by a separate
-  `update_ref_cas` call, and an unconditional `clear()` immediately after the
-  resync rather than surviving until the push resolves — so a crash between
-  the CAS and that `clear()` call is still a real, un-recovered-from window
-  for those two commands specifically, and neither tracks its push obligation
-  through the actual push (only through that same narrow window). They were
-  deliberately not migrated as part of the transaction-ization phase (out of
-  scope for that phase, not overlooked); closing that gap is future work, not
-  something to assume already done because `publish_environment_build` looks
-  solved. `refs/hitch/prev/*` and `refs/hitch/backup/*` (both written only by
-  `publish_environment_build`, currently byte-identical to each other every
-  publish — see the doc comment at the write site in `prelude.rs` for why
-  both still exist) are written with unconditional-overwrite semantics
+- **`publish_branch` is the one atomic-publish core; `rebuild`, `release`, and
+  `resolve` all land through it now.** `publish_branch` in `prelude.rs`,
+  built on `GitOperations::ref_transaction`, moves `refs/heads/<branch>`
+  under compare-and-swap, writes the publish-journal intent (including
+  whether a push is owed), and — when given a `backup_timestamp` — archives
+  the replaced tip in the same batch: no rename-and-recreate dance, no
+  sequence of separate `update-ref` calls, all or nothing. Reuse it for
+  anything that produces a new branch commit rather than hand-rolling the
+  publish step again. `publish_environment_build` (used by `hitch rebuild`
+  and `hitch resolve`'s Mode B peer-conflict path) is a thin wrapper around
+  it that always passes a timestamp; `hitch release`
+  (`src/commands/release.rs`) and `hitch resolve`'s Mode A rebase-landing
+  path (`finish_mode_a` in `src/commands/resolve.rs`) call `publish_branch`
+  directly with `backup_timestamp: None` — a rebase's or release's prior tip
+  is already named elsewhere (the rebase's `from_sha`, the release tag), so
+  neither needs the `prev`/`backup` archival refs. This was a deliberate,
+  staged migration (`docs/superpowers/plans/2026-08-01-unify-publish-atomicity.md`):
+  `release` and `resolve`'s old two-step sequence — `publish_journal::record()`
+  followed by a separate `update_ref_cas` call, with an unconditional
+  `clear()` immediately after the resync instead of surviving until the push
+  resolved — is gone; no caller of the non-blob `publish_journal::record()`
+  remains. Crash-fuzz coverage exists for all three at the three abort points
+  that precede any push (`crash_recovery_tests.rs`,
+  `release_crash_recovery_tests.rs`, `resolve_crash_recovery_tests.rs`; see
+  the "Recovery is tested by interruption" gotcha below for why the fourth,
+  `push-succeeded`, is untested for `release`/`resolve`). One asymmetry
+  remains from `release`'s force-push tag creation being a second,
+  non-`publish_branch` operation glued on afterward — see
+  `src/commands/release.rs` for how that failure is reported separately
+  rather than through `publish_branch` itself. `refs/hitch/prev/*` and
+  `refs/hitch/backup/*` (both written only when `backup_timestamp` is
+  `Some`, currently byte-identical to each other every publish — see the doc
+  comment at the write site in `prelude.rs` for why both still exist) are
+  written with unconditional-overwrite semantics
   (`RefEdit::Update { expected_old: Some(String::new()) }`, not `Create`) so
   that a same-second collision on the timestamped ref name can't fail the
   whole transaction — see the doc comment on `RefEdit`. The trade-off: two
@@ -225,8 +235,9 @@ covered.
   wedge for that environment.
 - **Moving a branch ref means resyncing every checkout attached to it.**
   `scan_checkouts_on_branch` before the ref transaction, `resync_checkouts`
-  after — both in `prelude.rs`, both already wired into
-  `publish_environment_build` and `hitch release`. See the gotcha below for
+  after — both in `prelude.rs`, both called from inside `publish_branch`
+  itself, so every one of its callers (`publish_environment_build`, `hitch
+  release`, `hitch resolve`'s Mode A) gets this for free. See the gotcha below for
   why the scan cannot be folded into the resync. The intent is written with
   `publish_journal::record_blob` so its ref update rides inside that same
   transaction; `publish_environment_build` keeps the record in place until
@@ -394,12 +405,19 @@ journal record is left behind. It is a differential test against an oracle
 run, in the same spirit as
 `test_merge_tree_compose_matches_real_merge_across_scenarios`. If you add a
 step to a publish, add an abort point for it — a step with no abort point is
-a recovery path with no test. This coverage is `rebuild`-only: `release` and
-`resolve` call no `maybe_abort_for_test` at all, so they have zero crash-fuzz
-coverage — a deliberate scope boundary, not an oversight of this gotcha
-(their records' `push_owed` field is functionally dead anyway, since both
-`clear()` the record unconditionally before running their own push). Two
-things learned writing it:
+a recovery path with no test. `rebuild` (`crash_recovery_tests.rs`),
+`release` (`release_crash_recovery_tests.rs`), and `resolve`'s Mode A publish
+(`resolve_crash_recovery_tests.rs`) all go through the shared `publish_branch`
+core (see the Conventions entry on it above) and are each exercised at the
+three abort points that precede any push — `journal-written`, `ref-moved`,
+`resync-done`. Only `rebuild`'s test additionally covers the fourth point,
+`push-succeeded`: `release`'s and `resolve`'s crash-fuzz tests rely on the
+test harness's default `--no-push`/`--yes` injection, under which
+`context.should_push()` is `false` and `publish_branch` never calls the push
+closure at all, so those two commands' push path — including their records'
+`push_owed` field, which is real and journal-tracked via `publish_branch`,
+not dead — remains genuinely untested by crash-fuzz for now. Two things
+learned writing the first ('rebuild') of these tests:
 
 - The convergence check compares `<branch>^{tree}`, not the branch's commit
   SHA. `commit-tree` stamps the ambient wall-clock time with no
