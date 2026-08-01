@@ -2821,20 +2821,27 @@ impl GitOperations {
     /// * `branch2` - Second branch name
     ///
     /// # Returns
-    /// The commit hash of the merge base, or an error if not found
+    /// The commit hash of the merge base, or `None` if either side fails to
+    /// resolve or the two have no common ancestor (unrelated histories) —
+    /// matching the old subprocess path's behavior on a nonzero
+    /// `git merge-base` exit, which folded both cases together.
     pub fn get_merge_base(&self, branch1: &str, branch2: &str) -> Result<Option<String>> {
-        let output = self.run_git_command(&["merge-base", branch1, branch2])?;
+        let oid1 = match self.rev_parse_opt(branch1)? {
+            Some(sha) => git2::Oid::from_str(&sha)
+                .with_context(|| format!("'{}' resolved to an invalid oid '{}'", branch1, sha))?,
+            None => return Ok(None),
+        };
+        let oid2 = match self.rev_parse_opt(branch2)? {
+            Some(sha) => git2::Oid::from_str(&sha)
+                .with_context(|| format!("'{}' resolved to an invalid oid '{}'", branch2, sha))?,
+            None => return Ok(None),
+        };
 
-        if output.status.success() {
-            let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !hash.is_empty() {
-                Ok(Some(hash))
-            } else {
-                Ok(None)
-            }
-        } else {
-            // No common ancestor (unrelated histories)
-            Ok(None)
+        match self.repo.merge_base(oid1, oid2) {
+            Ok(oid) => Ok(Some(oid.to_string())),
+            // No common ancestor (unrelated histories) — matches the original
+            // subprocess path's behavior on a nonzero `git merge-base` exit.
+            Err(_) => Ok(None),
         }
     }
 

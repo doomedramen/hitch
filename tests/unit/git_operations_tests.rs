@@ -1191,6 +1191,70 @@ mod tests {
     }
 
     #[test]
+    fn get_merge_base_agrees_with_git_cli() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("f.txt", "base")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "base"])?.assert_success();
+            let base_sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.git
+                .run(&["checkout", "-b", "branch-a"])?
+                .assert_success();
+            env.fs.write_file("a.txt", "a")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "a"])?.assert_success();
+
+            env.git
+                .run(&["checkout", "-b", "branch-b", "main"])?
+                .assert_success();
+            env.fs.write_file("b.txt", "b")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "b"])?.assert_success();
+
+            let expected = env
+                .git
+                .run(&["merge-base", "branch-a", "branch-b"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(expected, base_sha, "test setup sanity check");
+
+            let actual = git_ops.get_merge_base("branch-a", "branch-b")?;
+            assert_eq!(actual, Some(base_sha));
+
+            // Unrelated histories (no common ancestor) must be None, not an error.
+            env.git
+                .run(&["checkout", "--orphan", "unrelated"])?
+                .assert_success();
+            env.fs.write_file("u.txt", "u")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "unrelated root"])?
+                .assert_success();
+
+            let none_result = git_ops.get_merge_base("branch-a", "unrelated")?;
+            assert_eq!(
+                none_result, None,
+                "unrelated histories must yield None, not an error"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
     fn test_get_commit_date() -> Result<()> {
         let framework = HitchTestFramework::new()?;
 
