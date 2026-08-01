@@ -413,6 +413,7 @@ fn finish_mode_a(
             // between the CAS landing and that clear() call, not through the
             // push itself.
             push_owed: context.should_push(),
+            ..Default::default()
         },
     )?;
 

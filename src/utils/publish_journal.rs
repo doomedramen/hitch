@@ -43,9 +43,19 @@ const REF_PREFIX: &str = "refs/hitch/publish";
 /// recovery so a hitch upgrade partway through a publish still finishes it.
 const LEGACY_REF_PREFIX: &str = "refs/hitch/pending-resync";
 
+/// Who/where/when a publish attempt started — attribution for `hitch doctor`
+/// so a wedged publish can be traced to the process that made it without
+/// correlating logs by hand.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PublishAttribution {
+    pub pid: u32,
+    pub hostname: String,
+    pub started_at: String,
+}
+
 /// A publish that had moved (or was about to move) a branch ref, and the
 /// checkouts and push it still owed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PublishRecord {
     #[serde(default)]
     pub branch: String,
@@ -64,6 +74,16 @@ pub struct PublishRecord {
     /// and telling the remote.
     #[serde(default)]
     pub push_owed: bool,
+    /// Who/where/when this attempt started. Stamped by `record_blob`, not the
+    /// caller — set to `..Default::default()` when constructing a literal.
+    #[serde(default)]
+    pub initiated_by: Option<PublishAttribution>,
+    /// How many publish attempts this branch has had since the last time its
+    /// record was fully cleared. Stamped by `record_blob`, not the caller.
+    /// Lets a second process racing to fix the same wedge detect that
+    /// another attempt already changed things underneath it.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// Abort the process at a named point in the publish sequence, if the
@@ -104,17 +124,42 @@ fn ref_name(branch: &str) -> String {
 /// Splitting the write lets the caller put the ref update inside a larger
 /// atomic transaction alongside the branch move it describes, instead of doing
 /// it as a separate step with a crash window in between.
-pub fn record_blob(context: &GlobalContext, pending: &PublishRecord) -> Result<(String, String)> {
-    let payload = serde_json::to_vec_pretty(pending)?;
-    let blob = context.git().hash_object_bytes(&payload)?;
+///
+/// Stamps `generation` and `initiated_by` itself, overwriting whatever the
+/// caller passed for those two fields — they describe *this* call, not
+/// something the caller can meaningfully set.
+pub fn record_blob(git: &GitOperations, pending: &PublishRecord) -> Result<(String, String)> {
+    let mut pending = pending.clone();
+    pending.generation = next_generation(git, &pending.branch)?;
+    pending.initiated_by = Some(PublishAttribution {
+        pid: std::process::id(),
+        hostname: hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string()),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    });
+    let payload = serde_json::to_vec_pretty(&pending)?;
+    let blob = git.hash_object_bytes(&payload)?;
     Ok((ref_name(&pending.branch), blob))
+}
+
+/// One more than the generation of the most recent still-pending record for
+/// `branch`, or 1 if none exists. A record survives here only when a prior
+/// publish attempt never resolved — a fresh attempt over that unresolved
+/// state is a new generation, not a repeat of the same one.
+fn next_generation(git: &GitOperations, branch: &str) -> Result<u64> {
+    let prior = list(git)?
+        .into_iter()
+        .find(|(_, r)| r.branch == branch)
+        .map(|(_, r)| r.generation);
+    Ok(prior.unwrap_or(0) + 1)
 }
 
 /// Record the intent to move `branch` and resync `checkouts`, before anything
 /// observable changes. Blob-backed so the payload is readable with
 /// `git cat-file -p` when diagnosing by hand.
 pub fn record(context: &GlobalContext, pending: &PublishRecord) -> Result<()> {
-    let (refname, blob) = record_blob(context, pending)?;
+    let (refname, blob) = record_blob(context.git(), pending)?;
     context.git().update_ref(&refname, &blob)
 }
 
@@ -302,4 +347,117 @@ fn warn_manual(context: &GlobalContext, record: &PublishRecord, path: &str) {
          cd {} && git stash && git reset --hard {} && git stash pop",
         record.branch, path, path, record.branch
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::git_operations::GitOperations;
+
+    /// A scratch git repo for tests that need real plumbing (`record_blob`
+    /// hashes a blob, `list` reads refs back) but nothing hitch-specific —
+    /// no `hitch.json`, no environments. Mirrors the raw-git test helpers at
+    /// `src/utils/prelude.rs:1430` and `:1989`, which exist for the same
+    /// reason: `GitOperations` alone is enough here, a full
+    /// `HitchTestFramework` repo is not needed.
+    #[allow(clippy::disallowed_methods)] // test-only scratch repo bootstrap, same rationale as prelude.rs's raw-git test helpers
+    fn init_scratch_repo() -> (tempfile::TempDir, GitOperations) {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@test"]);
+        run(&["config", "user.name", "test"]);
+        std::fs::write(dir.path().join("f.txt"), "x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+        let git = GitOperations::new_at_path(&dir.path().to_string_lossy()).unwrap();
+        (dir, git)
+    }
+
+    #[test]
+    fn record_blob_stamps_attribution() {
+        let (_dir, git) = init_scratch_repo();
+        let record = PublishRecord {
+            branch: "dev".to_string(),
+            to_sha: "deadbeef".to_string(),
+            ..Default::default()
+        };
+
+        let (refname, blob) = record_blob(&git, &record).unwrap();
+        git.update_ref(&refname, &blob).unwrap();
+
+        let found = list(&git).unwrap();
+        assert_eq!(found.len(), 1);
+        let attribution = found[0]
+            .1
+            .initiated_by
+            .as_ref()
+            .expect("record_blob should always stamp attribution");
+        assert_eq!(attribution.pid, std::process::id());
+        assert!(!attribution.hostname.is_empty());
+        assert!(!attribution.started_at.is_empty());
+    }
+
+    #[test]
+    fn generation_increments_across_unresolved_records_for_same_branch() {
+        let (_dir, git) = init_scratch_repo();
+        let record = PublishRecord {
+            branch: "dev".to_string(),
+            to_sha: "deadbeef".to_string(),
+            ..Default::default()
+        };
+
+        let (refname, blob) = record_blob(&git, &record).unwrap();
+        git.update_ref(&refname, &blob).unwrap();
+        let first = list(&git).unwrap();
+        assert_eq!(first[0].1.generation, 1);
+
+        // A second attempt over the still-unresolved first record — e.g. a
+        // second process racing to fix the same wedge — must see a higher
+        // generation, not repeat 1.
+        let (refname2, blob2) = record_blob(&git, &record).unwrap();
+        git.update_ref(&refname2, &blob2).unwrap();
+        let second = list(&git).unwrap();
+        assert_eq!(
+            second.len(),
+            1,
+            "same branch, same ref name — overwrites in place"
+        );
+        assert_eq!(second[0].1.generation, 2);
+    }
+
+    #[test]
+    fn generation_is_independent_per_branch() {
+        let (_dir, git) = init_scratch_repo();
+        let dev = PublishRecord {
+            branch: "dev".to_string(),
+            to_sha: "deadbeef".to_string(),
+            ..Default::default()
+        };
+        let qa = PublishRecord {
+            branch: "qa".to_string(),
+            to_sha: "cafef00d".to_string(),
+            ..Default::default()
+        };
+
+        let (dev_ref, dev_blob) = record_blob(&git, &dev).unwrap();
+        git.update_ref(&dev_ref, &dev_blob).unwrap();
+        let (qa_ref, qa_blob) = record_blob(&git, &qa).unwrap();
+        git.update_ref(&qa_ref, &qa_blob).unwrap();
+
+        let found = list(&git).unwrap();
+        for (_, record) in &found {
+            assert_eq!(
+                record.generation, 1,
+                "each branch starts its own count at 1"
+            );
+        }
+    }
 }

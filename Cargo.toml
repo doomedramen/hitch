@@ -37,6 +37,11 @@ clap_complete = "4.5"
 # Git operations
 git2 = "0.20"
 
+# Machine name for self-describing publish-journal records (`hitch doctor`
+# attribution), so a wedged publish can be traced to the box that made it
+# without correlating logs by hand.
+hostname = "0.4"
+
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 

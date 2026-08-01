@@ -1153,6 +1153,7 @@ mod tests {
                 to_sha: "0".repeat(40),
                 checkouts: vec![],
                 push_owed: true,
+                ..Default::default()
             };
             assert!(record.push_owed);
 

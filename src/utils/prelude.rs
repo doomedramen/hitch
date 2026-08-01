@@ -1039,13 +1039,14 @@ pub(crate) fn publish_environment_build(
     // all-or-nothing, so there is no longer a window where the branch has moved
     // but its intent record or its archive is missing.
     let (resync_ref, resync_blob) = crate::utils::publish_journal::record_blob(
-        context,
+        context.git(),
         &crate::utils::publish_journal::PublishRecord {
             branch: env_name.to_string(),
             from_sha: old_env_sha.clone(),
             to_sha: new_sha.to_string(),
             checkouts: checkout_paths(&checkouts),
             push_owed: context.should_push(),
+            ..Default::default()
         },
     )?;
     crate::utils::publish_journal::maybe_abort_for_test("journal-written");

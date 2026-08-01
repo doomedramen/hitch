@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::{gh, resolutions};
+use crate::utils::{gh, publish_journal, resolutions};
 use anyhow::Result;
 use clap::Args;
 
@@ -25,6 +25,7 @@ pub fn run(args: DoctorCommand, context: &GlobalContext) -> Result<()> {
     // Resolution-debt check first, so it runs even when gh is entirely
     // absent (the two concerns are independent).
     check_resolution_debt(context, args.max_resolution_age_days)?;
+    check_pending_publishes(context)?;
 
     context.log_info("Checking GitHub CLI ('gh') setup for 'hitch pr'...");
 
@@ -164,6 +165,48 @@ fn check_resolution_debt(context: &GlobalContext, max_age_days: Option<i64>) -> 
             max
         ));
     }
+
+    Ok(())
+}
+
+/// Report every unresolved publish-journal record — a publish that moved a
+/// branch but never finished resyncing or pushing. Each is attributed to the
+/// process that made it, so a wedge is traceable without correlating logs.
+fn check_pending_publishes(context: &GlobalContext) -> Result<()> {
+    let pending = publish_journal::list(context.git())?;
+    if pending.is_empty() {
+        context.log_verbose("No pending publish-journal records.");
+        return Ok(());
+    }
+
+    context.log_warning(&format!(
+        "{} unresolved publish record(s) — a previous publish did not finish:",
+        pending.len()
+    ));
+    for (_, record) in &pending {
+        let who = record
+            .initiated_by
+            .as_ref()
+            .map(|a| format!("pid {} on {} (started {})", a.pid, a.hostname, a.started_at))
+            .unwrap_or_else(|| "unknown process".to_string());
+        context.log_warning(&format!(
+            "  '{}' generation {} — {} — from {} to {}{}",
+            record.branch,
+            record.generation,
+            who,
+            record.from_sha.as_deref().unwrap_or("(none)"),
+            record.to_sha,
+            if record.push_owed {
+                ", push still owed"
+            } else {
+                ""
+            }
+        ));
+    }
+    context.log_info(
+        "Recovery for these runs automatically on the next mutating hitch command. If one \
+         keeps reappearing, the process attributed above is worth checking.",
+    );
 
     Ok(())
 }
