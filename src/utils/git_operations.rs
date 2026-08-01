@@ -2821,20 +2821,36 @@ impl GitOperations {
     /// * `branch2` - Second branch name
     ///
     /// # Returns
-    /// The commit hash of the merge base, or `None` if either side fails to
-    /// resolve or the two have no common ancestor (unrelated histories) —
-    /// matching the old subprocess path's behavior on a nonzero
-    /// `git merge-base` exit, which folded both cases together.
+    /// The commit hash of the merge base, or `None` if: either side fails to
+    /// resolve at all; either side resolves to something that isn't
+    /// commit-ish (and can't be peeled to a commit); or the two sides resolve
+    /// fine but have no common ancestor (unrelated histories). All three
+    /// collapse to `None` rather than `Err`, matching the old subprocess
+    /// path's behavior on a nonzero `git merge-base` exit, which folded them
+    /// together too.
+    ///
+    /// Resolution goes through `revparse_single` + `peel_to_commit`, not
+    /// `rev_parse_opt` + `Oid::from_str`: an annotated tag resolves to the TAG
+    /// object, and `git2::Repository::merge_base` does not peel tags to
+    /// commits internally, unlike the old `git merge-base` subprocess (which
+    /// peels any commit-ish argument). Skipping the peel here would silently
+    /// degrade a real merge-base answer into a false `None` for any caller
+    /// passing a tag — and every caller in `prelude.rs` falls back to the
+    /// base branch's own tip on `None`, which is exactly the "wrong
+    /// merge-base" bug class documented in AGENTS.md.
+    ///
+    /// Note this makes 2-3 separate git2 calls where the old single
+    /// subprocess resolved both sides atomically in one process — a ref
+    /// moving mid-call is (marginally) more observable here than before. In
+    /// practice this is fine: mutating commands hold the repo-wide flock, and
+    /// the only read-only exposure already tolerates a stale-but-not-wrong
+    /// answer.
     pub fn get_merge_base(&self, branch1: &str, branch2: &str) -> Result<Option<String>> {
-        let oid1 = match self.rev_parse_opt(branch1)? {
-            Some(sha) => git2::Oid::from_str(&sha)
-                .with_context(|| format!("'{}' resolved to an invalid oid '{}'", branch1, sha))?,
-            None => return Ok(None),
+        let Some(oid1) = Self::peel_to_commit_oid(&self.repo, branch1) else {
+            return Ok(None);
         };
-        let oid2 = match self.rev_parse_opt(branch2)? {
-            Some(sha) => git2::Oid::from_str(&sha)
-                .with_context(|| format!("'{}' resolved to an invalid oid '{}'", branch2, sha))?,
-            None => return Ok(None),
+        let Some(oid2) = Self::peel_to_commit_oid(&self.repo, branch2) else {
+            return Ok(None);
         };
 
         match self.repo.merge_base(oid1, oid2) {
@@ -2843,6 +2859,19 @@ impl GitOperations {
             // subprocess path's behavior on a nonzero `git merge-base` exit.
             Err(_) => Ok(None),
         }
+    }
+
+    /// Resolve `reference` and peel it to the commit it names, or `None` if
+    /// it doesn't resolve at all or resolves to something that isn't
+    /// commit-ish (e.g. a blob, or a tree via `^{tree}`). Used by
+    /// `get_merge_base` so an annotated tag is peeled to its commit exactly
+    /// as the old `git merge-base` subprocess did.
+    fn peel_to_commit_oid(repo: &Repository, reference: &str) -> Option<git2::Oid> {
+        repo.revparse_single(reference)
+            .ok()?
+            .peel_to_commit()
+            .ok()
+            .map(|commit| commit.id())
     }
 
     /// Get the date of a commit

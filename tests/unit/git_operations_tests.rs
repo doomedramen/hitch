@@ -1230,7 +1230,34 @@ mod tests {
             assert_eq!(expected, base_sha, "test setup sanity check");
 
             let actual = git_ops.get_merge_base("branch-a", "branch-b")?;
-            assert_eq!(actual, Some(base_sha));
+            assert_eq!(actual, Some(base_sha.clone()));
+
+            // An annotated tag must be peeled to its commit before computing the
+            // merge base — git2::Repository::merge_base does not peel tag objects
+            // internally, unlike the old `git merge-base` subprocess, which peels
+            // any commit-ish argument. A regression here degrades into the
+            // documented "wrong merge-base" bug class: callers fall back to the
+            // base branch's own tip on `None`.
+            env.git
+                .run(&["tag", "-a", "branch-a-tag", "branch-a", "-m", "annotated"])?
+                .assert_success();
+            let expected_via_tag = env
+                .git
+                .run(&["merge-base", "branch-a-tag", "branch-b"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(
+                expected_via_tag, base_sha,
+                "test setup sanity check for the tag case"
+            );
+            let actual_via_tag = git_ops.get_merge_base("branch-a-tag", "branch-b")?;
+            assert_eq!(
+                actual_via_tag,
+                Some(base_sha.clone()),
+                "get_merge_base must peel an annotated tag to its commit, matching \
+                 real 'git merge-base' on the same tag"
+            );
 
             // Unrelated histories (no common ancestor) must be None, not an error.
             env.git
@@ -1246,6 +1273,97 @@ mod tests {
             assert_eq!(
                 none_result, None,
                 "unrelated histories must yield None, not an error"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A criss-cross topology (each branch merges the other, so there are
+    /// multiple valid merge bases) is the one shape where libgit2's merge-base
+    /// algorithm and the git CLI's could plausibly diverge — this doesn't
+    /// prove tie-ordering is guaranteed forever, just that the current
+    /// git2/git-CLI pairing on this machine agrees on this real topology.
+    #[test]
+    fn get_merge_base_agrees_with_git_cli_on_criss_cross_topology() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("root.txt", "root")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "root"])?.assert_success();
+
+            env.git
+                .run(&["checkout", "-b", "branch-a"])?
+                .assert_success();
+            env.fs.write_file("a.txt", "a1")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "a1"])?.assert_success();
+            let a1_sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.git
+                .run(&["checkout", "-b", "branch-b", "main"])?
+                .assert_success();
+            env.fs.write_file("b.txt", "b1")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "b1"])?.assert_success();
+            let b1_sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Each branch merges the other's commit, creating two independently
+            // valid merge bases (a1 and b1) between the resulting tips.
+            env.git.run(&["checkout", "branch-a"])?.assert_success();
+            env.git
+                .run(&["merge", "--no-ff", &b1_sha, "-m", "merge b1 into a"])?
+                .assert_success();
+
+            env.git.run(&["checkout", "branch-b"])?.assert_success();
+            env.git
+                .run(&["merge", "--no-ff", &a1_sha, "-m", "merge a1 into b"])?
+                .assert_success();
+
+            // Diverge further past the criss-cross point.
+            env.git.run(&["checkout", "branch-a"])?.assert_success();
+            env.fs.write_file("a2.txt", "a2")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "a2"])?.assert_success();
+
+            env.git.run(&["checkout", "branch-b"])?.assert_success();
+            env.fs.write_file("b2.txt", "b2")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "b2"])?.assert_success();
+
+            let expected = env
+                .git
+                .run(&["merge-base", "branch-a", "branch-b"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert!(
+                !expected.is_empty(),
+                "test setup sanity check: real git must find a merge base for the \
+                 criss-cross topology"
+            );
+
+            let actual = git_ops.get_merge_base("branch-a", "branch-b")?;
+            assert_eq!(
+                actual,
+                Some(expected),
+                "get_merge_base disagreed with real 'git merge-base' on a \
+                 criss-cross (multiple-merge-base) topology"
             );
 
             Ok::<(), anyhow::Error>(())
