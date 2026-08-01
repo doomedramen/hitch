@@ -667,4 +667,53 @@ mod tests {
 
         Ok(())
     }
+
+    /// Lineage staleness, distinct from key staleness: `git commit --amend`
+    /// on the recorded branch rewrites the commit (new SHA, same tree, same
+    /// parent) without changing any blob content, so the conflict's stage
+    /// OIDs — and therefore the resolution key — still match exactly. But
+    /// the amended tip is a *sibling* of the commit the resolution was
+    /// recorded against, not a descendant of it, so the lineage check must
+    /// be what holds this branch, not the stage-OID key check that
+    /// `test_replay_is_a_miss_after_branch_moves` above already covers.
+    /// Assert on the lineage-specific warning text so a regression that
+    /// widens the key check (making it also miss here) can't masquerade as
+    /// this test still passing for the right reason.
+    #[test]
+    fn test_replay_is_a_miss_after_branch_head_is_amended() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_and_record(env)?;
+
+            // Amend branch-b's tip without touching content: same tree, same
+            // parent, new commit SHA — the stage OIDs the resolution key is
+            // built from are untouched, but branch-b's tip commit is no
+            // longer the (nor a descendant of the) commit the resolution's
+            // source_branch_head names.
+            env.git.run(&["checkout", "branch-b"])?;
+            env.git
+                .run(&["commit", "--amend", "--no-edit", "--allow-empty"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("held")
+                .assert_stdout_contains("was recorded against a different point in");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
