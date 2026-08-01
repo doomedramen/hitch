@@ -82,8 +82,13 @@ pub struct ResolutionMeta {
     pub env: String,
     pub branch: String,
     pub conflicts_with: String,
-    /// The head SHA of `branch` at record time — audit only; correctness
-    /// comes from the exact stage-OID match, not this.
+    /// The head SHA of `branch` at record time. Enforced at replay time in
+    /// `try_replay_resolution` (`src/utils/prelude.rs`): replay requires the
+    /// branch's current tip to be this commit or a descendant of it, so a
+    /// coincidental exact stage-OID match against an unrelated history (e.g.
+    /// two branches independently making the same one-line edit to the same
+    /// file) can't silently splice one branch's recorded resolution onto
+    /// another's build.
     pub source_branch_head: String,
     pub recorded_by: String,
     pub recorded_at: String,

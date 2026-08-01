@@ -1364,6 +1364,40 @@ fn try_replay_resolution(
         return Ok(None);
     }
 
+    // `res.meta.key` proves the merge-stage inputs match exactly, but not
+    // that this resolution was ever recorded against a state `branch`
+    // actually descends from — two branches can independently produce
+    // byte-identical merge inputs (e.g. the same one-line fix to the same
+    // file) without being the same conflict in any meaningful sense.
+    // `source_branch_head` is git's own record of what `branch` looked like
+    // at record time; require the branch's current tip to be that commit or
+    // a descendant of it before treating this as "the same conflict".
+    if let Some(current_head) = context
+        .git()
+        .rev_parse_opt(&format!("refs/heads/{}", branch))?
+    {
+        let descends_from_recorded_head = current_head == res.meta.source_branch_head
+            || context
+                .git()
+                .get_merge_base(&current_head, &res.meta.source_branch_head)?
+                .as_deref()
+                == Some(res.meta.source_branch_head.as_str());
+        if !descends_from_recorded_head {
+            context.log_warning(&format!(
+                "Recorded resolution {} for '{}' was recorded against a different point in \
+                 '{}'s history ({}) than its current tip ({}) — holding instead, in case the \
+                 matching stage OIDs are coincidental rather than the same conflict. To \
+                 inspect it:\n  hitch resolutions",
+                &key[..12.min(key.len())],
+                branch,
+                branch,
+                &res.meta.source_branch_head[..12.min(res.meta.source_branch_head.len())],
+                &current_head[..12.min(current_head.len())]
+            ));
+            return Ok(None);
+        }
+    }
+
     // A recorded resolution is content nobody on this machine reviewed,
     // spliced into a branch that deploys. When the repository has opted in,
     // it must carry a signature from a signer the repository trusts —
@@ -1640,6 +1674,175 @@ mod try_replay_resolution_tests {
         assert!(
             replay_result.is_none(),
             "an unsigned resolution must be held when require_signed is true"
+        );
+
+        Ok(())
+    }
+
+    /// A recorded resolution whose stage OIDs happen to match the current
+    /// conflict, but whose `source_branch_head` is not an ancestor of the
+    /// branch's current tip, must be held rather than replayed — the exact
+    /// stage-OID match alone isn't enough to prove this is the same conflict
+    /// in the same history.
+    #[test]
+    fn replay_holds_when_source_branch_head_is_not_an_ancestor() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("README.md"), "hi\n")?;
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+        let root = git(repo, &["rev-parse", "HEAD"]);
+
+        // The commit the resolution claims to have been recorded against.
+        git(repo, &["checkout", "-q", "-b", "recorded-against"]);
+        std::fs::write(repo.join("other.txt"), "a\n")?;
+        git(repo, &["add", "other.txt"]);
+        git(repo, &["commit", "-q", "-m", "recorded-against tip"]);
+        let source_branch_head = git(repo, &["rev-parse", "HEAD"]);
+
+        // An unrelated commit off the same root, sharing no ancestry with
+        // `recorded-against` beyond the root itself — this stands in for
+        // `branch-b`'s *current* tip, which the resolution was never
+        // recorded against.
+        git(repo, &["checkout", "-q", root.as_str()]);
+        git(repo, &["checkout", "-q", "-b", "branch-b"]);
+        std::fs::write(repo.join("unrelated.txt"), "b\n")?;
+        git(repo, &["add", "unrelated.txt"]);
+        git(repo, &["commit", "-q", "-m", "branch-b's real tip"]);
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let stages: Vec<MergeStages> = vec![(
+            "shared.txt".to_string(),
+            Some("base-oid".to_string()),
+            Some("ours-oid".to_string()),
+            Some("theirs-oid".to_string()),
+        )];
+        let resolved_dir = tempfile::tempdir()?;
+        std::fs::write(resolved_dir.path().join("shared.txt"), "resolved\n")?;
+        let pending = PendingConflict {
+            env: "dev".to_string(),
+            branch: "branch-b".to_string(),
+            conflicts_with: "branch-a".to_string(),
+            source_branch_head: source_branch_head.clone(),
+            stages: stages.clone(),
+        };
+        resolutions::record_resolution(
+            context.git(),
+            &pending,
+            resolved_dir.path(),
+            "tester@example.com",
+            "2026-01-01T00:00:00Z",
+        )?;
+
+        let outcome = MergeTreeCompose {
+            tree_oid: root,
+            conflicted_stages: stages,
+        };
+
+        // A real commit, not a placeholder string: `composed` is used as the
+        // new commit's parent in the apply path (`git commit-tree -p
+        // <composed>`), and this test must fail closed on the lineage check
+        // itself, not incidentally on an invalid parent SHA that would make
+        // apply fail regardless of lineage.
+        let mut confirmed = HashSet::new();
+        let replay_result = try_replay_resolution(
+            &context,
+            &source_branch_head,
+            "branch-b",
+            "merge message",
+            &outcome,
+            &mut confirmed,
+            false,
+        )?;
+        assert!(
+            replay_result.is_none(),
+            "a resolution recorded against a commit that isn't an ancestor of branch-b's \
+             current tip must be held, not replayed"
+        );
+
+        Ok(())
+    }
+
+    /// The ordinary case must still work: a resolution recorded against a
+    /// branch's actual current tip (the common case — nothing moved since
+    /// recording) replays normally.
+    #[test]
+    fn replay_proceeds_when_source_branch_head_is_the_current_tip() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("README.md"), "hi\n")?;
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+
+        git(repo, &["checkout", "-q", "-b", "branch-b"]);
+        std::fs::write(repo.join("other.txt"), "a\n")?;
+        git(repo, &["add", "other.txt"]);
+        git(repo, &["commit", "-q", "-m", "branch-b tip"]);
+        let branch_b_head = git(repo, &["rev-parse", "HEAD"]);
+        let tree = git(repo, &["rev-parse", "HEAD^{tree}"]);
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let stages: Vec<MergeStages> = vec![(
+            "shared.txt".to_string(),
+            Some("base-oid".to_string()),
+            Some("ours-oid".to_string()),
+            Some("theirs-oid".to_string()),
+        )];
+        let resolved_dir = tempfile::tempdir()?;
+        std::fs::write(resolved_dir.path().join("shared.txt"), "resolved\n")?;
+        let pending = PendingConflict {
+            env: "dev".to_string(),
+            branch: "branch-b".to_string(),
+            conflicts_with: "branch-a".to_string(),
+            source_branch_head: branch_b_head.clone(),
+            stages: stages.clone(),
+        };
+        resolutions::record_resolution(
+            context.git(),
+            &pending,
+            resolved_dir.path(),
+            "tester@example.com",
+            "2026-01-01T00:00:00Z",
+        )?;
+
+        let outcome = MergeTreeCompose {
+            tree_oid: tree,
+            conflicted_stages: stages,
+        };
+
+        // `composed` is used as the new commit's parent in the apply path
+        // (`git commit-tree -p <composed>`), so unlike the held-before-apply
+        // case above, this one needs a real commit here — any valid commit
+        // works, since the parent doesn't need to be an ancestor of `tree`.
+        let mut confirmed = HashSet::new();
+        let replay_result = try_replay_resolution(
+            &context,
+            &branch_b_head,
+            "branch-b",
+            "merge message",
+            &outcome,
+            &mut confirmed,
+            false,
+        )?;
+        assert!(
+            replay_result.is_some(),
+            "a resolution recorded against branch-b's actual current tip must replay"
         );
 
         Ok(())
