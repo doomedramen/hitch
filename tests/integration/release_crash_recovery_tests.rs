@@ -102,22 +102,14 @@ mod tests {
                 // recovery convention and is what this test exercises.
                 //
                 // Unlike a crashed `rebuild`, retrying a crashed `release`
-                // re-runs `perform_release_core` from scratch, which creates
-                // a *new* release tag stamped with the current wall-clock
-                // second (`create_tag_at` is a hard `git tag -a`, which
-                // fails outright if the name already exists — there is no
-                // unconditional-overwrite convention here the way there is
-                // for `refs/hitch/prev`/`backup`, see AGENTS.md). On a fast
-                // machine the interrupted attempt and this recovery retry
-                // land in the same second, so retrying immediately
-                // reproducibly collides on the tag name and fails again —
-                // unrelated to the publish-journal machinery this test
-                // exercises. Sleep past the second boundary so recovery
-                // exercises what this test actually cares about instead of
-                // tripping over that unrelated, pre-existing tag-naming
-                // limitation.
-                std::thread::sleep(std::time::Duration::from_millis(1100));
-
+                // re-runs `perform_release_core` from scratch, which
+                // recomposes the exact same commit and, with it, the exact
+                // same second-granularity tag name as the interrupted
+                // attempt. `create_release_tag` (`src/commands/release.rs`)
+                // tolerates that: a same-content collision reuses the
+                // existing tag instead of failing, so this retry can run
+                // immediately, with no need to wait out the wall-clock
+                // second boundary.
                 env.hitch
                     .run()
                     .args(&["release", "dev", "--force"])

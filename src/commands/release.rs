@@ -3,6 +3,7 @@ use crate::utils::command_helpers::{
     ensure_branch_exists, ensure_environment_exists, environment::get_locked_by_user,
     logging::validation_success,
 };
+use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{access_metadata_read_only, push_branch_with_deploy_key_if_configured};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
@@ -314,9 +315,7 @@ fn perform_release_core(
         now.format("%Y-%m-%d %H:%M:%S UTC")
     );
 
-    context
-        .git()
-        .create_tag_at(&tag_name, &tag_message, &new_sha)?;
+    let tag_name = create_release_tag(context.git(), &tag_name, &tag_message, &new_sha)?;
     context.log_info(&format!("✓ Created release tag '{}'", tag_name));
 
     // Publish the target branch atomically — see `prelude::publish_branch`.
@@ -440,6 +439,48 @@ fn build_conflict_error(
     ));
 
     anyhow::anyhow!("{}", error_msg)
+}
+
+/// Create the release tag, tolerating a same-name collision from a
+/// crash-then-immediate-retry of the same release.
+///
+/// `create_tag_at` is a hard `git tag -a` with no `-f`, and `tag_name` is
+/// stamped at second granularity — two releases of the same env/target
+/// landing in the same wall-clock second collide on the name. A collision
+/// where the existing tag already points at `sha` is the retry case
+/// (harmless: the retry recomposed the exact same commit) and is treated as
+/// already-done. A collision pointing at anything else is a second,
+/// genuinely distinct release landing in the same second; disambiguate with
+/// a short random suffix rather than fail outright — silently dropping or
+/// overwriting a real release's tag would be worse than a slightly uglier
+/// name. Any other tag-creation failure (not a name collision at all) is
+/// propagated unchanged. Returns the tag name actually created or reused.
+fn create_release_tag(
+    git: &GitOperations,
+    tag_name: &str,
+    message: &str,
+    sha: &str,
+) -> Result<String> {
+    match git.create_tag_at(tag_name, message, sha) {
+        Ok(()) => Ok(tag_name.to_string()),
+        Err(e) => match git.rev_parse_opt(&format!("{}^{{commit}}", tag_name))? {
+            Some(existing_sha) if existing_sha == sha => Ok(tag_name.to_string()),
+            Some(_) => {
+                let disambiguated = format!("{}-{}", tag_name, short_random_suffix());
+                git.create_tag_at(&disambiguated, message, sha)?;
+                Ok(disambiguated)
+            }
+            // The tag doesn't exist even after the failure, so this wasn't a
+            // name collision at all — some other real failure. Propagate it.
+            None => Err(e),
+        },
+    }
+}
+
+/// 8 hex characters of a fresh UUIDv4 — enough entropy to make a
+/// disambiguated tag name practically unique without a second lookup.
+fn short_random_suffix() -> String {
+    uuid::Uuid::new_v4().to_string()[..8].to_string()
 }
 
 /// Update the release timestamp and optionally prune promoted branches that are now integrated.
@@ -810,4 +851,109 @@ fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str)
 
     context.log_info("User confirmed release - proceeding...");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::git_operations::GitOperations;
+
+    /// A scratch git repo for tests exercising raw git plumbing directly —
+    /// no hitch metadata needed. Mirrors the raw-git test helpers already
+    /// established at `src/utils/prelude.rs:1430`/`:1989`.
+    #[allow(clippy::disallowed_methods)] // test-only scratch repo bootstrap, same rationale as prelude.rs's raw-git test helpers
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn init_scratch_repo() -> (tempfile::TempDir, GitOperations) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.email", "test@test"]);
+        git(repo, &["config", "user.name", "test"]);
+        std::fs::write(repo.join("f.txt"), "one").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "one"]);
+        let git_ops = GitOperations::new_at_path(&repo.to_string_lossy()).unwrap();
+        (dir, git_ops)
+    }
+
+    /// A retried release (e.g. a crashed release re-run immediately, before
+    /// the wall-clock second advances) regenerates the exact same composed
+    /// commit and, with it, the exact same tag name. That must succeed and
+    /// reuse the existing tag, not fail with "tag already exists" — this is
+    /// the bug this function exists to fix.
+    #[test]
+    fn create_release_tag_reuses_existing_tag_for_same_content() {
+        let (_dir, git_ops) = init_scratch_repo();
+        let sha = git_ops.rev_parse("HEAD").unwrap();
+        let tag_name = "hitch-release-dev-to-main-2026-08-01T00-00-00Z";
+
+        let first = create_release_tag(&git_ops, tag_name, "msg", &sha).unwrap();
+        assert_eq!(first, tag_name);
+
+        let second = create_release_tag(&git_ops, tag_name, "msg", &sha).unwrap();
+        assert_eq!(
+            second, tag_name,
+            "a same-content retry must reuse the existing tag name, not fail or rename"
+        );
+    }
+
+    /// Two genuinely distinct releases (different composed commits) that
+    /// happen to land in the same wall-clock second must both succeed, with
+    /// distinct tags — neither silently dropped nor overwritten.
+    #[test]
+    fn create_release_tag_disambiguates_a_genuine_second_release_in_the_same_second() {
+        let (dir, git_ops) = init_scratch_repo();
+        let sha1 = git_ops.rev_parse("HEAD").unwrap();
+
+        std::fs::write(dir.path().join("f.txt"), "two").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "two"]);
+        let sha2 = git_ops.rev_parse("HEAD").unwrap();
+        assert_ne!(sha1, sha2);
+
+        let tag_name = "hitch-release-dev-to-main-2026-08-01T00-00-00Z";
+        let first = create_release_tag(&git_ops, tag_name, "msg", &sha1).unwrap();
+        assert_eq!(first, tag_name);
+
+        let second = create_release_tag(&git_ops, tag_name, "msg", &sha2).unwrap();
+        assert_ne!(
+            second, tag_name,
+            "a second, genuinely different release colliding on the same name must get a \
+             distinct tag, not silently fail or overwrite the first"
+        );
+        assert!(
+            second.starts_with(tag_name),
+            "the disambiguated name should still be recognizable as this release's tag"
+        );
+
+        // Both tags must survive, pointing at their own respective commits.
+        assert_eq!(
+            git_ops
+                .rev_parse(&format!("{}^{{commit}}", tag_name))
+                .unwrap(),
+            sha1,
+            "the first release's tag must be untouched by the second release's collision"
+        );
+        assert_eq!(
+            git_ops
+                .rev_parse(&format!("{}^{{commit}}", second))
+                .unwrap(),
+            sha2
+        );
+    }
 }
