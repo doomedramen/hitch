@@ -54,7 +54,6 @@ impl MergeConflictResult {
 }
 
 pub struct GitOperations {
-    #[allow(dead_code)]
     repo: Repository,
     repo_path: String,
     /// Stack of branch writes in progress (see
@@ -492,15 +491,11 @@ impl GitOperations {
 
     /// Resolve a ref/commit-ish to a full SHA.
     pub fn rev_parse(&self, reference: &str) -> Result<String> {
-        let output = self.run_git_plumbing_command(&["rev-parse", reference])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "git rev-parse {} failed: {}",
-                reference,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        let obj = self
+            .repo
+            .revparse_single(reference)
+            .with_context(|| format!("git rev-parse {} failed", reference))?;
+        Ok(obj.id().to_string())
     }
 
     pub fn write_file(&self, file: &str, content: &str) -> Result<()> {
@@ -1947,22 +1942,20 @@ impl GitOperations {
     /// primary way to ask "does this ref exist, and if so what does it point
     /// at" in one call (e.g. an environment branch that hasn't been built yet).
     ///
-    /// Deliberately has no `--` separator, unlike `update_ref`/`update_ref_cas`/
-    /// `delete_ref`: for `git rev-parse`, `--` means "the rest are pathspecs,
-    /// not revisions", not "end of options", so adding one would break every
-    /// caller here, which all pass computed revision expressions (e.g.
-    /// `<sha>^{tree}`) rather than a bare refname at argv position 0. The
-    /// option-shaped-input gap this closes elsewhere is closed here instead by
-    /// `validate_name` at the boundary, plus every caller always prefixing a
-    /// static string rather than passing raw untrusted input first.
+    /// Goes through `git2::Repository::revparse_single` rather than a
+    /// subprocess, so the old note about `git rev-parse`'s `--` separator no
+    /// longer applies — there is no argv for an option-shaped `reference` to
+    /// be misparsed against.
     pub fn rev_parse_opt(&self, reference: &str) -> Result<Option<String>> {
-        let output =
-            self.run_git_plumbing_command(&["rev-parse", "--verify", "--quiet", reference])?;
-        if !output.status.success() {
-            return Ok(None);
-        }
-        let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(if sha.is_empty() { None } else { Some(sha) })
+        // Mirrors `git rev-parse --verify --quiet`: any resolution failure —
+        // not found, ambiguous, malformed spec — is a soft `None`, never an
+        // `Err`. Discarding the git2::Error here is deliberate, not lazy:
+        // that's the exact behavior this replaces.
+        Ok(self
+            .repo
+            .revparse_single(reference)
+            .ok()
+            .map(|obj| obj.id().to_string()))
     }
 
     /// Atomically set `refname` to `new_oid`, using a compare-and-swap against

@@ -2023,4 +2023,107 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn rev_parse_opt_agrees_with_git_cli_across_revspec_forms() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("f.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "one"])?.assert_success();
+            env.git
+                .run(&["tag", "-a", "v1", "-m", "release v1"])?
+                .assert_success();
+
+            let branch = env
+                .git
+                .run(&["branch", "--show-current"])?
+                .stdout()
+                .trim()
+                .to_string();
+            let commit_sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            let tree_sha = env
+                .git
+                .run(&["rev-parse", "HEAD^{tree}"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let specs = [
+                format!("refs/heads/{}", branch),
+                "v1".to_string(),
+                commit_sha.clone(),
+                commit_sha[..10].to_string(),
+                "HEAD^{tree}".to_string(),
+                format!("{}:f.txt", commit_sha),
+                "does-not-exist".to_string(),
+            ];
+
+            for spec in &specs {
+                let expected = env
+                    .git
+                    .run(&["rev-parse", "--verify", "--quiet", spec])
+                    .ok()
+                    .filter(|r| r.success())
+                    .map(|r| r.stdout().trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                let actual = git_ops.rev_parse_opt(spec)?;
+                assert_eq!(
+                    actual, expected,
+                    "rev_parse_opt('{}') disagreed with git CLI: got {:?}, expected {:?}",
+                    spec, actual, expected
+                );
+            }
+
+            // The tree-peel spec's value must equal the tree we captured directly.
+            assert_eq!(
+                git_ops.rev_parse_opt("HEAD^{tree}")?,
+                Some(tree_sha),
+                "tree-peel spec did not resolve to the expected tree"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn rev_parse_errors_on_a_reference_that_does_not_resolve() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            env.fs.write_file("f.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "one"])?.assert_success();
+
+            let sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(git_ops.rev_parse("HEAD")?, sha);
+
+            assert!(
+                git_ops.rev_parse("does-not-exist").is_err(),
+                "rev_parse must error, not silently return an empty string, for an \
+                 unresolvable reference"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
