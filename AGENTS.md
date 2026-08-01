@@ -111,8 +111,14 @@ covered.
   `credential.helper` lives. `clippy.toml` denies `std::process::Command::new`
   outright, so a new spawn point must carry an explicit
   `#[allow(clippy::disallowed_methods)]` — that annotation is the review
-  signal. The `git2` dependency is present but effectively dead — only used
-  for repo discovery, never for merges.
+  signal. `git2` is used for the read-only plumbing primitives (`rev_parse`,
+  `rev_parse_opt`, `cat_file_blob`, `read_blob`, `get_merge_base`) via the
+  `Repository` handle `GitOperations` already opens in both constructors —
+  no subprocess for those five. Everything else, including every primitive
+  touching the ORT merge engine (`merge_tree_compose` and siblings) and
+  anything hitting a remote, still shells out to the real `git`/`gh` binaries;
+  see the differential tests in `tests/unit/git_operations_tests.rs`
+  (`*_agrees_with_git_cli`) for why that boundary is where it is.
 - `src/utils/gh.rs` — same pattern for the GitHub CLI (`gh`), used by `pr`,
   `doctor`, `setup`, and `pr_status`.
 - `src/utils/publish_journal.rs` — the record of what a publish still owes,
