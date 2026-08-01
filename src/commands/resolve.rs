@@ -368,7 +368,21 @@ fn resolve_mode_a(
         }
     };
 
-    let result = finish_mode_a(context, env_name, branch, base, &from_sha, &new_sha);
+    // No `--continue`: this is the first-try path and `cleanup()` above
+    // always removes the worktree unconditionally, with no session marker
+    // ever written — so if `finish_mode_a` fails here there is genuinely no
+    // session to resume. `hitch resolve {env} --branch {branch} --continue`
+    // would dead-end at "No resolve session in progress".
+    let retry_hint = format!("hitch resolve {} --branch {}", env_name, branch);
+    let result = finish_mode_a(
+        context,
+        env_name,
+        branch,
+        base,
+        &from_sha,
+        &new_sha,
+        &retry_hint,
+    );
     cleanup();
     result
 }
@@ -376,6 +390,13 @@ fn resolve_mode_a(
 /// Land a completed rebase: move `refs/heads/<branch>` to the rebased tip with
 /// a compare-and-swap, bring any checkout standing on it back in line, and
 /// offer the force push. Shared by the clean-first-try path and `--continue`.
+///
+/// `retry_hint` is the command to suggest if the publish CAS loses a race —
+/// the caller decides it because the right retry differs by call site:
+/// `resolve_mode_a`'s first-try path has no resumable session (cleanup runs
+/// unconditionally after this call), so its hint must start fresh with no
+/// `--continue`; `continue_rebase_session` preserves the session worktree on
+/// failure, so `--continue` is genuinely resumable there.
 fn finish_mode_a(
     context: &GlobalContext,
     env_name: &str,
@@ -383,6 +404,7 @@ fn finish_mode_a(
     base: &str,
     from_sha: &str,
     new_sha: &str,
+    retry_hint: &str,
 ) -> Result<()> {
     if new_sha == from_sha {
         context.log_info(&format!(
@@ -409,14 +431,13 @@ fn finish_mode_a(
     // observed remote tip: rebasing rewrites every commit from the merge
     // base forward, so the new tip is never a fast-forward of whatever is
     // already on origin. A plain push here would simply be rejected.
-    let retry_hint = format!("hitch resolve {} --branch {} --continue", env_name, branch);
     let push_remedy = format!("hitch push {} -f", branch);
     crate::utils::prelude::publish_branch(
         context,
         branch,
         new_sha,
         None,
-        &retry_hint,
+        retry_hint,
         &push_remedy,
         || {
             if !context.confirm(&format!(
@@ -778,6 +799,13 @@ fn continue_rebase_session(
     }
 
     let new_sha = worktree_git.rev_parse("HEAD")?;
+    // `--continue` is a genuine retry here: this path preserves the session
+    // worktree on failure (see the `if result.is_ok()` guard below), so a
+    // resumable session actually exists to continue.
+    let retry_hint = format!(
+        "hitch resolve {} --branch {} --continue",
+        env_name, session.branch
+    );
     let result = finish_mode_a(
         context,
         env_name,
@@ -785,6 +813,7 @@ fn continue_rebase_session(
         &session.base,
         &session.from_sha,
         &new_sha,
+        &retry_hint,
     );
 
     // Only tear the session down once the result has actually landed —
