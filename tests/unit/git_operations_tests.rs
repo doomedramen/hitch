@@ -2357,6 +2357,20 @@ mod tests {
                 "read_blob disagreed with git CLI"
             );
 
+            // A ref pointing directly at a blob (not a commit or tree) — the
+            // exact form publish_journal.rs's record_blob/list() use for
+            // refs/hitch/publish/<branch>. That caller silently swallows any
+            // cat_file_blob error (`let Ok(payload) = ... else { continue }`),
+            // so a regression in this exact resolution form would silently
+            // drop recovery obligations rather than fail loudly.
+            let blob_ref = "refs/hitch/test/blob-ref";
+            git_ops.update_ref(blob_ref, &blob_oid)?;
+            assert_eq!(
+                git_ops.cat_file_blob(blob_ref)?,
+                expected,
+                "cat_file_blob via a ref pointing directly at a blob disagreed with git CLI"
+            );
+
             Ok::<(), anyhow::Error>(())
         });
 

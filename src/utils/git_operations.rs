@@ -494,7 +494,7 @@ impl GitOperations {
         let obj = self
             .repo
             .revparse_single(reference)
-            .with_context(|| format!("git rev-parse {} failed", reference))?;
+            .with_context(|| format!("Failed to resolve '{}'", reference))?;
         Ok(obj.id().to_string())
     }
 
