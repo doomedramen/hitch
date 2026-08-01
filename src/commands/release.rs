@@ -333,13 +333,31 @@ fn perform_release_core(
         &new_sha,
         None,
         &retry_hint,
-        || {
-            push_branch_with_deploy_key_if_configured(context, target_branch)?;
-            context.git().push_tag(&tag_name)
-        },
+        || push_branch_with_deploy_key_if_configured(context, target_branch),
     );
     cleanup();
     publish_result?;
+
+    // Push the release tag as its own best-effort step, separate from the
+    // branch push above. The branch is already published at this point, so a
+    // tag-push failure must not be reported through `publish_branch`'s
+    // generic push-failure warning: that warning's remedy
+    // (`hitch push <branch> -f`) never pushes tags, and its "recovery will
+    // report it again" claim is false here — `publish_journal::recover()`
+    // only compares the branch tip, which already matches, so a leftover
+    // journal record tells it nothing about the tag.
+    if context.should_push() {
+        if let Err(e) = context.git().push_tag(&tag_name) {
+            context.log_warning(&format!(
+                "Release published and pushed, but pushing the release tag '{}' failed: {}",
+                tag_name, e
+            ));
+            context.log_warning(&format!(
+                "Push the tag manually with: git push origin {}",
+                tag_name
+            ));
+        }
+    }
 
     // Post-release pruning and dependent rebuilds.
     let pruned_envs =
