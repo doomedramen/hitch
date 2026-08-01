@@ -1842,15 +1842,14 @@ impl GitOperations {
 
     /// Raw bytes of the blob `reference` points at.
     pub fn cat_file_blob(&self, reference: &str) -> Result<Vec<u8>> {
-        let output = self.run_git_plumbing_command(&["cat-file", "blob", reference])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to read blob '{}': {}",
-                reference,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Ok(output.stdout)
+        let obj = self
+            .repo
+            .revparse_single(reference)
+            .with_context(|| format!("Failed to resolve '{}' to a blob", reference))?;
+        let blob = obj
+            .peel_to_blob()
+            .with_context(|| format!("Failed to read blob '{}'", reference))?;
+        Ok(blob.content().to_vec())
     }
 
     /// The values `refname` has had, most recent first, up to `limit`
@@ -3327,17 +3326,11 @@ impl GitOperations {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// Read a blob's contents as bytes (`git cat-file blob <oid>`).
+    /// A raw OID is itself a valid revspec, so this is `cat_file_blob` under
+    /// a name some callers use for clarity when they already have an OID
+    /// rather than a `<rev>:<path>`-style spec.
     pub fn read_blob(&self, oid: &str) -> Result<Vec<u8>> {
-        let output = self.run_git_plumbing_command(&["cat-file", "blob", oid])?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "git cat-file blob {} failed: {}",
-                oid,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Ok(output.stdout)
+        self.cat_file_blob(oid)
     }
 
     /// List every ref under `prefix` (e.g. `refs/hitch/resolutions/`) as

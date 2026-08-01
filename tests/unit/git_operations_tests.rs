@@ -2126,4 +2126,58 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn cat_file_blob_and_read_blob_agree_with_git_cli() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("f.txt", "hello world\n")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "add f.txt"])?
+                .assert_success();
+
+            let commit_sha = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            let blob_oid = env
+                .git
+                .run(&["rev-parse", &format!("{}:f.txt", commit_sha)])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let expected = env
+                .git
+                .run(&["cat-file", "blob", &blob_oid])?
+                .stdout()
+                .into_bytes();
+
+            assert_eq!(
+                git_ops.cat_file_blob(&format!("{}:f.txt", commit_sha))?,
+                expected,
+                "cat_file_blob via a <commit>:<path> spec disagreed with git CLI"
+            );
+            assert_eq!(
+                git_ops.cat_file_blob(&blob_oid)?,
+                expected,
+                "cat_file_blob via a raw blob OID disagreed with git CLI"
+            );
+            assert_eq!(
+                git_ops.read_blob(&blob_oid)?,
+                expected,
+                "read_blob disagreed with git CLI"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
