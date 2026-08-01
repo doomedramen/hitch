@@ -15,8 +15,13 @@
 //!   changes a branch's meaning while leaving the conflicted hunk textually
 //!   identical replays the old (now wrong) resolution silently. Keying on
 //!   the exact stage-1/2/3 blob OIDs instead makes any change to any side a
-//!   cache *miss*, never a wrong replay — staleness is structural, not a
-//!   check that can be forgotten.
+//!   cache *miss* rather than a wrong replay on the inputs alone — staleness
+//!   of the inputs is structural, not a check that can be forgotten. That key
+//!   match is necessary but not sufficient on its own, though: two branches
+//!   can independently produce byte-identical merge inputs without being the
+//!   same conflict, so replay also enforces `source_branch_head` lineage (see
+//!   `ResolutionMeta::source_branch_head`'s doc comment and
+//!   `try_replay_resolution` in `src/utils/prelude.rs`) as a second gate.
 //! - rerere's cache is `.git/rr-cache`, global to the repo and not
 //!   relocatable, so hydrating teammates' resolutions into it changes the
 //!   behavior of the user's *own* plain-git merges outside hitch. Storing

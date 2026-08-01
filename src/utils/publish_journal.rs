@@ -21,12 +21,18 @@
 //!
 //! **Recovery never guesses.** It repairs a checkout only when that checkout's
 //! working tree and index are provably *exactly* the old tip — clean against
-//! `from_sha`, nothing staged, nothing modified. That is a fact about the disk
-//! right now, not a claim inherited from the dead process, so a user who has
-//! since started editing is never reset out from under. Anything else is
-//! reported with the command to run and left untouched. An owed push is
-//! likewise only ever reported, never performed — pushing on someone's behalf
-//! during a startup recovery pass is a network side effect nobody asked for.
+//! `from_sha`, nothing staged, nothing modified — *and* the branch's own
+//! reflog corroborates that history, rather than contradicting it. That tree
+//! check is a fact about the disk right now, not a claim inherited from the
+//! dead process, so a user who has since started editing is never reset out
+//! from under. The reflog check is defense in depth on top of it: it fails
+//! open (proceeds) when the reflog is empty or missing — routine, non-
+//! adversarial git housekeeping — and fails closed (declines) only on an
+//! actual contradiction, a non-empty reflog that never held `from_sha`.
+//! Anything else is reported with the command to run and left untouched. An
+//! owed push is likewise only ever reported, never performed — pushing on
+//! someone's behalf during a startup recovery pass is a network side effect
+//! nobody asked for.
 //!
 //! Legacy `refs/hitch/pending-resync/<branch>` records (written before this
 //! journal covered the push) are still read, so a hitch upgrade partway

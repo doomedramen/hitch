@@ -1304,6 +1304,10 @@ pub(crate) fn publish_environment_build(
 /// - The match is exact over `(path, base_oid, ours_oid, theirs_oid)`, so a
 ///   resolution only ever applies to byte-identical conflict inputs — any
 ///   change to any side is a miss, never a wrong replay.
+/// - The branch's current tip must be `source_branch_head` (recorded at
+///   resolution time) or a descendant of it — a coincidental exact stage-OID
+///   match against an unrelated history can't silently splice one branch's
+///   recorded resolution onto another's build.
 /// - The whole feature is opt-in per invocation (`--replay-resolutions`),
 ///   a flag that cannot hide in `HITCH_YES`.
 /// - Without `--yes`, each distinct resolution is confirmed once before it is

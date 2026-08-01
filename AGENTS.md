@@ -123,14 +123,18 @@ covered.
   transaction, and cleared as each completes; `recover` runs from `main.rs` for
   mutating commands only, so it is always under the repo lock. It repairs a
   checkout only when that tree is *provably* exactly the old tip — never on the
-  dead process's say-so — so an edited tree is reported, not reset, and an owed
+  dead process's say-so — *and* the branch's own reflog corroborates that
+  history (fails open on an empty/missing reflog, closed only on an actual
+  contradiction) — so an edited tree is reported, not reset, and an owed
   push is reported rather than performed. Legacy
   `refs/hitch/pending-resync/<branch>` records are still read so an upgrade
   mid-publish recovers.
 - `src/utils/resolutions.rs` — phase-5 shared conflict resolutions:
   content-addressed by exact merge-stage blob OIDs (NOT git-rerere — see the
   module header for why that matters), stored as `refs/hitch/resolutions/*`.
-  Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`,
+  Consumed by `hitch resolve --record`, `hitch rebuild --replay-resolutions`
+  (replay also requires `source_branch_head` lineage — the current tip must
+  descend from the recorded head, not just match on stage OIDs),
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
 - `src/core/` — read-only view builders (workspace/status models).
   `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
