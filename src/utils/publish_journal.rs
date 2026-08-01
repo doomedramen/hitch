@@ -343,11 +343,17 @@ fn repair_checkout(context: &GlobalContext, record: &PublishRecord, path: &str) 
     // The proof: is this working tree *exactly* the old tip? If so it is stale,
     // not edited, and advancing it cannot lose anything.
     let Some(from_sha) = record.from_sha.as_deref() else {
-        warn_manual(context, record, path);
+        warn_manual(
+            context,
+            record,
+            path,
+            "no prior tip was recorded for this publish, so there is nothing to compare the \
+             working tree against",
+        );
         return;
     };
     if !git.matches_commit_exactly(from_sha).unwrap_or(false) {
-        warn_manual(context, record, path);
+        warn_manual(context, record, path, "that tree has since been modified");
         return;
     }
 
@@ -356,14 +362,27 @@ fn repair_checkout(context: &GlobalContext, record: &PublishRecord, path: &str) 
     // that value. Check the ref's own reflog for corroboration. An empty
     // reflog (expiry, `core.logAllRefUpdates=false`) is inconclusive, not
     // suspicious — proceed as before in that case. Only a non-empty reflog
-    // that *doesn't* contain `from_sha` is a real contradiction.
+    // that *doesn't* contain `from_sha` is a real contradiction. This is a
+    // softer, fail-open check than `try_replay_resolution`'s lineage gate in
+    // `prelude.rs` (see the cross-reference there): a feature branch's
+    // reflog may be locally-scoped or simply absent on a fresh clone, so
+    // treating "no evidence" the same as "contradicted" here would turn
+    // routine git housekeeping into a permanently-broken recovery path —
+    // unlike replay, there is no other usable signal to fall back on that
+    // would let this check be a hard gate instead.
     let branch_ref = format!("refs/heads/{}", record.branch);
     let reflog = context
         .git()
         .reflog_values(&branch_ref, 50)
         .unwrap_or_default();
     if !reflog.is_empty() && !reflog.iter().any(|sha| sha == from_sha) {
-        warn_manual(context, record, path);
+        warn_manual(
+            context,
+            record,
+            path,
+            "the tree matches the recorded prior tip, but that branch's own reflog does not \
+             corroborate that this checkout's branch ref ever actually held it",
+        );
         return;
     }
 
@@ -372,17 +391,22 @@ fn repair_checkout(context: &GlobalContext, record: &PublishRecord, path: &str) 
             "Finished an interrupted '{}' publish: updated the working tree at '{}'.",
             record.branch, path
         )),
-        Err(_) => warn_manual(context, record, path),
+        Err(_) => warn_manual(
+            context,
+            record,
+            path,
+            "resetting the working tree to the new tip failed",
+        ),
     }
 }
 
-fn warn_manual(context: &GlobalContext, record: &PublishRecord, path: &str) {
+fn warn_manual(context: &GlobalContext, record: &PublishRecord, path: &str, reason: &str) {
     context.log_warning(&format!(
         "A previous '{}' publish was interrupted before it could update the working \
-         tree at '{}', and that tree has since been modified — it was left alone. \
+         tree at '{}', and {} — it was left alone. \
          To reconcile it once your changes are safe:\n  \
          cd {} && git stash && git reset --hard {} && git stash pop",
-        record.branch, path, path, record.branch
+        record.branch, path, reason, path, record.branch
     ));
 }
 
