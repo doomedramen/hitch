@@ -229,12 +229,6 @@ fn perform_release_core(
     // Snapshot the target branch SHA before building — CAS old value.
     let target_sha = context.git().get_branch_commit_sha(target_branch)?;
 
-    // A release target is the branch a human is most likely to be standing on
-    // (`main`, `production`). Moving the ref does not update their index or
-    // working tree, so record what needs resyncing while it is still
-    // observable — after the ref moves, every affected checkout looks dirty.
-    let target_checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, target_branch)?;
-
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
 
     // Compose the merges entirely in the object database — see
@@ -325,77 +319,27 @@ fn perform_release_core(
         .create_tag_at(&tag_name, &tag_message, &new_sha)?;
     context.log_info(&format!("✓ Created release tag '{}'", tag_name));
 
-    // Publish the target branch atomically with CAS.
-    // Durable intent, so a crash between the CAS and the resync below is
-    // recoverable — see `crate::utils::publish_journal`.
-    crate::utils::publish_journal::record(
+    // Publish the target branch atomically — see `prelude::publish_branch`.
+    // Not versioned into `refs/hitch/prev`/`backup`: the release tag created
+    // above already serves as this publish's rollback anchor. The build-ref
+    // anchor is only dropped *after* publish is attempted (success or
+    // failure) — see the matching `drop_build_ref()` pattern in
+    // `rebuild_environment` — so the composed commit stays reachable for the
+    // whole window until `refs/heads/<target_branch>` takes over that job.
+    let retry_hint = format!("hitch release {}", env_name);
+    let publish_result = crate::utils::prelude::publish_branch(
         context,
-        &crate::utils::publish_journal::PublishRecord {
-            branch: target_branch.to_string(),
-            from_sha: Some(target_sha.clone()),
-            to_sha: new_sha.clone(),
-            checkouts: crate::utils::prelude::checkout_paths(&target_checkouts),
-            // This path still clears the record right after resync, before the
-            // push below runs — see the "old two-step sequence" note in
-            // AGENTS.md. `push_owed` only protects the narrow crash window
-            // between the CAS landing and that clear() call, not through the
-            // push itself.
-            push_owed: context.should_push(),
-            ..Default::default()
-        },
-    )?;
-
-    let env_ref = format!("refs/heads/{}", target_branch);
-    if let Err(e) = context.git().update_ref_cas(
-        &env_ref,
+        target_branch,
         &new_sha,
-        Some(&target_sha),
-        &format!("hitch: release {} to {}", env_name, target_branch),
-    ) {
-        cleanup();
-        return Err(anyhow::anyhow!(
-            "Failed to publish '{}': {}. The release built successfully but could not \
-             be published — the target branch may have moved while the release was \
-             running. Fetch and re-run 'hitch release {}'.",
-            target_branch,
-            e,
-            env_name
-        ));
-    }
-    context.log_verbose(&format!("✓ Published '{}' ({})", target_branch, new_sha));
-
-    crate::utils::prelude::resync_checkouts(context, target_branch, &new_sha, &target_checkouts);
-    crate::utils::publish_journal::clear(context, target_branch);
-
-    // Push if enabled. A push failure must NOT abort the release — the merge
-    // and tag are already committed locally. Warn and tell the user how to
-    // publish it manually.
-    if context.should_push() {
-        context.log_info("Pushing release to remote...");
-        if let Err(e) = push_branch_with_deploy_key_if_configured(context, target_branch) {
-            context.log_warning(&format!(
-                "Release was applied to the local '{}' branch, but pushing to origin failed: {}",
-                target_branch, e
-            ));
-            context.log_warning(&format!(
-                "Publish it manually with: hitch push {}",
-                target_branch
-            ));
-        } else if let Err(e) = context.git().push_tag(&tag_name) {
-            context.log_warning(&format!(
-                "Pushed '{}', but failed to push the release tag '{}': {}",
-                target_branch, tag_name, e
-            ));
-            context.log_warning(&format!(
-                "Push the tag manually with: git push origin {}",
-                tag_name
-            ));
-        } else {
-            context.log_verbose("✓ Pushed release and tag to remote");
-        }
-    }
-
+        None,
+        &retry_hint,
+        || {
+            push_branch_with_deploy_key_if_configured(context, target_branch)?;
+            context.git().push_tag(&tag_name)
+        },
+    );
     cleanup();
+    publish_result?;
 
     // Post-release pruning and dependent rebuilds.
     let pruned_envs =
