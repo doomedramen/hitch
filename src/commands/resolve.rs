@@ -396,77 +396,52 @@ fn finish_mode_a(
         .git()
         .rev_parse_opt(&format!("refs/remotes/origin/{}", branch))?;
 
-    // Same publish discipline as every other branch move: record the resync
-    // first so an interruption is recoverable, CAS so a branch that moved
-    // under us is detected rather than clobbered, then resync the checkouts.
-    let checkouts = crate::utils::prelude::scan_checkouts_on_branch(context, branch)?;
-    crate::utils::publish_journal::record(
-        context,
-        &crate::utils::publish_journal::PublishRecord {
-            branch: branch.to_string(),
-            from_sha: Some(from_sha.to_string()),
-            to_sha: new_sha.to_string(),
-            checkouts: crate::utils::prelude::checkout_paths(&checkouts),
-            // This path still clears the record right after resync, before the
-            // push below runs — see the "old two-step sequence" note in
-            // AGENTS.md. `push_owed` only protects the narrow crash window
-            // between the CAS landing and that clear() call, not through the
-            // push itself.
-            push_owed: context.should_push(),
-            ..Default::default()
-        },
-    )?;
-
-    context
-        .git()
-        .update_ref_cas(
-            &format!("refs/heads/{}", branch),
-            new_sha,
-            Some(from_sha),
-            &format!("hitch: resolve — rebase {} onto {}", branch, base),
-        )
-        .map_err(|e| {
-            crate::utils::publish_journal::clear(context, branch);
-            anyhow::anyhow!(
-                "'{}' rebased cleanly, but could not be updated: {}. It moved while the rebase \
-                 was running — fetch and rerun 'hitch resolve {} --branch {}'.",
-                branch,
-                e,
-                env_name,
-                branch
-            )
-        })?;
-
-    crate::utils::prelude::resync_checkouts(context, branch, new_sha, &checkouts);
-    crate::utils::publish_journal::clear(context, branch);
-
-    context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
-
-    if context.should_push() {
-        context.log_warning(&format!(
-            "Ready to force push rebased '{}' to origin.",
-            branch
-        ));
-        if context.confirm("Push it now?")? {
-            match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
-                Ok(()) => context.log_success(&format!("✓ Pushed '{}'", branch)),
-                Err(e) => {
-                    context.log_error(&format!("Failed to push '{}': {}", branch, e));
-                    context.log_error(&format!(
-                        "Someone may have pushed to '{}' in the meantime. Fetch, and push \
-                         manually once you've confirmed it's safe: hitch push {} -f",
-                        branch, branch
-                    ));
-                }
-            }
-        } else {
+    // Publish the rebased branch through the same atomic core `hitch
+    // rebuild`/`hitch release` use (see `prelude::publish_branch`): the
+    // resync intent, the branch CAS, and the checkout resync all land in one
+    // transaction, closing the crash window the old record/CAS/resync/clear
+    // sequence here left open. Not versioned into `refs/hitch/prev`/`backup`
+    // — those are the rebuild/release rollback convention, and a rebase's
+    // prior tip is already named by `from_sha` in this function's own
+    // errors/logging.
+    //
+    // The push itself must be a *force* push with a lease against the
+    // observed remote tip: rebasing rewrites every commit from the merge
+    // base forward, so the new tip is never a fast-forward of whatever is
+    // already on origin. A plain push here would simply be rejected.
+    let retry_hint = format!("hitch resolve {} --branch {} --continue", env_name, branch);
+    crate::utils::prelude::publish_branch(context, branch, new_sha, None, &retry_hint, || {
+        if !context.confirm(&format!(
+            "Ready to force push rebased '{}' to origin.\n\
+             This will OVERWRITE the remote '{}' branch with the rebased version.\n\
+             Push it now?",
+            branch, branch
+        ))? {
             context.log_info(&format!(
                 "Not pushed. Push manually when ready: hitch push {} -f",
                 branch
             ));
+            return Ok(());
         }
-    }
 
+        context.log_info(&format!("Force pushing rebased '{}' to origin", branch));
+        match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
+            Ok(()) => {
+                context.log_success(&format!("✓ Pushed '{}'", branch));
+                Ok(())
+            }
+            Err(e) => Err(anyhow::anyhow!(
+                "Failed to push '{}': {}. Someone may have pushed to '{}' in the meantime. \
+                 Fetch, and push manually once you've confirmed it's safe: hitch push {} -f",
+                branch,
+                e,
+                branch,
+                branch
+            )),
+        }
+    })?;
+
+    context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
     context.log_info(&format!(
         "Run 'hitch rebuild {}' to pick this up.",
         env_name
