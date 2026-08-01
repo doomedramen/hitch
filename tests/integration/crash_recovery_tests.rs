@@ -398,11 +398,14 @@ mod tests {
             // unlock-on-exit, regardless of which step it happened at.
             //
             // Capture its output: does it report the "ahead of origin"
-            // warning even though the push already landed? `recover()`
-            // unconditionally warns whenever `push_owed` is still set on the
-            // record it finds, with no way to know the push actually
-            // succeeded — this is the finding this test exists to surface,
-            // not something to paper over.
+            // warning even though the push already landed? `recover()` now
+            // checks `refs/remotes/origin/<branch>` against the record's
+            // `to_sha` before warning, so it can tell "push already landed"
+            // apart from "push genuinely still owed" instead of assuming the
+            // worse case unconditionally. This test's job is to prove that
+            // distinction actually holds at the one abort point where the
+            // push truly did land: the warning must not fire, and the
+            // accurate "already completed" message must.
             let recovery = env
                 .hitch
                 .run()
@@ -413,10 +416,21 @@ mod tests {
             let recovery_stderr = recovery.stderr();
             let misleading_warning_present = recovery_stdout.contains("is ahead of origin")
                 || recovery_stderr.contains("is ahead of origin");
-            eprintln!(
-                "push-succeeded recovery stdout:\n{}\npush-succeeded recovery stderr:\n{}\n\
-                 misleading 'ahead of origin' warning present: {}",
-                recovery_stdout, recovery_stderr, misleading_warning_present
+            assert!(
+                !misleading_warning_present,
+                "recovery reported the branch as ahead of origin even though the push had \
+                 already landed before the crash — recover() should have seen \
+                 'refs/remotes/origin/dev' already matching the record's 'to_sha' and skipped \
+                 the warning.\nstdout: {}\nstderr: {}",
+                recovery_stdout, recovery_stderr
+            );
+            assert!(
+                recovery_stdout.contains("Nothing to do"),
+                "recovery should have reported the push as already completed (the accurate \
+                 'Nothing to do' message from publish_journal::recover()), but did not.\n\
+                 stdout: {}\nstderr: {}",
+                recovery_stdout,
+                recovery_stderr
             );
             recovery.assert_success();
 
@@ -426,8 +440,19 @@ mod tests {
             // fresh commit, not necessarily the same commit SHA, even though
             // nothing about the declared inputs changed). What must hold is
             // that the resulting content is unchanged, and that no journal
-            // record is left behind (recovery unconditionally deletes any
-            // record it processes, regardless of `push_owed`'s value).
+            // record is left behind. In this scenario `recover()` already
+            // drops the old record itself, in the same pass as the "already
+            // completed" message above, because it proved the push had
+            // landed. Even if it hadn't (the genuinely-owed case — see
+            // `test_publish_journal_persists_owed_push_until_resolved`
+            // below), this same `rebuild --force` would still end with no
+            // record left, because it performs its own fresh publish for
+            // 'dev' and clears its own record on success — so this assertion
+            // alone would not distinguish "recover() cleaned up the stale
+            // record" from "the new rebuild's own cycle overwrote and then
+            // cleared it". That distinction is what the dedicated persists
+            // test below proves instead, by triggering recovery through a
+            // command that never touches 'dev's record at all.
             let tree_after_recovery = tree_oid(env, "dev")?;
             let tree_after_abort = env
                 .git
@@ -448,6 +473,149 @@ mod tests {
                 leftovers_after.trim().is_empty(),
                 "aborting after 'push-succeeded' left a journal record behind after recovery:\n{}",
                 leftovers_after
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The other half of the push-check fix in `publish_journal::recover()`:
+    /// a push that genuinely never happened must not be forgotten. Abort at
+    /// `resync-done` — strictly before the push step runs — so the remote
+    /// never receives the new tip, then prove two things recovery must do:
+    /// warn about the owed push, and leave the record in place rather than
+    /// deleting it, so the *next* mutating command's `recover()` warns again
+    /// instead of the obligation silently vanishing after one report.
+    ///
+    /// Recovery is triggered here through `hitch add qa` rather than another
+    /// `hitch rebuild dev`, deliberately: a second `rebuild dev` would launch
+    /// its own fresh publish cycle for 'dev' and write (then, on success,
+    /// clear) its own record at the same `refs/hitch/publish/dev` ref,
+    /// masking whether `recover()` itself left the stale record alone.
+    /// `hitch add qa` is a mutating command (so `recover()` still runs at
+    /// its start, per `main.rs`'s `command_is_mutating`), but it never
+    /// touches 'dev' or its journal record, so the record's state
+    /// immediately after `add` returns is exactly what `recover()` alone
+    /// left behind.
+    #[test]
+    fn test_publish_journal_persists_owed_push_until_resolved() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup(env)?;
+
+            let bare_path = sibling_path(env, "bare-origin-persist.git");
+            std::fs::create_dir_all(&bare_path)?;
+            // Test-only: sets up a scratch bare remote to stand in for
+            // origin, so it deliberately spawns plain git rather than going
+            // through GitOperations (which has no repo at this path).
+            #[allow(clippy::disallowed_methods)]
+            let init = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&bare_path)
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(init.status.success(), "failed to init bare origin repo");
+
+            env.git
+                .run(&["remote", "add", "origin", &bare_path.to_string_lossy()])?
+                .assert_success();
+
+            // `run_raw()` does not inject `--no-push`, so this rebuild
+            // genuinely intends to push — it just never gets there, because
+            // 'resync-done' fires before the push step. `push_owed` on the
+            // record this writes is therefore `true`, for a push that never
+            // even started.
+            let interrupted = env
+                .hitch
+                .run_raw()
+                .args(&["rebuild", "dev"])
+                .env("HITCH_TEST_ABORT_AFTER", "resync-done")
+                .execute()?;
+            assert!(
+                !interrupted.success(),
+                "aborting after 'resync-done' should have crashed the process, but it exited \
+                 successfully — the abort hook did not fire.\nstdout: {}\nstderr: {}",
+                interrupted.stdout(),
+                interrupted.stderr()
+            );
+
+            // Confirm the remote never received the new tip — the push
+            // genuinely never happened, so this test is exercising the
+            // "still owed" case, not the "already landed" one.
+            #[allow(clippy::disallowed_methods)]
+            let remote_rev_parse = std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(&bare_path)
+                .args(["rev-parse", "--verify", "--quiet", "refs/heads/dev"])
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(
+                !remote_rev_parse.status.success(),
+                "the bare remote already has a 'dev' branch — the push must not have happened \
+                 yet for this test to exercise the genuinely-owed case"
+            );
+
+            let journal_oid_before = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(objectname)",
+                    "refs/hitch/publish/dev",
+                ])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert!(
+                !journal_oid_before.is_empty(),
+                "aborting after 'resync-done' should leave a journal record behind, found none"
+            );
+            let payload_before = env
+                .git
+                .run(&["cat-file", "-p", &journal_oid_before])?
+                .stdout();
+            let record_before: serde_json::Value = serde_json::from_str(&payload_before)?;
+            assert_eq!(
+                record_before["push_owed"], true,
+                "the record from a run_raw() rebuild aborted before the push step should still \
+                 have push_owed set"
+            );
+
+            // Trigger recovery via a command that never touches 'dev's
+            // record, so what's left afterward is exactly what recover()
+            // itself did with it.
+            let recovery = env.hitch.run().args(&["add", "qa"]).execute()?;
+            let recovery_stdout = recovery.stdout();
+            let recovery_stderr = recovery.stderr();
+            recovery.assert_success();
+
+            let warning_present = recovery_stdout.contains("is ahead of origin")
+                || recovery_stderr.contains("is ahead of origin");
+            assert!(
+                warning_present,
+                "recovery should have warned that 'dev' is ahead of origin — the push never \
+                 happened, so the obligation is genuinely still owed.\nstdout: {}\nstderr: {}",
+                recovery_stdout, recovery_stderr
+            );
+
+            let journal_oid_after = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(objectname)",
+                    "refs/hitch/publish/dev",
+                ])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert!(
+                !journal_oid_after.is_empty(),
+                "recovery deleted the journal record for a push that never actually happened — \
+                 a genuinely-owed push must persist so the next mutating command's recover() \
+                 warns again, instead of the obligation being silently forgotten after one \
+                 report"
             );
 
             Ok::<(), anyhow::Error>(())
