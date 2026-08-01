@@ -41,6 +41,15 @@ mod tests {
             .execute()?
             .assert_success();
 
+        // Stand the MAIN checkout on 'branch-a' so it is genuinely "attached"
+        // per `checkouts_on_branch` — otherwise `scan_checkouts_on_branch`
+        // finds no real checkout to resync, and the `resync-done` abort point
+        // exercises nothing. `resolve_mode_a` rebases in a *detached*
+        // worktree precisely so this is safe even though the main checkout
+        // has the same branch checked out (see `add_worktree_detached`'s doc
+        // comment in `git_operations.rs`).
+        env.git.run(&["checkout", "branch-a"])?.assert_success();
+
         env.hitch
             .run()
             .args(&["resolve", "dev"])
@@ -146,6 +155,19 @@ mod tests {
                 assert_eq!(
                     actual_tree, expected_tree,
                     "resolve aborted after '{}' did not converge to the oracle's tree",
+                    abort_after
+                );
+
+                // The main checkout was left standing on 'branch-a' by
+                // `setup_paused_rebase`, above. Assert its working tree
+                // actually caught up to the rebased content, not just the
+                // ref — this is what exercises `repair_checkout` on a real
+                // checkout, which the tree-OID check alone does not.
+                assert_eq!(
+                    env.fs.read_file("shared.txt")?,
+                    "resolved\n",
+                    "the main checkout on 'branch-a' did not resync to the rebased content \
+                     after recovery from abort at '{}'",
                     abort_after
                 );
 

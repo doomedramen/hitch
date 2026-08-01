@@ -131,6 +131,19 @@ mod tests {
                     abort_after
                 );
 
+                // 'main' is the checkout release itself resyncs (see setup's
+                // "Stand on 'main'" comment) — assert the working tree
+                // content actually caught up, not just the ref, so this
+                // exercises the real resync path rather than only the tree
+                // OID.
+                assert_eq!(
+                    env.fs.read_file("1.txt")?,
+                    "one",
+                    "the main checkout did not resync to the released content after \
+                     recovery from abort at '{}'",
+                    abort_after
+                );
+
                 let journal = env
                     .git
                     .run(&["for-each-ref", "refs/hitch/publish/main"])?
