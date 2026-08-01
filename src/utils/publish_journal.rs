@@ -84,6 +84,16 @@ pub struct PublishRecord {
     /// another attempt already changed things underneath it.
     #[serde(default)]
     pub generation: u64,
+    /// The command `recover()` should suggest if this publish's push never
+    /// resolves. `rebuild`/`resolve` use force-with-lease (`hitch push <b>
+    /// -f`); `release` does not — its push is a plain fast-forward/merge,
+    /// not a rewrite, and suggesting a force-push of a release target
+    /// (typically `main`/`production`, exactly what `hitch setup`'s
+    /// branch-protection ruleset guards) would be actively dangerous.
+    /// Empty for a record written before this field existed; `recover()`
+    /// falls back to the old hardcoded `-f` remedy only in that case.
+    #[serde(default)]
+    pub push_remedy: String,
 }
 
 /// Abort the process at a named point in the publish sequence, if the
@@ -273,11 +283,15 @@ pub fn recover(context: &GlobalContext) -> Result<()> {
                     record.branch
                 ));
             } else {
+                let remedy = if record.push_remedy.is_empty() {
+                    format!("hitch push {} -f", record.branch)
+                } else {
+                    record.push_remedy.clone()
+                };
                 context.log_warning(&format!(
                     "A previous '{}' publish moved the branch but was interrupted before it \
-                     could push. The local branch is ahead of origin. To finish it:\n  \
-                     hitch push {} -f",
-                    record.branch, record.branch
+                     could push. The local branch is ahead of origin. To finish it:\n  {}",
+                    record.branch, remedy
                 ));
                 // The push obligation is still genuinely owed — leave the
                 // record in place so the next mutating command's `recover()`

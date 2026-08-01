@@ -410,36 +410,43 @@ fn finish_mode_a(
     // base forward, so the new tip is never a fast-forward of whatever is
     // already on origin. A plain push here would simply be rejected.
     let retry_hint = format!("hitch resolve {} --branch {} --continue", env_name, branch);
-    crate::utils::prelude::publish_branch(context, branch, new_sha, None, &retry_hint, || {
-        if !context.confirm(&format!(
-            "Ready to force push rebased '{}' to origin.\n\
-             This will OVERWRITE the remote '{}' branch with the rebased version.\n\
-             Push it now?",
-            branch, branch
-        ))? {
-            context.log_info(&format!(
-                "Not pushed. Push manually when ready: hitch push {} -f",
-                branch
-            ));
-            return Ok(());
-        }
-
-        context.log_info(&format!("Force pushing rebased '{}' to origin", branch));
-        match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
-            Ok(()) => {
-                context.log_success(&format!("✓ Pushed '{}'", branch));
-                Ok(())
+    let push_remedy = format!("hitch push {} -f", branch);
+    crate::utils::prelude::publish_branch(
+        context,
+        branch,
+        new_sha,
+        None,
+        &retry_hint,
+        &push_remedy,
+        || {
+            if !context.confirm(&format!(
+                "Ready to force push rebased '{}' to origin.\n\
+                 This will OVERWRITE the remote '{}' branch with the rebased version.\n\
+                 Push it now?",
+                branch, branch
+            ))? {
+                context.log_info(&format!(
+                    "Not pushed. Push manually when ready: hitch push {} -f",
+                    branch
+                ));
+                return Ok(());
             }
-            Err(e) => Err(anyhow::anyhow!(
-                "Failed to push '{}': {}. Someone may have pushed to '{}' in the meantime. \
-                 Fetch, and push manually once you've confirmed it's safe: hitch push {} -f",
-                branch,
-                e,
-                branch,
-                branch
-            )),
-        }
-    })?;
+
+            context.log_info(&format!("Force pushing rebased '{}' to origin", branch));
+            match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
+                Ok(()) => {
+                    context.log_success(&format!("✓ Pushed '{}'", branch));
+                    Ok(())
+                }
+                Err(e) => Err(anyhow::anyhow!(
+                    "Failed to push '{}': {}. Someone may have pushed to '{}' in the meantime.",
+                    branch,
+                    e,
+                    branch
+                )),
+            }
+        },
+    )?;
 
     context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
     context.log_info(&format!(

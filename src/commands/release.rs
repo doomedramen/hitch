@@ -327,12 +327,18 @@ fn perform_release_core(
     // `rebuild_environment` — so the composed commit stays reachable for the
     // whole window until `refs/heads/<target_branch>` takes over that job.
     let retry_hint = format!("hitch release {}", env_name);
+    // No `-f`: release's push is a plain fast-forward/merge, not a rewrite,
+    // and this branch is typically `main`/`production` — exactly what
+    // `hitch setup`'s branch-protection ruleset guards against direct
+    // force pushes. See `publish_branch`'s doc comment on `push_remedy`.
+    let push_remedy = format!("hitch push {}", target_branch);
     let publish_result = crate::utils::prelude::publish_branch(
         context,
         target_branch,
         &new_sha,
         None,
         &retry_hint,
+        &push_remedy,
         || push_branch_with_deploy_key_if_configured(context, target_branch),
     );
     cleanup();

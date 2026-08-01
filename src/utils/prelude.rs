@@ -1015,7 +1015,8 @@ pub(crate) fn resync_checkouts(
 /// resolve` retrofit onto it instead of hand-rolling their own
 /// record-then-CAS-then-clear sequence, which is what left them with a real,
 /// undefended crash window between the CAS landing and the eventual push —
-/// see the "Only `publish_environment_build`..." note in `AGENTS.md`.
+/// see the "`publish_branch` is the one atomic-publish core..." note in
+/// `AGENTS.md`.
 ///
 /// `backup_timestamp`, when `Some`, also archives the pre-publish tip under
 /// `refs/hitch/prev/<branch>/<timestamp>` and
@@ -1029,12 +1030,23 @@ pub(crate) fn resync_checkouts(
 /// but it does gate whether the journal record survives this call: a failed
 /// or undone push leaves the record in place so the next mutating command's
 /// `publish_journal::recover()` finds it and reports it again.
+///
+/// `push_remedy` is the command to suggest, both in this call's own
+/// push-failure warning and (via the journal record) in a later
+/// `publish_journal::recover()` report, if `push` fails or is never called
+/// again. It is caller-supplied rather than hardcoded because the right
+/// remedy depends on how the caller pushes: `rebuild`/`resolve` force-push
+/// with lease (`hitch push <branch> -f`), but `release`'s push is a plain
+/// fast-forward/merge — suggesting `-f` there would tell a user to
+/// force-push a release target, exactly what `hitch setup`'s
+/// branch-protection ruleset exists to prevent.
 pub(crate) fn publish_branch(
     context: &GlobalContext,
     branch: &str,
     new_sha: &str,
     backup_timestamp: Option<&str>,
     retry_hint: &str,
+    push_remedy: &str,
     push: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let branch_ref = format!("refs/heads/{}", branch);
@@ -1057,6 +1069,7 @@ pub(crate) fn publish_branch(
             to_sha: new_sha.to_string(),
             checkouts: checkout_paths(&checkouts),
             push_owed: context.should_push(),
+            push_remedy: push_remedy.to_string(),
             ..Default::default()
         },
     )?;
@@ -1188,9 +1201,8 @@ pub(crate) fn publish_branch(
             ));
             context.log_warning(&format!(
                 "The publish record was left in place; the next mutating hitch command \
-                 will report it again until it's resolved. Push manually with: hitch push \
-                 {} -f",
-                branch
+                 will report it again until it's resolved. Push manually with: {}",
+                push_remedy
             ));
             // Leave the record in place — this is precisely the state the
             // journal exists to remember.
@@ -1215,7 +1227,7 @@ pub(crate) fn publish_branch(
 /// way; only how the commit was built differs.
 ///
 /// Built on `publish_branch`, the transactional core shared with `hitch
-/// release`/`hitch resolve` (once they're retrofitted onto it too).
+/// release`/`hitch resolve`.
 pub(crate) fn publish_environment_build(
     context: &GlobalContext,
     env_name: &str,
@@ -1224,6 +1236,7 @@ pub(crate) fn publish_environment_build(
     remote_sha_before: &Option<String>,
 ) -> Result<()> {
     let retry_hint = format!("hitch rebuild {}", env_name);
+    let push_remedy = format!("hitch push {} -f", env_name);
 
     publish_branch(
         context,
@@ -1231,6 +1244,7 @@ pub(crate) fn publish_environment_build(
         new_sha,
         Some(backup_timestamp),
         &retry_hint,
+        &push_remedy,
         || {
             if !context.confirm(&format!(
                 "Ready to force push the rebuilt '{}' branch to 'origin/{}'.\n\
@@ -1259,12 +1273,9 @@ pub(crate) fn publish_environment_build(
                     anyhow::anyhow!(
                         "Failed to force push rebuilt '{}' branch: {}. Someone may have \
                          pushed to '{}' while this rebuild ran, or the deploy key may be \
-                         missing/outdated. Fetch and re-run 'hitch rebuild {}', or push once \
-                         you've confirmed it's safe to overwrite: hitch push {} -f",
+                         missing/outdated.",
                         env_name,
                         e,
-                        env_name,
-                        env_name,
                         env_name
                     )
                 },
