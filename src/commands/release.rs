@@ -352,15 +352,41 @@ fn perform_release_core(
     // report it again" claim is false here — `publish_journal::recover()`
     // only compares the branch tip, which already matches, so a leftover
     // journal record tells it nothing about the tag.
+    //
+    // `publish_branch` swallows a branch-push failure (it warns and returns
+    // `Ok(())` rather than propagating, since a failed push doesn't undo an
+    // already-successful local publish) — so reaching this point does NOT
+    // mean the branch push actually landed. Pushing the tag unconditionally
+    // would publish `refs/tags/<tag_name>` pointing at a commit
+    // `origin/<target_branch>` doesn't actually contain. Check the
+    // remote-tracking ref instead: `push_branch_with_deploy_key_if_configured`
+    // calls `record_pushed_tip` on success, which updates
+    // `refs/remotes/origin/<target_branch>` specifically, so this comparison
+    // is reliable.
     if context.should_push() {
-        if let Err(e) = context.git().push_tag(&tag_name) {
+        let branch_pushed = context
+            .git()
+            .rev_parse_opt(&format!("refs/remotes/origin/{}", target_branch))?
+            .as_deref()
+            == Some(new_sha.as_str());
+
+        if branch_pushed {
+            if let Err(e) = context.git().push_tag(&tag_name) {
+                context.log_warning(&format!(
+                    "Release published and pushed, but pushing the release tag '{}' failed: {}",
+                    tag_name, e
+                ));
+                context.log_warning(&format!(
+                    "Push the tag manually with: git push origin {}",
+                    tag_name
+                ));
+            }
+        } else {
             context.log_warning(&format!(
-                "Release published and pushed, but pushing the release tag '{}' failed: {}",
-                tag_name, e
-            ));
-            context.log_warning(&format!(
-                "Push the tag manually with: git push origin {}",
-                tag_name
+                "Skipping the release tag push for '{}' because the branch push did not land \
+                 — push the branch first (see the earlier warning for how), then push the tag \
+                 manually with: git push origin {}",
+                tag_name, tag_name
             ));
         }
     }
