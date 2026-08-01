@@ -430,8 +430,13 @@ test harness's default `--no-push`/`--yes` injection, under which
 `context.should_push()` is `false` and `publish_branch` never calls the push
 closure at all, so those two commands' push path — including their records'
 `push_owed` field, which is real and journal-tracked via `publish_branch`,
-not dead — remains genuinely untested by crash-fuzz for now. Two things
-learned writing the first ('rebuild') of these tests:
+not dead — remains genuinely untested by crash-fuzz for now. The abort hook
+itself (`maybe_abort_for_test` in `publish_journal.rs`) is
+`#[cfg(debug_assertions)]`-gated, so these five tests silently no-op (the
+process exits successfully instead of aborting) whenever built with
+`--release` — the `justfile`'s `release` recipe must run its pre-flight
+`cargo test` without `--release` for this reason; this broke once already.
+Two things learned writing the first ('rebuild') of these tests:
 
 - The convergence check compares `<branch>^{tree}`, not the branch's commit
   SHA. `commit-tree` stamps the ambient wall-clock time with no
