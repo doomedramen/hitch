@@ -1901,4 +1901,61 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn reflog_values_returns_prior_ref_values_most_recent_first() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("f.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "one"])?.assert_success();
+            let sha_one = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            env.fs.write_file("f.txt", "two")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "two"])?.assert_success();
+            let sha_two = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let branch = env
+                .git
+                .run(&["branch", "--show-current"])?
+                .stdout()
+                .trim()
+                .to_string();
+            let values = git_ops.reflog_values(&format!("refs/heads/{}", branch), 10)?;
+            assert_eq!(values.first(), Some(&sha_two));
+            assert!(values.contains(&sha_one));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn reflog_values_is_empty_not_an_error_for_a_ref_with_no_reflog() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+            let values = git_ops.reflog_values("refs/heads/does-not-exist", 10)?;
+            assert!(values.is_empty());
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

@@ -1858,6 +1858,39 @@ impl GitOperations {
         Ok(output.stdout)
     }
 
+    /// The values `refname` has had, most recent first, up to `limit`
+    /// entries, as recorded in its own reflog.
+    ///
+    /// This is what distinguishes "this ref's tip really was `from_sha`
+    /// before moving to its current value" from "some checkout's working
+    /// tree happens to have the same tree content as `from_sha`" — content
+    /// equality alone (`matches_commit_exactly`) can't tell those apart; the
+    /// reflog is git's own record of what this ref's value actually was.
+    ///
+    /// Returns an empty `Vec`, not an error, when the ref has no reflog
+    /// (freshly created, `core.logAllRefUpdates=false`, or entries expired
+    /// via `gc.reflogexpire`) — that is routine, not evidence of anything,
+    /// and callers must treat it as inconclusive rather than as a
+    /// contradiction.
+    pub fn reflog_values(&self, refname: &str, limit: usize) -> Result<Vec<String>> {
+        let output = self.run_git_command(&[
+            "reflog",
+            "show",
+            "--format=%H",
+            "-n",
+            &limit.to_string(),
+            refname,
+        ])?;
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
+    }
+
     /// Whether this checkout's working tree and index hold *exactly* `commit`'s
     /// content — nothing staged, nothing modified, no untracked files.
     ///

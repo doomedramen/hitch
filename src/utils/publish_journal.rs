@@ -345,6 +345,22 @@ fn repair_checkout(context: &GlobalContext, record: &PublishRecord, path: &str) 
         return;
     }
 
+    // Defense in depth: `matches_commit_exactly` proves tree content matches
+    // `from_sha`, but not that this checkout's branch ref genuinely held
+    // that value. Check the ref's own reflog for corroboration. An empty
+    // reflog (expiry, `core.logAllRefUpdates=false`) is inconclusive, not
+    // suspicious — proceed as before in that case. Only a non-empty reflog
+    // that *doesn't* contain `from_sha` is a real contradiction.
+    let branch_ref = format!("refs/heads/{}", record.branch);
+    let reflog = context
+        .git()
+        .reflog_values(&branch_ref, 50)
+        .unwrap_or_default();
+    if !reflog.is_empty() && !reflog.iter().any(|sha| sha == from_sha) {
+        warn_manual(context, record, path);
+        return;
+    }
+
     match git.reset_hard_to(&record.to_sha) {
         Ok(()) => context.log_info(&format!(
             "Finished an interrupted '{}' publish: updated the working tree at '{}'.",
