@@ -1006,31 +1006,42 @@ pub(crate) fn resync_checkouts(
     }
 }
 
-/// Publish `new_sha` as environment `env_name`'s new content: back up the
-/// current ref (if any) under a timestamped backup ref, then swap
-/// `refs/heads/<env_name>` to `new_sha` with a single compare-and-swap —
-/// the only instruction that mutates it, so nothing is observable as
-/// changed until this call succeeds. Then, if pushing is enabled, offers a
-/// confirmed `--force-with-lease` push against `remote_sha_before` (the
-/// remote SHA observed before the caller started building, so a concurrent
-/// push elsewhere is detected instead of silently clobbered), and finally
-/// records the environment's `rebuilt_at` timestamp.
+/// Land `new_sha` on `branch` in one atomic ref transaction, resync every
+/// attached checkout, then push if configured — recoverable at every step
+/// via `publish_journal`.
 ///
-/// Shared by `rebuild_environment` and `hitch resolve`'s Mode B — both
-/// produce a new environment-branch commit and need to land it the same
-/// way; only how the commit was built differs.
-pub(crate) fn publish_environment_build(
+/// This is the transactional core `hitch rebuild` already used (previously
+/// inlined in `publish_environment_build`). `hitch release` and `hitch
+/// resolve` retrofit onto it instead of hand-rolling their own
+/// record-then-CAS-then-clear sequence, which is what left them with a real,
+/// undefended crash window between the CAS landing and the eventual push —
+/// see the "Only `publish_environment_build`..." note in `AGENTS.md`.
+///
+/// `backup_timestamp`, when `Some`, also archives the pre-publish tip under
+/// `refs/hitch/prev/<branch>/<timestamp>` and
+/// `refs/hitch/backup/<branch>/<timestamp>` — pass `None` for a caller that
+/// doesn't want that (e.g. one that already writes its own tag as the
+/// rollback anchor).
+///
+/// `push` runs only after the ref has moved and checkouts have resynced. Its
+/// error is not propagated as this function's error — a push failure is
+/// reported to the user, not fatal to an already-successful local publish —
+/// but it does gate whether the journal record survives this call: a failed
+/// or undone push leaves the record in place so the next mutating command's
+/// `publish_journal::recover()` finds it and reports it again.
+pub(crate) fn publish_branch(
     context: &GlobalContext,
-    env_name: &str,
+    branch: &str,
     new_sha: &str,
-    backup_timestamp: &str,
-    remote_sha_before: &Option<String>,
+    backup_timestamp: Option<&str>,
+    retry_hint: &str,
+    push: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let env_ref = format!("refs/heads/{}", env_name);
-    let old_env_sha = context.git().rev_parse_opt(&env_ref)?;
+    let branch_ref = format!("refs/heads/{}", branch);
+    let old_sha = context.git().rev_parse_opt(&branch_ref)?;
 
     // Must happen before the ref moves — see `scan_checkouts_on_branch`.
-    let checkouts = scan_checkouts_on_branch(context, env_name)?;
+    let checkouts = scan_checkouts_on_branch(context, branch)?;
 
     // Everything that must agree with the branch move goes in with it: the
     // resync intent (so a crash after the move is recoverable — see
@@ -1041,8 +1052,8 @@ pub(crate) fn publish_environment_build(
     let (resync_ref, resync_blob) = crate::utils::publish_journal::record_blob(
         context.git(),
         &crate::utils::publish_journal::PublishRecord {
-            branch: env_name.to_string(),
-            from_sha: old_env_sha.clone(),
+            branch: branch.to_string(),
+            from_sha: old_sha.clone(),
             to_sha: new_sha.to_string(),
             checkouts: checkout_paths(&checkouts),
             push_owed: context.should_push(),
@@ -1072,13 +1083,13 @@ pub(crate) fn publish_environment_build(
             expected_old: Some(String::new()),
         },
         crate::utils::git_operations::RefEdit::Update {
-            refname: env_ref.clone(),
+            refname: branch_ref.clone(),
             new_oid: new_sha.to_string(),
-            expected_old: old_env_sha.clone(),
+            expected_old: old_sha.clone(),
         },
     ];
 
-    if let Some(ref old_sha) = old_env_sha {
+    if let (Some(ref old), Some(timestamp)) = (&old_sha, backup_timestamp) {
         // `backup_timestamp` only has 1-second resolution, so two publishes of
         // the same environment inside one second would otherwise collide on
         // these ref names. `RefEdit::Create` demands the ref not already
@@ -1094,7 +1105,7 @@ pub(crate) fn publish_environment_build(
         // while keeping them inside the atomic batch.
         //
         // `prev/` and `backup/` are written with identical content
-        // (`env_name`, `backup_timestamp`, `old_sha`) and nothing in `src/`
+        // (`branch`, `timestamp`, `old`) and nothing in `src/`
         // reads one differently from the other — they are currently
         // byte-for-byte duplicates of each other, every publish. `backup/` is
         // the older namespace (predates this transaction; see
@@ -1116,118 +1127,150 @@ pub(crate) fn publish_environment_build(
         // semantics the other doesn't (e.g. `--restore-backup` actually
         // shipping against `backup/` specifically).
         edits.push(crate::utils::git_operations::RefEdit::Update {
-            refname: format!("refs/hitch/prev/{}/{}", env_name, backup_timestamp),
-            new_oid: old_sha.clone(),
+            refname: format!("refs/hitch/prev/{}/{}", branch, timestamp),
+            new_oid: old.clone(),
             expected_old: Some(String::new()),
         });
         edits.push(crate::utils::git_operations::RefEdit::Update {
-            refname: format!("refs/hitch/backup/{}/{}", env_name, backup_timestamp),
-            new_oid: old_sha.clone(),
+            refname: format!("refs/hitch/backup/{}/{}", branch, timestamp),
+            new_oid: old.clone(),
             expected_old: Some(String::new()),
         });
     }
 
     if let Err(e) = context
         .git()
-        .ref_transaction(&edits, &format!("hitch: rebuild {}", env_name))
+        .ref_transaction(&edits, &format!("hitch: publish {}", branch))
     {
         return Err(anyhow::anyhow!(
-            "Failed to publish '{}': {}. The build itself succeeded but the publish \
-             transaction was rejected — most commonly because another rebuild landed \
-             first and moved '{}' out from under this one's compare-and-swap. Fetch and \
-             re-run 'hitch rebuild {}'.\n\
-             \n\
-             If that keeps happening, a stale ref may be involved; inspect it and, if you \
-             confirm it's safe, remove it with:\n  \
-             git update-ref -d refs/hitch/publish/{}",
-            env_name,
+            "Failed to publish '{}': {}. Most commonly another publish landed first and \
+             moved '{}' out from under this one's compare-and-swap. Fetch and re-run \
+             '{}'.",
+            branch,
             e,
-            env_name,
-            env_name,
-            env_name
+            branch,
+            retry_hint
         ));
     }
     crate::utils::publish_journal::maybe_abort_for_test("ref-moved");
 
-    if let Some(ref old_sha) = old_env_sha {
+    if let Some(ref old_sha) = old_sha {
         context.log_verbose(&format!(
-            "✓ Backed up previous '{}' ({}) to 'refs/hitch/backup/{}/{}' and 'refs/hitch/prev/{}/{}'",
-            env_name, old_sha, env_name, backup_timestamp, env_name, backup_timestamp
+            "✓ Published '{}' ({} -> {})",
+            branch, old_sha, new_sha
         ));
+    } else {
+        context.log_verbose(&format!("✓ Published '{}' ({})", branch, new_sha));
     }
-
-    context.log_verbose(&format!("✓ Published '{}' ({})", env_name, new_sha));
 
     // The ref has moved; any checkout standing on it is now stale. Do this
     // before pushing so the local repository is coherent even if the push
     // fails or the user declines it.
-    resync_checkouts(context, env_name, new_sha, &checkouts);
+    resync_checkouts(context, branch, new_sha, &checkouts);
     crate::utils::publish_journal::maybe_abort_for_test("resync-done");
+
     if !context.should_push() {
         // Nothing else is owed — drop the record now.
-        crate::utils::publish_journal::clear(context, env_name);
+        crate::utils::publish_journal::clear(context, branch);
+        return Ok(());
     }
 
-    if context.should_push() {
-        context.log_warning(&format!(
-            "Ready to force push the rebuilt '{}' branch to 'origin/{}'.",
-            env_name, env_name
-        ));
-        context.log_warning(&format!(
-            "This will OVERWRITE the remote '{}' branch with the new rebuilt version.",
-            env_name
-        ));
-        context.log_warning("This action cannot be undone.");
+    match push() {
+        Ok(()) => {
+            crate::utils::publish_journal::maybe_abort_for_test("push-succeeded");
+            let _ = crate::utils::publish_journal::mark_push_done(context, branch);
+            crate::utils::publish_journal::clear(context, branch);
+        }
+        Err(e) => {
+            context.log_warning(&format!(
+                "'{}' was published locally, but pushing to origin failed: {}",
+                branch, e
+            ));
+            context.log_warning(&format!(
+                "The publish record was left in place; the next mutating hitch command \
+                 will report it again until it's resolved. Push manually with: hitch push \
+                 {} -f",
+                branch
+            ));
+            // Leave the record in place — this is precisely the state the
+            // journal exists to remember.
+        }
+    }
 
-        if context.confirm("Do you want to proceed?")? {
+    Ok(())
+}
+
+/// Publish `new_sha` as environment `env_name`'s new content: back up the
+/// current ref (if any) under a timestamped backup ref, then swap
+/// `refs/heads/<env_name>` to `new_sha` with a single compare-and-swap —
+/// the only instruction that mutates it, so nothing is observable as
+/// changed until this call succeeds. Then, if pushing is enabled, offers a
+/// confirmed `--force-with-lease` push against `remote_sha_before` (the
+/// remote SHA observed before the caller started building, so a concurrent
+/// push elsewhere is detected instead of silently clobbered), and finally
+/// records the environment's `rebuilt_at` timestamp.
+///
+/// Shared by `rebuild_environment` and `hitch resolve`'s Mode B — both
+/// produce a new environment-branch commit and need to land it the same
+/// way; only how the commit was built differs.
+///
+/// Built on `publish_branch`, the transactional core shared with `hitch
+/// release`/`hitch resolve` (once they're retrofitted onto it too).
+pub(crate) fn publish_environment_build(
+    context: &GlobalContext,
+    env_name: &str,
+    new_sha: &str,
+    backup_timestamp: &str,
+    remote_sha_before: &Option<String>,
+) -> Result<()> {
+    let retry_hint = format!("hitch rebuild {}", env_name);
+
+    publish_branch(
+        context,
+        env_name,
+        new_sha,
+        Some(backup_timestamp),
+        &retry_hint,
+        || {
+            if !context.confirm(&format!(
+                "Ready to force push the rebuilt '{}' branch to 'origin/{}'.\n\
+                 This will OVERWRITE the remote '{}' branch with the new rebuilt version.\n\
+                 This action cannot be undone.\n\
+                 Do you want to proceed?",
+                env_name, env_name, env_name
+            ))? {
+                context.log_info(&format!(
+                    "Skipping remote replacement for '{}' branch. The local '{}' branch \
+                     has been rebuilt. To push manually, run: hitch push {} -f",
+                    env_name, env_name, env_name
+                ));
+                // A declined push is not a failure — the local publish already
+                // succeeded. Report it as success to `publish_branch` so the
+                // journal record clears; there is nothing left to retry.
+                return Ok(());
+            }
+
             context.log_info(&format!(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name
             ));
-            match force_push_with_deploy_key_if_configured(context, env_name, remote_sha_before) {
-                Ok(()) => {
-                    context.log_success(&format!(
-                        "✓ Force pushed rebuilt '{}' branch to remote",
+            force_push_with_deploy_key_if_configured(context, env_name, remote_sha_before).map_err(
+                |e| {
+                    anyhow::anyhow!(
+                        "Failed to force push rebuilt '{}' branch: {}. Someone may have \
+                         pushed to '{}' while this rebuild ran, or the deploy key may be \
+                         missing/outdated. Fetch and re-run 'hitch rebuild {}', or push once \
+                         you've confirmed it's safe to overwrite: hitch push {} -f",
+                        env_name,
+                        e,
+                        env_name,
+                        env_name,
                         env_name
-                    ));
-                    crate::utils::publish_journal::maybe_abort_for_test("push-succeeded");
-                    let _ = crate::utils::publish_journal::mark_push_done(context, env_name);
-                    crate::utils::publish_journal::clear(context, env_name);
-                }
-                Err(e) => {
-                    context.log_error(&format!(
-                        "Failed to force push rebuilt '{}' branch: {}",
-                        env_name, e
-                    ));
-                    context.log_error(&format!(
-                        "Someone may have pushed to '{}' while this rebuild ran, or the \
-                         deploy key may be missing/outdated. Fetch and re-run 'hitch rebuild \
-                         {}', or push once you've confirmed it's safe to overwrite: \
-                         hitch push {} -f",
-                        env_name, env_name, env_name
-                    ));
-                    // Leave the record in place — this is precisely the state
-                    // the journal exists to remember.
-                }
-            }
-        } else {
-            context.log_info(&format!(
-                "Skipping remote replacement for '{}' branch.",
-                env_name
-            ));
-            context.log_info(&format!(
-                "The local '{}' branch has been rebuilt. To push manually, run: hitch push {} -f",
-                env_name, env_name
-            ));
-            // The user declined, so nothing is owed anymore.
-            crate::utils::publish_journal::clear(context, env_name);
-        }
-    } else {
-        context.log_verbose(&format!(
-            "Skipping remote operations for '{}' branch due to --no-push flag",
-            env_name
-        ));
-    }
+                    )
+                },
+            )
+        },
+    )?;
 
     update_rebuilt_timestamp_for_rebuild(context, env_name)?;
     Ok(())
