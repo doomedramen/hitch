@@ -193,12 +193,13 @@ pub fn list(git: &GitOperations) -> Result<Vec<(String, PublishRecord)>> {
             };
             match serde_json::from_slice::<PublishRecord>(&payload) {
                 Ok(record) => found.push((refname, record)),
-                // A record we can't parse is not something to act on, but it is
-                // also not something to delete silently. Nothing currently
-                // surfaces it, though — `doctor` has no check for stuck
-                // publish-journal refs today; this is left in place for a
-                // human to find by hand (`git for-each-ref refs/hitch/publish`)
-                // rather than deleted, in case that ever changes.
+                // A record we can't parse is not something to act on, but it
+                // is also not something to delete silently. `hitch doctor`'s
+                // `check_pending_publishes` surfaces parseable records; an
+                // unparseable one still isn't reported anywhere — it's left
+                // in place for a human to find by hand
+                // (`git for-each-ref refs/hitch/publish`) rather than
+                // deleted, in case that ever changes.
                 Err(_) => continue,
             }
         }
