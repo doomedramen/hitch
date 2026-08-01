@@ -731,6 +731,7 @@ pub fn rebuild_environment_opts(
                     context,
                     &composed,
                     branch,
+                    sha,
                     &merge_message,
                     &outcome,
                     &mut confirmed_replay_keys,
@@ -1327,10 +1328,12 @@ pub(crate) fn publish_environment_build(
 /// structurally cannot fail open on a metadata read error — the single read
 /// in the caller still propagates its own error via `?`, preserving fail
 /// closed without the redundant fetches.
+#[allow(clippy::too_many_arguments)] // current_head (lineage) joins 7 pre-existing params; a struct isn't worth it for one private, single-caller function
 fn try_replay_resolution(
     context: &GlobalContext,
     composed: &str,
     branch: &str,
+    current_head: &str,
     merge_message: &str,
     outcome: &crate::utils::git_operations::MergeTreeCompose,
     confirmed_keys: &mut std::collections::HashSet<String>,
@@ -1375,31 +1378,39 @@ fn try_replay_resolution(
     // file) without being the same conflict in any meaningful sense.
     // `source_branch_head` is git's own record of what `branch` looked like
     // at record time; require the branch's current tip to be that commit or
-    // a descendant of it before treating this as "the same conflict".
-    if let Some(current_head) = context
-        .git()
-        .rev_parse_opt(&format!("refs/heads/{}", branch))?
-    {
-        let descends_from_recorded_head = current_head == res.meta.source_branch_head
-            || context
-                .git()
-                .get_merge_base(&current_head, &res.meta.source_branch_head)?
-                .as_deref()
-                == Some(res.meta.source_branch_head.as_str());
-        if !descends_from_recorded_head {
-            context.log_warning(&format!(
-                "Recorded resolution {} for '{}' was recorded against a different point in \
-                 '{}'s history ({}) than its current tip ({}) — holding instead, in case the \
-                 matching stage OIDs are coincidental rather than the same conflict. To \
-                 inspect it:\n  hitch resolutions",
-                &key[..12.min(key.len())],
-                branch,
-                branch,
-                &res.meta.source_branch_head[..12.min(res.meta.source_branch_head.len())],
-                &current_head[..12.min(current_head.len())]
-            ));
-            return Ok(None);
-        }
+    // a descendant of it before treating this as "the same conflict". This is
+    // a hard gate (unlike `repair_checkout`'s reflog check in
+    // `publish_journal.rs`, which fails open on inconclusive evidence):
+    // ancestry via `get_merge_base` is always computable here, since
+    // `current_head` is a real commit on a real branch, so there is no
+    // "inconclusive" case to fail open on the way an absent/expired reflog
+    // is for a crash-recovery checkout.
+    //
+    // `current_head` is the SHA the caller already pinned for this branch at
+    // the top of the compose loop (see `rebuild_environment_opts`'s pinning
+    // comment) — using it here, rather than re-resolving `refs/heads/branch`
+    // live, keeps this check consistent with everything else the loop
+    // composes: a ref moving mid-build cannot change what this function sees
+    // either.
+    let descends_from_recorded_head = current_head == res.meta.source_branch_head
+        || context
+            .git()
+            .get_merge_base(current_head, &res.meta.source_branch_head)?
+            .as_deref()
+            == Some(res.meta.source_branch_head.as_str());
+    if !descends_from_recorded_head {
+        context.log_warning(&format!(
+            "Recorded resolution {} for '{}' was recorded against a different point in \
+             '{}'s history ({}) than its current tip ({}) — holding instead, in case the \
+             matching stage OIDs are coincidental rather than the same conflict. To \
+             inspect it:\n  hitch resolutions",
+            &key[..12.min(key.len())],
+            branch,
+            branch,
+            &res.meta.source_branch_head[..12.min(res.meta.source_branch_head.len())],
+            &current_head[..12.min(current_head.len())]
+        ));
+        return Ok(None);
     }
 
     // A recorded resolution is content nobody on this machine reviewed,
@@ -1665,11 +1676,20 @@ mod try_replay_resolution_tests {
         // plain bool and does no metadata I/O, so it must still hold this
         // unsigned resolution when told signing is required — proving the
         // gate works correctly from the caller-supplied value alone.
+        //
+        // `current_head` is passed as `&metadata_sha`, matching `pending`'s
+        // `source_branch_head` above, so the lineage check trivially passes
+        // and this test reaches (and is actually exercising) the
+        // `require_signed` gate below it, not lineage. Pin that on purpose —
+        // a future edit that changes this to something the lineage check
+        // would reject turns this into a lineage-check test instead of the
+        // signing test it's meant to be.
         let mut confirmed = HashSet::new();
         let replay_result = try_replay_resolution(
             &context,
             &metadata_sha,
             "branch-b",
+            &metadata_sha,
             "merge message",
             &outcome,
             &mut confirmed,
@@ -1717,6 +1737,7 @@ mod try_replay_resolution_tests {
         std::fs::write(repo.join("unrelated.txt"), "b\n")?;
         git(repo, &["add", "unrelated.txt"]);
         git(repo, &["commit", "-q", "-m", "branch-b's real tip"]);
+        let branch_b_head = git(repo, &["rev-parse", "HEAD"]);
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
@@ -1756,11 +1777,19 @@ mod try_replay_resolution_tests {
         // <composed>`), and this test must fail closed on the lineage check
         // itself, not incidentally on an invalid parent SHA that would make
         // apply fail regardless of lineage.
+        //
+        // `current_head` is passed directly as `branch_b_head` — the SHA
+        // this test built for branch-b's real tip — rather than relying on
+        // `try_replay_resolution` re-reading `refs/heads/branch-b` itself;
+        // the function no longer does that read at all (see Fix 4's doc
+        // comment on the lineage check for why: it uses the caller's already
+        // -pinned SHA, matching every other value the compose loop uses).
         let mut confirmed = HashSet::new();
         let replay_result = try_replay_resolution(
             &context,
             &source_branch_head,
             "branch-b",
+            &branch_b_head,
             "merge message",
             &outcome,
             &mut confirmed,
@@ -1834,11 +1863,14 @@ mod try_replay_resolution_tests {
         // (`git commit-tree -p <composed>`), so unlike the held-before-apply
         // case above, this one needs a real commit here — any valid commit
         // works, since the parent doesn't need to be an ancestor of `tree`.
+        // `current_head` is `branch_b_head` too — it genuinely is branch-b's
+        // real (and only) commit here, matching `source_branch_head` above.
         let mut confirmed = HashSet::new();
         let replay_result = try_replay_resolution(
             &context,
             &branch_b_head,
             "branch-b",
+            &branch_b_head,
             "merge message",
             &outcome,
             &mut confirmed,
