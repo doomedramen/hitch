@@ -1958,4 +1958,69 @@ mod tests {
 
         Ok(())
     }
+
+    /// The realistic fail-open trigger: a ref that genuinely exists (and
+    /// resolves to a real commit) but whose reflog is empty — `gc.reflogexpire`
+    /// or `core.logAllRefUpdates=false`, not a missing ref. This is a
+    /// completely different code path from
+    /// `reflog_values_is_empty_not_an_error_for_a_ref_with_no_reflog` above:
+    /// that test hits `!output.status.success()` because `git reflog show`
+    /// exits nonzero for a ref that doesn't exist at all. Here the ref exists,
+    /// `git reflog show` exits *zero* with empty stdout (verified below), so
+    /// the guard that actually saves this case is the `.filter(|l|
+    /// !l.is_empty())` line in `reflog_values`, not the status check — if that
+    /// filter were ever removed, this test (not the other one) is what would
+    /// catch it.
+    #[test]
+    fn reflog_values_is_empty_for_an_existing_ref_whose_reflog_was_expired() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            env.fs.write_file("f.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git.run(&["commit", "-m", "one"])?.assert_success();
+
+            let branch = env
+                .git
+                .run(&["branch", "--show-current"])?
+                .stdout()
+                .trim()
+                .to_string();
+            let refname = format!("refs/heads/{}", branch);
+
+            // The ref genuinely exists and resolves to a real commit.
+            let rev_parse = env.git.run(&["rev-parse", &refname])?;
+            assert!(rev_parse.success());
+            assert!(!rev_parse.stdout().trim().is_empty());
+
+            // Expire the reflog outright — closer to what a repo actually hit
+            // by `gc.reflogexpire` looks like than never having enabled
+            // `core.logAllRefUpdates` in the first place, but produces the
+            // same observable state: ref exists, reflog is empty.
+            env.git
+                .run(&["reflog", "expire", "--expire=all", "--all"])?
+                .assert_success();
+
+            // Confirm this really is the "exit 0, empty stdout" path, not the
+            // "nonzero exit" path the sibling test covers.
+            let show = env.git.run(&["reflog", "show", "--format=%H", &refname])?;
+            assert!(
+                show.success(),
+                "git reflog show must exit 0 for an existing ref with an expired reflog"
+            );
+            assert!(
+                show.stdout().trim().is_empty(),
+                "git reflog show must produce no output once the reflog is expired"
+            );
+
+            let values = git_ops.reflog_values(&refname, 10)?;
+            assert!(values.is_empty());
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }

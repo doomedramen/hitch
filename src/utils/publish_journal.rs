@@ -619,4 +619,79 @@ mod repair_checkout_tests {
 
         Ok(())
     }
+
+    /// The single most important constraint on this whole check (per the
+    /// plan that added it): an empty/expired reflog must NOT be treated as a
+    /// contradiction. Reflog expiry (`gc.reflogexpire`, default 90 days) and
+    /// `core.logAllRefUpdates=false` are both routine, non-adversarial
+    /// conditions — recovery must proceed exactly as it did before this
+    /// check existed. This mirrors
+    /// `repair_checkout_declines_a_tree_match_the_reflog_contradicts` above
+    /// (same scratch-repo shape), but instead of fabricating a from_sha the
+    /// reflog contradicts, it expires dev's reflog outright so there is no
+    /// evidence either way.
+    #[test]
+    fn repair_checkout_proceeds_when_the_reflog_is_empty() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("f.txt"), "one\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "one"]);
+        let from_sha = git(repo, &["rev-parse", "HEAD"]);
+
+        // dev's real history: one -> two.
+        git(repo, &["checkout", "-q", "-b", "dev"]);
+        std::fs::write(repo.join("f.txt"), "two\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "two"]);
+        let real_to_sha = git(repo, &["rev-parse", "dev"]);
+
+        // Wipe dev's reflog entirely — the state a repo hits under
+        // `gc.reflogexpire`/`core.logAllRefUpdates=false`, not a fabrication.
+        git(repo, &["reflog", "expire", "--expire=all", "--all"]);
+        let reflog_after_expiry = git(repo, &["reflog", "show", "--format=%H", "refs/heads/dev"]);
+        assert!(
+            reflog_after_expiry.is_empty(),
+            "test setup bug: dev's reflog must be empty after expiry"
+        );
+
+        // Simulate the interrupted-publish state: dev's ref already moved to
+        // real_to_sha (it never left "two" — nothing here moves it), but the
+        // working tree/index still reflect the old tip (from_sha's "one"
+        // content). A path-scoped checkout touches only the working tree and
+        // index, never a ref or its reflog, so this doesn't reintroduce any
+        // reflog evidence.
+        git(repo, &["checkout", &from_sha, "--", "."]);
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let record = PublishRecord {
+            branch: "dev".to_string(),
+            from_sha: Some(from_sha),
+            to_sha: real_to_sha.clone(),
+            checkouts: vec![repo.to_string_lossy().to_string()],
+            ..Default::default()
+        };
+
+        repair_checkout(&context, &record, &repo.to_string_lossy());
+
+        // With no reflog evidence either way, recovery must proceed exactly
+        // as it did before the reflog check existed: reset to record.to_sha.
+        let content = std::fs::read_to_string(repo.join("f.txt"))?;
+        assert_eq!(
+            content, "two\n",
+            "repair_checkout declined to reset despite an empty reflog, which must fail open"
+        );
+        let head_after = git(repo, &["rev-parse", "HEAD"]);
+        assert_eq!(head_after, real_to_sha);
+
+        Ok(())
+    }
 }
