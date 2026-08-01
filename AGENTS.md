@@ -240,7 +240,7 @@ covered.
   release`, `hitch resolve`'s Mode A) gets this for free. See the gotcha below for
   why the scan cannot be folded into the resync. The intent is written with
   `publish_journal::record_blob` so its ref update rides inside that same
-  transaction; `publish_environment_build` keeps the record in place until
+  transaction; `publish_branch` keeps the record in place until
   every obligation it describes is actually settled — cleared immediately
   only if no push is owed, otherwise cleared (and the push obligation marked
   done via `publish_journal::mark_push_done`) once the push succeeds, cleared
