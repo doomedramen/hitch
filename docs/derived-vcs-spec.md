@@ -1,6 +1,15 @@
 # Strata — a derived-branch VCS (design spec)
 
-**Status:** exploratory design, v0.2 — 2026-08-28.
+**Status:** SHELVED, v0.2 — 2026-08-28. Explored to a deliberate "don't
+build." Verdict: Phase 1 (the daily-driver core) is jj's already-shipped
+product — working-copy-as-change, change IDs, op log/undo, first-class
+conflicts, revsets all exist there, and jj's conflict algebra beats §5.1.
+The genuine differentiators (Phases 2–3: composition engine, trust layer)
+require team-level buy-in and are better built as a layer on jj — i.e.
+hitch's own pattern on a better substrate — if ever. Kept as a record of
+the design space and the reasoning; §5 (resolution-as-input), §6
+(attestations), and the risk/trap registers remain quarry for future
+hitch work.
 **Working name:** "Strata" (placeholder, unbranded — rename freely).
 **Origin:** ADHD brainstorm session over the hitch codebase, then a
 free-reign "what would a truly modern replacement be" pass. Not a hitch
@@ -624,6 +633,10 @@ greenfield work — run these first:
 - **v0.1 (2026-08-28):** initial capture from brainstorm — derivation
   core, conflict/resolution model, attestation layer, five-layer
   semantic-cost analysis, risks, traps, prototype path.
+- **v0.2-shelved (2026-08-28):** decision not to build, after the jj
+  comparison. Phase 1 = jj parity (already shipped there); Phases 2–3
+  need team buy-in and fit better as a jj-substrate layer, evidence
+  first. Doc retained as design-space record and idea quarry.
 - **v0.2 (2026-08-28):** free-reign modernization pass. Added: no
   staging / working-copy-as-change, dual change-ID+tree identity,
   universal op log + undo, recursive layer stacks (env→branch→change),
