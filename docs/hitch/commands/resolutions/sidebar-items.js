@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ResolutionsAction"],"fn":["fetch","forget","list","resolve_key_prefix","run","show"],"struct":["ResolutionsCommand"]};

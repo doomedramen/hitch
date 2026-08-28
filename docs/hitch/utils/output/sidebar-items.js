@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["OutputLevel"],"struct":["BufferedLine","BufferedOutputSink","ConsoleOutputSink"],"trait":["OutputSink"]};

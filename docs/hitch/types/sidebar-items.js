@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SUPPORTED_CONFIG_MAJOR"],"enum":["ApprovalStatus","OnConflict","Operation","RollbackOperation"],"fn":["default_min_approvals"],"struct":["Approval","ApprovalRequest","Environment","HitchConfig","RebuildSnapshot","Rejection","RollbackInfo"]};

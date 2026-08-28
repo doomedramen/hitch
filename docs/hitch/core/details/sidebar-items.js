@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_branch_details_model","build_branch_overview","build_env_overview","build_environment_details_model"],"struct":["BranchDetailsModel","EnvironmentDetailsModel"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_workspace_index_model"],"struct":["EnvironmentMinModel","WorkspaceIndexModel"]};

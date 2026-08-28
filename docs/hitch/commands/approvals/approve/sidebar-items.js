@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["attempt_approval_rollback","attempt_operation_rollback","execute_approved_operation","execute_operation_based_on_request","run","short_id","validate_and_approve"],"struct":["ApproveArgs"]};

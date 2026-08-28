@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["add","approvals","branch","cleanup","completion","conflicts","demote","diff","doctor","global_context","guard","init","lock","pr","promote","push","rebuild","release","remove","resolutions","resolve","set","setup","status","tree","unlock"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["AlwaysNoConfirm","AlwaysYesConfirm","StdinConfirm"],"trait":["Confirm"]};

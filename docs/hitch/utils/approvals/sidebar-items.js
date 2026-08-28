@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["approve_request","cancel_request","create_approval_request","display_approval_request_info","find_approval_request","find_approval_request_mut","get_approval_requests","mark_request_applied","reject_request","resolve_request_id"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ApprovalsSubcommand"],"fn":["run"],"mod":["approve","cancel","cleanup","list","refresh","reject","status"],"struct":["ApprovalsCommand"]};

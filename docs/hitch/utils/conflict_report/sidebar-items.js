@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConflictType"],"fn":["format_conflict_report","format_conflict_type_short","parse_conflict_type"],"struct":["ConflictedFile","MergeBaseInfo"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LEGACY_REF_PREFIX","REF_PREFIX"],"fn":["clear","list","mark_push_done","maybe_abort_for_test","next_generation","record","record_blob","recover","ref_name","repair_checkout","warn_manual"],"struct":["PublishAttribution","PublishRecord"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["abort_session","continue_rebase_session","continue_session","finish_mode_a","has_leftover_markers","maybe_record_resolution","read_rebase_session","rebase_session_path","resolve_mode_a","resolve_target_branch","resolve_worktree_path","run","run_mergetool","sanitize_for_path","start_mode_b_session"],"struct":["RebaseSession","ResolveCommand"]};

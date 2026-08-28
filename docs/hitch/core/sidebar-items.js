@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["details","status","timeline","workspace","workspace_index"]};

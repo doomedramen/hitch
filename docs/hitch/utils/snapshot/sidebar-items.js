@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["capture_rebuild_snapshot","check_for_merge_conflicts","drifted_branches","format_snapshot_info","merge_tree_has_conflicts","validate_snapshot"]};
