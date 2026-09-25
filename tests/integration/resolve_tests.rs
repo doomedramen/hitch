@@ -374,6 +374,255 @@ mod tests {
         Ok(())
     }
 
+    /// Read the build record at `refs/hitch/state/<env>`, or `None`. Reads it
+    /// back through plain git rather than hitch's own reader, because the
+    /// record's storage is part of what is under test.
+    fn read_state_record(
+        env: &TestEnvironment,
+        env_name: &str,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        let listed = env
+            .git
+            .run(&[
+                "for-each-ref",
+                "--format=%(objectname)",
+                &format!("refs/hitch/state/{env_name}"),
+            ])?
+            .stdout();
+        let oids: Vec<&str> = listed
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        match oids.as_slice() {
+            [] => Ok(None),
+            [one] => {
+                let blob = env.git.run(&["cat-file", "-p", one])?.stdout();
+                Ok(Some(serde_json::from_str(&blob)?))
+            }
+            many => anyhow::bail!(
+                "refs/hitch/state/{env_name} must name exactly one live record, \
+                 but {} refs matched: {many:?}",
+                many.len()
+            ),
+        }
+    }
+
+    /// A replayed resolution is recorded as *what it actually was*: a branch
+    /// that composed successfully, plus the content-addressed key of the
+    /// recording that made it possible.
+    ///
+    /// Sits next to
+    /// `test_dry_run_agrees_with_real_build_about_replayed_resolutions` and
+    /// reuses `setup_and_record` because that fixture already builds a genuine
+    /// recorded resolution; duplicating it into a second module would have
+    /// meant two places to keep a recording actually recorded.
+    #[test]
+    fn test_replayed_branch_is_recorded_as_included_with_its_resolution_key() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_and_record(env)?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Reused recorded resolution");
+
+            let record = read_state_record(env, "dev")?
+                .expect("a replaying rebuild published, so it must record");
+
+            // A replayed branch composed. It is therefore *included*, and
+            // categorically not held — a replay is precisely the case where a
+            // branch that would have conflicted did not.
+            let included: Vec<&str> = record["included_branches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b["branch"].as_str().unwrap())
+                .collect();
+            assert_eq!(included, vec!["branch-a", "branch-b"]);
+            assert!(
+                record["held"].as_array().unwrap().is_empty(),
+                "nothing conflicted, because the conflict was resolved: {:?}",
+                record["held"]
+            );
+
+            let replayed = record["replayed_resolutions"].as_array().unwrap();
+            assert_eq!(replayed.len(), 1, "expected one replay: {replayed:?}");
+            assert_eq!(replayed[0]["branch"], "branch-b");
+
+            // The key is the point. It is content-addressed, so the same branch
+            // replayed against a *later* conflict resolves under a different
+            // one — a branch name alone cannot say which human-authored fix
+            // produced a build. It must also name a resolution that actually
+            // exists: a key nothing resolves to would make the record a claim
+            // with nothing behind it.
+            let key = replayed[0]["resolution_key"].as_str().unwrap();
+            assert!(!key.is_empty(), "a resolution key must never be blank");
+            env.git
+                .run(&[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/hitch/resolutions/{key}"),
+                ])?
+                .assert_success();
+            // And the recording must be the one that was replayed, i.e. it must
+            // be in the list `hitch resolutions` would print.
+            let listed = env
+                .hitch
+                .run()
+                .args(&["--no-push", "resolutions", "list"])
+                .execute()?
+                .assert_success()
+                .stdout()
+                .to_string();
+            assert!(
+                listed.contains(&key[..12.min(key.len())]),
+                "the recorded key must be one hitch actually holds a resolution \
+                 for; `hitch resolutions` printed:\n{listed}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Mode B publishes an environment branch without writing a record, and
+    /// that absence is deliberate.
+    ///
+    /// It is a real gap, pinned as a test so it stays visible instead of
+    /// surfacing later as a mysterious `LegacyUnknown`. A Mode B build *does*
+    /// produce an environment branch and so arguably should record one; the
+    /// missing input is the included-branch list, which hitch does not track
+    /// for a hand-resolved worktree — the whole point of Mode B is that a
+    /// human wrote that result. Writing a record with a guessed
+    /// `included_branches` would be a fabricated Actual in a new costume,
+    /// which is the specific failure this record type exists to prevent. The
+    /// follow-up is to have Mode B track what it composed and then record it.
+    ///
+    /// Sits next to `test_resolve_mode_b_worktree_continue_publishes_and_cleans_up`
+    /// and reuses its whole flow, since that test already drives a Mode B
+    /// session all the way to a real publish.
+    #[test]
+    fn test_resolve_mode_b_publishes_without_a_record_and_leaves_no_usable_actual(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.fs.write_file("shared.txt", "base\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "base"])?;
+
+            env.git.run(&["checkout", "-b", "branch-a"])?;
+            env.fs.write_file("shared.txt", "from-a\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "a"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.git.run(&["checkout", "-b", "branch-b"])?;
+            env.fs.write_file("shared.txt", "from-b\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "b"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            // Inject directly into metadata (bypass the promote gate, which
+            // would otherwise refuse to promote a conflicting sibling).
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let config_str = env.fs.read_file("hitch.json")?;
+            let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+            config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: inject branches"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["--no-push", "resolve", "dev"])
+                .execute()?
+                .assert_success();
+
+            let worktree_path = env.temp_dir.parent().unwrap().join(format!(
+                ".hitch-resolve-{}-dev-branch-b",
+                env.temp_dir.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::write(worktree_path.join("shared.txt"), "resolved-both\n")?;
+            // Test-only: simulates a user staging their edited file by hand in
+            // the resolve worktree, so it deliberately spawns plain git rather
+            // than going through GitOperations.
+            #[allow(clippy::disallowed_methods)]
+            std::process::Command::new("git")
+                .args(["add", "shared.txt"])
+                .current_dir(&worktree_path)
+                .stdin(std::process::Stdio::null())
+                .status()?;
+
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "resolve",
+                    "dev",
+                    "--branch",
+                    "branch-b",
+                    "--continue",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Published 'dev'");
+
+            // It really did publish — otherwise "no record" would be
+            // vacuously true of a no-op.
+            assert_eq!(
+                env.git.run(&["show", "dev:shared.txt"])?.stdout().trim(),
+                "resolved-both"
+            );
+
+            assert!(
+                read_state_record(env, "dev")?.is_none(),
+                "Mode B has no composition result to record honestly, so it must \
+                 write no record rather than an invented one"
+            );
+
+            // The absence is per-publish, not a one-way door: the next ordinary
+            // rebuild records normally, even though the branch this one
+            // published is still there.
+            env.hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("held");
+            assert!(
+                read_state_record(env, "dev")?.is_some(),
+                "a plain rebuild after a recordless publish must still record — \
+                 otherwise the check above would pass for the wrong reason"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     /// `--abort` discards an in-progress Mode B session without publishing
     /// anything or leaving a worktree/branch behind.
     #[test]
@@ -604,6 +853,109 @@ mod tests {
 
             // With replay (and --yes, since the test is non-interactive):
             // branch-b composes from the recording.
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "--yes",
+                    "rebuild",
+                    "dev",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Reused recorded resolution");
+
+            assert_eq!(
+                env.git.run(&["show", "dev:shared.txt"])?.stdout().trim(),
+                "resolved-both"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The regression test for the divergence phase P1 removed, and the
+    /// sharpest statement of the phase's invariant.
+    ///
+    /// `rebuild --dry-run --replay-resolutions` used to report `branch-b` as
+    /// **held** while `rebuild --replay-resolutions` actually **composed** it
+    /// from the recording. Not a cosmetic mismatch: the dry-run exited 2 ("would
+    /// hold") for a build that was going to succeed cleanly, so anyone gating a
+    /// pipeline on the preview got a false alarm, and anyone reading it got a
+    /// confidently wrong answer about what the build would do.
+    ///
+    /// The cause was structural, not a bug in either path. The dry-run asked
+    /// `preflight_compatibility_report`, a *tree-based* loop over
+    /// `merge-tree --write-tree-name-only`, which has no notion of a recorded
+    /// resolution and therefore could not see one; the build asked
+    /// `merge_tree_compose`, a *commit-based* loop that tries replay first.
+    /// Two implementations of the same question.
+    ///
+    /// Both now call `compose_environment`, so the preview is the build. This
+    /// asserts agreement in both directions of the flag — replay on (neither
+    /// holds) and replay off (both hold) — because a test that only checked the
+    /// fixed case would also pass if the dry-run had simply stopped previewing
+    /// holds altogether.
+    #[test]
+    fn test_dry_run_agrees_with_real_build_about_replayed_resolutions() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_and_record(env)?;
+
+            // Replay OFF: the conflict is still unresolved, so both paths hold.
+            env.hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev", "--dry-run"])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
+
+            env.hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?
+                .assert_exit_code(2)
+                .assert_stdout_contains("held");
+
+            // Replay ON: the dry-run must now see the recording too. This is
+            // the assertion that used to fail — it exited 2 and said "1 held".
+            let dev_tip_before_dry_run = env
+                .git
+                .run(&["rev-parse", "refs/heads/dev"])?
+                .stdout()
+                .trim()
+                .to_string();
+            env.hitch
+                .run()
+                .args(&[
+                    "--no-push",
+                    "rebuild",
+                    "dev",
+                    "--dry-run",
+                    "--replay-resolutions",
+                ])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("would rebuild cleanly")
+                .assert_stdout_contains("would be composed from a recorded resolution")
+                .assert_stdout_contains("branch-b");
+
+            // A preview that agrees with the build is still not a build: it
+            // must not have moved the environment branch.
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "refs/heads/dev"])?
+                    .stdout()
+                    .trim(),
+                dev_tip_before_dry_run,
+                "--dry-run must not publish, even when it agrees with what the build will do"
+            );
+
+            // And the real build composes it, agreeing.
             env.hitch
                 .run()
                 .args(&[

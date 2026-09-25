@@ -1,9 +1,9 @@
 use crate::commands::global_context::GlobalContext;
-use crate::types::{HitchConfig, OnConflict};
-use crate::utils::conflict_report::format_conflict_report;
+use crate::types::{Environment, HitchConfig, OnConflict};
 use crate::utils::git_operations::GitOperations;
 use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 /// Ensure the `hitch-metadata` branch exists locally, bootstrapping it from
 /// `origin/hitch-metadata` if a teammate already ran `hitch init` and pushed.
@@ -573,8 +573,298 @@ pub struct RebuildOutcome {
     /// (only ever non-empty under `OnConflict::Eject`).
     pub held: Vec<CompatibilityConflict>,
     /// Branches that conflicted but were composed anyway from a recorded
-    /// resolution (only ever non-empty under `--replay-resolutions`).
-    pub replayed: Vec<String>,
+    /// resolution (only ever non-empty under `--replay-resolutions`), with the
+    /// content-addressed key of the resolution each one replayed.
+    pub replayed: Vec<crate::utils::build_record::ResolutionUse>,
+}
+
+/// Concrete commits a composition will build from, resolved once up front.
+///
+/// The order of `branches` is the configured promotion order and is
+/// load-bearing: composition is sequential, and a later branch is checked
+/// against everything that actually accumulated before it. Never sort.
+pub struct PinnedInputs {
+    pub base_name: String,
+    pub base_sha: String,
+    pub branches: Vec<(String, String)>,
+}
+
+/// What a composition produced, with no side effects of its own.
+///
+/// A pure function of [`PinnedInputs`] plus the arguments to
+/// `compose_environment` — no ref moves, no locks, no checkouts, no network.
+/// That is what lets a dry-run preview and the real build be the same call
+/// rather than two implementations that must agree forever.
+pub struct CompositionResult {
+    pub result_sha: String,
+    /// Promoted branches that ended up in the build, in composition order.
+    /// The complement of `held`.
+    pub included: Vec<String>,
+    pub held: Vec<CompatibilityConflict>,
+    pub replayed: Vec<crate::utils::build_record::ResolutionUse>,
+}
+
+/// Compose an environment's promoted branches into a single commit, entirely
+/// in the object database. This is the *only* place hitch decides what a build
+/// contains; `hitch rebuild`, `hitch rebuild --dry-run`, and every caller that
+/// goes through `rebuild_environment_opts` all land here.
+///
+/// `git merge-tree --write-tree` runs the same ORT merge a real `git merge`
+/// does but writes only trees, so there is no worktree to create, no leak on a
+/// crash, and nothing to collide with the user's checkouts. A branch that
+/// conflicts is either ejected — skipped, recorded as held, with later
+/// branches checked against what actually accumulated without it, so nine
+/// healthy branches are never blocked by one broken one — or the whole
+/// composition halts, per `on_conflict`. Ejecting is simply "don't advance
+/// `composed`": there is no merge state anywhere that would need aborting.
+///
+/// The result is a pure function of `inputs` and the arguments: same pinned
+/// SHAs in, same tree out. It writes no ref, takes no lock, and touches no
+/// checkout, so it is safe to call for a preview. That property is the reason
+/// this function exists separately from the publish half, and it is why
+/// `preflight_compatibility_report` — a tree-based approximation, not this —
+/// must never gate a mutation.
+///
+/// One mutation still depends on that approximation, and should not:
+/// `commands/resolve.rs` uses it to pick Mode A versus Mode B and to decide
+/// whether there is anything to resolve. Routing that here is deliberately
+/// left to P4's planner, so that `resolve` gets a *plan* to choose its mode
+/// from rather than a second ad-hoc opinion. Until then it is the known
+/// remaining dependant — do not add another.
+pub fn compose_environment(
+    context: &GlobalContext,
+    inputs: &PinnedInputs,
+    env_name: &str,
+    on_conflict: OnConflict,
+    replay: bool,
+    require_signed_resolutions: bool,
+    on_step: &mut dyn FnMut(&str),
+) -> Result<CompositionResult> {
+    let git = context.git();
+    let mut composed = inputs.base_sha.clone();
+    let mut last_composed = inputs.base_name.clone();
+
+    let mut included: Vec<String> = Vec::new();
+    let mut held: Vec<CompatibilityConflict> = Vec::new();
+    let mut replayed: Vec<crate::utils::build_record::ResolutionUse> = Vec::new();
+    let mut confirmed_replay_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    for (branch, sha) in &inputs.branches {
+        on_step(&format!("Merging '{}'", branch));
+
+        let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
+        let outcome = git.merge_tree_compose(&composed, sha)?;
+
+        if outcome.conflicted_stages.is_empty() {
+            // A merge that changes nothing produces no commit, matching
+            // what `git merge --squash` + `git commit` did when there was
+            // nothing staged (a branch already contained in the base).
+            let composed_tree = git.rev_parse(&format!("{}^{{tree}}", composed))?;
+            if outcome.tree_oid != composed_tree {
+                composed = git.commit_tree(&outcome.tree_oid, &[&composed], &merge_message)?;
+            }
+            context.log_verbose(&format!("✓ Composed '{}' into '{}'", branch, env_name));
+            last_composed = branch.clone();
+            included.push(branch.clone());
+            continue;
+        }
+
+        // Try a recorded resolution first (phase 5, opt-in). An exact
+        // content-addressed match means byte-identical conflict inputs, so
+        // replaying it reproduces the same fix a human already made —
+        // turning the hold back into a clean compose. On any miss, decline,
+        // or error, fall through to the normal halt/eject path.
+        if replay {
+            if let Some((resolved, key)) = try_replay_resolution(
+                context,
+                &composed,
+                branch,
+                sha,
+                &merge_message,
+                &outcome,
+                &mut confirmed_replay_keys,
+                require_signed_resolutions,
+            )? {
+                composed = resolved;
+                replayed.push(crate::utils::build_record::ResolutionUse {
+                    branch: branch.clone(),
+                    resolution_key: key,
+                });
+                included.push(branch.clone());
+                last_composed = branch.clone();
+                continue;
+            }
+        }
+
+        let conflict_result =
+            git.conflict_result_from_compose(branch, env_name, &composed, sha, &outcome)?;
+
+        let conflicted_paths: Vec<String> = conflict_result
+            .conflicted_files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+        let conflict = CompatibilityConflict {
+            branch: branch.clone(),
+            conflicts_with: last_composed.clone(),
+            conflicted_files: conflicted_paths,
+        };
+
+        if on_conflict == OnConflict::Halt {
+            return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
+                env_name,
+                &[conflict]
+            )));
+        }
+
+        context.log_warning(&format!(
+            "⛔ Held '{}' — conflicts with '{}' ({} file{})",
+            branch,
+            last_composed,
+            conflict.conflicted_files.len(),
+            if conflict.conflicted_files.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
+        held.push(conflict);
+    }
+
+    Ok(CompositionResult {
+        result_sha: composed,
+        included,
+        held,
+        replayed,
+    })
+}
+
+/// Resolve the environment's branches to the concrete SHAs a composition will
+/// build from.
+///
+/// Takes an already-resolved `&Environment` rather than an environment name
+/// on purpose. Both callers need the config anyway — `rebuild_environment_opts`
+/// for the step count and conflict policy, the dry-run for the same — so
+/// reading it here too would mean a second metadata transaction under the
+/// lock and a window in which the two reads could disagree. More importantly
+/// it keeps this the *only* implementation of pinning: a preview that pinned
+/// differently would be a preview predicting something other than what the
+/// build will do, which is the whole bug this shared path exists to remove.
+///
+/// `synchronize` controls whether this refreshes from the remote first, and
+/// the two callers deliberately differ: `true` for the real build, `false`
+/// for `--dry-run`. This is a real trade-off, so here is the reasoning.
+///
+/// Synchronizing means `fetch_all_remotes` plus a fast-forward of every local
+/// branch, plus creating any promoted branch that exists only on the remote —
+/// so it writes `refs/remotes/*`, can move `refs/heads/*` under the user, and
+/// can create branches. A `--dry-run` that did that would no longer be a
+/// dry run: it would be a slow, network-dependent operation that mutates the
+/// repository it claims only to inspect, which cuts against the "the user's
+/// working tree is sacred" convention for no proportional gain.
+///
+/// The residual disagreement this leaves is deliberately the weak kind. It is
+/// *not* a code divergence — there is one merge engine and one pinning
+/// routine, so a preview cannot reach a different conflict verdict than the
+/// build from a different implementation. It is only that a preview reflects
+/// current *local* refs while the build will sync first, so if a promoted
+/// branch moved on the remote since your last fetch, the preview describes
+/// the older content. That is the ordinary, expected staleness of any local
+/// inspection, and it is strictly better than the bug this path removed: two
+/// separate merge engines, one of them tree-based with a hand-passed
+/// `--merge-base`, disagreeing about which branches conflict.
+pub fn pin_environment_inputs(
+    context: &GlobalContext,
+    environment: &Environment,
+    synchronize: bool,
+) -> Result<PinnedInputs> {
+    if !context.git().branch_exists_anywhere(&environment.base)? {
+        return Err(anyhow::anyhow!(
+            "Base branch '{}' does not exist",
+            environment.base
+        ));
+    }
+    if synchronize {
+        let mut all_branches = vec![environment.base.clone()];
+        all_branches.extend(environment.branches.iter().cloned());
+        context.git().synchronize_branches(&all_branches)?;
+    }
+
+    let base_sha = context.git().get_branch_commit_sha(&environment.base)?;
+    let mut branches = Vec::with_capacity(environment.branches.len());
+    for branch in &environment.branches {
+        if !context.git().branch_exists(branch)? {
+            return Err(anyhow::anyhow!(
+                "Branch '{}' does not exist locally{}",
+                branch,
+                if synchronize {
+                    " after synchronization"
+                } else {
+                    ""
+                }
+            ));
+        }
+        let sha = context.git().get_branch_commit_sha(branch)?;
+        branches.push((branch.clone(), sha));
+    }
+
+    Ok(PinnedInputs {
+        base_name: environment.base.clone(),
+        base_sha,
+        branches,
+    })
+}
+
+/// The environment-level refusal printed when `OnConflict::Halt` stops a build.
+///
+/// Lives here rather than in `commands/rebuild.rs` because `compose_environment`
+/// is the single place that decides to halt, and it has to render the refusal
+/// itself: the dry-run preview and the real build both go through it, so a
+/// report built in the command layer would be reachable from only one of them
+/// — which is how the two paths ended up with two different halt messages
+/// selected by whether `--replay-resolutions` happened to be set.
+pub(crate) fn format_compatibility_report_for_rebuild(
+    env_name: &str,
+    conflicts: &[CompatibilityConflict],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "✗ Cannot rebuild '{}' — compatibility check failed\n\n",
+        env_name
+    ));
+
+    for c in conflicts {
+        out.push_str(&format!(
+            "  {} conflicts with {}\n",
+            c.branch, c.conflicts_with
+        ));
+        for f in &c.conflicted_files {
+            out.push_str(&format!("    {}\n", f));
+        }
+        out.push('\n');
+    }
+
+    if let [only] = conflicts {
+        out.push_str(&format!("Fix {} first:\n", only.branch));
+        out.push_str(&format!(
+            "  git checkout {} && git rebase {}\n",
+            only.branch, only.conflicts_with
+        ));
+    } else {
+        out.push_str(&format!(
+            "Fix each of the {} branches above, then retry:\n",
+            conflicts.len()
+        ));
+        for c in conflicts {
+            out.push_str(&format!(
+                "  git checkout {} && git rebase {}\n",
+                c.branch, c.conflicts_with
+            ));
+        }
+    }
+
+    out
 }
 
 /// Rebuild an environment by composing its promoted branches into a new
@@ -603,7 +893,7 @@ pub struct RebuildOutcome {
 ///   every merge queue surveyed converges on — while `Halt` aborts the whole
 ///   rebuild on the first conflict, as phase 1 always did.
 pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
-    rebuild_environment_opts(context, env_name, false)
+    rebuild_environment_opts(context, env_name, false, None)
 }
 
 /// `rebuild_environment` with the phase-5 replay opt-in. `replay = true`
@@ -613,10 +903,24 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
 /// previously hand-resolved peer conflict back into a clean compose without
 /// re-resolving it. Every other caller (promote, demote, release, approve)
 /// passes `false`, so a plain rebuild never consults resolutions.
+///
+/// `on_conflict_override` is `hitch rebuild --on-conflict`. `None` means "use
+/// the environment's configured policy", which is every caller's intent
+/// except the CLI override.
+///
+/// This parameter did not used to exist, and the override did not used to
+/// reach the composition — `hitch rebuild dev --on-conflict halt` worked only
+/// because a *separate* pre-check in `commands/rebuild.rs` intercepted the
+/// conflict first and refused there. The composition itself always read
+/// `environment.on_conflict` from the config, so the flag had no effect on the
+/// code that actually merged. That pre-check is gone (see the note at its old
+/// site), which is what surfaced the gap: the override now has to be threaded
+/// here explicitly, where it is finally load-bearing.
 pub fn rebuild_environment_opts(
     context: &GlobalContext,
     env_name: &str,
     replay: bool,
+    on_conflict_override: Option<OnConflict>,
 ) -> Result<RebuildOutcome> {
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
@@ -635,6 +939,7 @@ pub fn rebuild_environment_opts(
         .get(env_name)
         .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?
         .clone();
+    let on_conflict = on_conflict_override.unwrap_or(environment.on_conflict);
 
     // Set up step logging: sync+pin, one step per branch to merge, publish.
     let merge_steps = environment.branches.len().max(1);
@@ -646,33 +951,14 @@ pub fn rebuild_environment_opts(
     );
 
     // Step 1: synchronize base + every promoted branch once, then pin each to
-    // the concrete SHA we will actually build from. Everything below — the
-    // worktree's starting point, every squash merge — uses these pinned
-    // values instead of the mutable branch names, so a ref moving mid-build
-    // (another push, a concurrent rebuild) cannot change what we compose.
+    // the concrete SHA we will actually build from. Everything below composes
+    // against these pinned values instead of the mutable branch names, so a
+    // ref moving mid-build (another push, a concurrent rebuild) cannot change
+    // what we compose. Shared with the `--dry-run` preview via
+    // `pin_environment_inputs`, so a preview cannot pin differently from the
+    // build it is previewing.
     logger.step("Synchronizing branches".to_string());
-    if !context.git().branch_exists_anywhere(&environment.base)? {
-        return Err(anyhow::anyhow!(
-            "Base branch '{}' does not exist",
-            environment.base
-        ));
-    }
-    let mut all_branches = vec![environment.base.clone()];
-    all_branches.extend(environment.branches.iter().cloned());
-    context.git().synchronize_branches(&all_branches)?;
-
-    let base_sha = context.git().get_branch_commit_sha(&environment.base)?;
-    let mut pinned_branches = Vec::with_capacity(environment.branches.len());
-    for branch in &environment.branches {
-        if !context.git().branch_exists(branch)? {
-            return Err(anyhow::anyhow!(
-                "Branch '{}' does not exist locally after synchronization",
-                branch
-            ));
-        }
-        let sha = context.git().get_branch_commit_sha(branch)?;
-        pinned_branches.push((branch.clone(), sha));
-    }
+    let pinned = pin_environment_inputs(context, &environment, true)?;
 
     // Snapshot the remote environment SHA now, before building, so the
     // eventual push is leased against what we actually observed — not
@@ -683,111 +969,80 @@ pub fn rebuild_environment_opts(
 
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
 
-    // Step 2..N: compose the promoted branches, in order, entirely in the
-    // object database — `git merge-tree --write-tree` runs the same ORT merge
-    // a real `git merge` does but writes only trees, so there is no worktree
-    // to create, leak on a crash, or collide with the user's checkouts. A
-    // branch that conflicts is either ejected — skipped, recorded as held,
-    // with later branches checked against what actually accumulated without
-    // it, so nine healthy branches are never blocked by one broken one — or
-    // the whole rebuild halts, per the environment's `on_conflict` policy.
-    // Ejecting is now simply "don't advance `composed`": there is no merge
-    // state anywhere that would need aborting.
-    let mut held: Vec<CompatibilityConflict> = Vec::new();
-    let mut replayed: Vec<String> = Vec::new();
-    let mut confirmed_replay_keys: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    let build_result = (|| -> Result<String> {
-        let git = context.git();
-        let mut composed = base_sha.clone();
-        let mut last_composed = environment.base.clone();
+    // Step 2..N: compose the promoted branches, in order.
+    // `compose_environment` is the single implementation of that decision —
+    // the `--dry-run` preview calls the same function over the same pinned
+    // inputs, so a preview cannot disagree with the build it previews.
+    let composition = compose_environment(
+        context,
+        &pinned,
+        env_name,
+        on_conflict,
+        replay,
+        config.require_signed_resolutions,
+        &mut |step| logger.step(step.to_string()),
+    )?;
 
-        for (branch, sha) in &pinned_branches {
-            logger.step(format!("Merging '{}'", branch));
+    if environment.branches.is_empty() {
+        logger.step("No promoted branches to merge".to_string());
+    }
 
-            let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
-            let outcome = git.merge_tree_compose(&composed, sha)?;
+    let new_sha = composition.result_sha.clone();
 
-            if outcome.conflicted_stages.is_empty() {
-                // A merge that changes nothing produces no commit, matching
-                // what `git merge --squash` + `git commit` did when there was
-                // nothing staged (a branch already contained in the base).
-                let composed_tree = git.rev_parse(&format!("{}^{{tree}}", composed))?;
-                if outcome.tree_oid != composed_tree {
-                    composed = git.commit_tree(&outcome.tree_oid, &[&composed], &merge_message)?;
-                }
-                context.log_verbose(&format!("✓ Composed '{}' into '{}'", branch, env_name));
-                last_composed = branch.clone();
-                continue;
-            }
+    // The record of what this build consumed and produced, written *here*
+    // rather than in `src/commands/rebuild.rs` so that every caller which
+    // routes through `rebuild_environment_opts` — `promote`, `demote`,
+    // `approve`, and `release`'s post-release rebuild — gets a current record
+    // for free. Building it in the command would make the record only as fresh
+    // as the one command someone remembered to instrument, which is exactly
+    // the stale-Actual inference this replaces.
+    //
+    // `desired` is `pinned` verbatim, and `included` is `pinned` *filtered by
+    // membership*, never a `filter_map` over `composition.included` looking
+    // each name up: composition walks `pinned.branches` in order, so
+    // `included` is a subsequence of it and this yields the same list in
+    // promotion order — while a name that failed to look up would be silently
+    // dropped, and a record that drops a branch lies about what was built.
+    let pin = |(branch, sha): &(String, String)| crate::utils::build_record::PinnedBranch {
+        branch: branch.clone(),
+        sha: sha.clone(),
+    };
+    let desired: Vec<crate::utils::build_record::PinnedBranch> =
+        pinned.branches.iter().map(pin).collect();
+    let included: Vec<crate::utils::build_record::PinnedBranch> = pinned
+        .branches
+        .iter()
+        .filter(|(branch, _)| composition.included.iter().any(|n| n == branch))
+        .map(pin)
+        .collect();
 
-            // Try a recorded resolution first (phase 5, opt-in). An exact
-            // content-addressed match means byte-identical conflict inputs, so
-            // replaying it reproduces the same fix a human already made —
-            // turning the hold back into a clean compose. On any miss,
-            // decline, or error, fall through to the normal halt/eject path.
-            if replay {
-                if let Some(resolved) = try_replay_resolution(
-                    context,
-                    &composed,
-                    branch,
-                    sha,
-                    &merge_message,
-                    &outcome,
-                    &mut confirmed_replay_keys,
-                    config.require_signed_resolutions,
-                )? {
-                    composed = resolved;
-                    replayed.push(branch.clone());
-                    last_composed = branch.clone();
-                    continue;
-                }
-            }
+    let record = crate::utils::build_record::EnvironmentBuildRecord::new(
+        env_name,
+        crate::utils::build_record::resolve_metadata_sha(context.git())?,
+        pinned.base_name.clone(),
+        pinned.base_sha.clone(),
+        desired,
+        included,
+        // Cloned: `composition.held` is moved into the returned
+        // `RebuildOutcome` below, and the record only borrows it.
+        composition.held.clone(),
+        composition.replayed.clone(),
+        new_sha.clone(),
+    );
 
-            let conflict_result =
-                git.conflict_result_from_compose(branch, env_name, &composed, sha, &outcome)?;
-
-            if environment.on_conflict == OnConflict::Halt {
-                return Err(anyhow::anyhow!(
-                    "{}",
-                    format_conflict_report(
-                        branch,
-                        &conflict_result.target_branch,
-                        &environment.base,
-                        env_name,
-                        &conflict_result.conflicted_files,
-                        conflict_result.merge_base.as_ref(),
-                    )
-                ));
-            }
-
-            let conflicted_paths: Vec<String> = conflict_result
-                .conflicted_files
-                .iter()
-                .map(|f| f.path.clone())
-                .collect();
-            context.log_warning(&format!(
-                "⛔ Held '{}' — conflicts with '{}' ({} file{})",
-                branch,
-                last_composed,
-                conflicted_paths.len(),
-                if conflicted_paths.len() == 1 { "" } else { "s" }
-            ));
-            held.push(CompatibilityConflict {
-                branch: branch.clone(),
-                conflicts_with: last_composed.clone(),
-                conflicted_files: conflicted_paths,
-            });
-        }
-
-        if environment.branches.is_empty() {
-            logger.step("No promoted branches to merge".to_string());
-        }
-
-        Ok(composed)
-    })();
-
-    let new_sha = build_result?;
+    // Unconditional overwrite (`Update` with an empty expected-old), not
+    // `Create`. There is exactly one live record per environment and it is
+    // replaced in place, so a second rebuild would fail the whole batch under
+    // create semantics — wedging publishing for that environment after exactly
+    // one successful build. A CAS would buy nothing here that the enclosing
+    // all-or-nothing transaction does not already give, since the branch move
+    // it rides with is itself guarded.
+    let (state_ref, state_blob) = crate::utils::build_record::record_blob(context.git(), &record)?;
+    let state_edit = crate::utils::git_operations::RefEdit::Update {
+        refname: state_ref,
+        new_oid: state_blob,
+        expected_old: Some(String::new()),
+    };
 
     // The composed commit is only reachable from this process until the
     // publish CAS lands. Anchor it under a ref for that window so a
@@ -808,6 +1063,7 @@ pub fn rebuild_environment_opts(
         context,
         env_name,
         &new_sha,
+        std::slice::from_ref(&state_edit),
         &timestamp,
         &remote_env_sha_before,
     );
@@ -820,7 +1076,10 @@ pub fn rebuild_environment_opts(
         "✓ Rebuild process completed for environment '{}'",
         env_name
     ));
-    Ok(RebuildOutcome { held, replayed })
+    Ok(RebuildOutcome {
+        held: composition.held,
+        replayed: composition.replayed,
+    })
 }
 
 /// If `hitch setup` has been run for this repository, use the deploy key to
@@ -1041,10 +1300,12 @@ pub(crate) fn resync_checkouts(
 /// fast-forward/merge — suggesting `-f` there would tell a user to
 /// force-push a release target, exactly what `hitch setup`'s
 /// branch-protection ruleset exists to prevent.
+#[allow(clippy::too_many_arguments)] // `extras` rides the same transaction as `new_sha`; a struct isn't worth it for one private, 3-caller function whose params are heterogeneous git-plumbing values
 pub(crate) fn publish_branch(
     context: &GlobalContext,
     branch: &str,
     new_sha: &str,
+    extras: &[crate::utils::git_operations::RefEdit],
     backup_timestamp: Option<&str>,
     retry_hint: &str,
     push_remedy: &str,
@@ -1058,8 +1319,10 @@ pub(crate) fn publish_branch(
 
     // Everything that must agree with the branch move goes in with it: the
     // resync intent (so a crash after the move is recoverable — see
-    // `crate::utils::publish_journal`), and the tip being replaced (so rollback
-    // is a one-ref flip). `git update-ref --stdin` applies the batch
+    // `crate::utils::publish_journal`), the tip being replaced (so rollback
+    // is a one-ref flip), and whatever `extras` the caller supplied (an
+    // environment's build record — see `crate::utils::build_record`).
+    // `git update-ref --stdin` applies the batch
     // all-or-nothing, so there is no longer a window where the branch has moved
     // but its intent record or its archive is missing.
     let (resync_ref, resync_blob) = crate::utils::publish_journal::record_blob(
@@ -1152,6 +1415,8 @@ pub(crate) fn publish_branch(
         });
     }
 
+    edits.extend_from_slice(extras);
+
     if let Err(e) = context
         .git()
         .ref_transaction(&edits, &format!("hitch: publish {}", branch))
@@ -1229,10 +1494,18 @@ pub(crate) fn publish_branch(
 ///
 /// Built on `publish_branch`, the transactional core shared with `hitch
 /// release`/`hitch resolve`.
+///
+/// `extras` rides the same transaction as the branch move, so a build record
+/// describing this tip can never be written without the tip, or the reverse.
+/// `hitch resolve`'s Mode B passes `&[]`: it also lands an environment branch,
+/// but composes from a hand-resolved worktree whose included-branch list hitch
+/// does not track, so it has no `CompositionResult` to build a truthful record
+/// from. A reader finding no record there must report "unknown", not guess.
 pub(crate) fn publish_environment_build(
     context: &GlobalContext,
     env_name: &str,
     new_sha: &str,
+    extras: &[crate::utils::git_operations::RefEdit],
     backup_timestamp: &str,
     remote_sha_before: &Option<String>,
 ) -> Result<()> {
@@ -1243,6 +1516,7 @@ pub(crate) fn publish_environment_build(
         context,
         env_name,
         new_sha,
+        extras,
         Some(backup_timestamp),
         &retry_hint,
         &push_remedy,
@@ -1328,6 +1602,10 @@ pub(crate) fn publish_environment_build(
 /// structurally cannot fail open on a metadata read error — the single read
 /// in the caller still propagates its own error via `?`, preserving fail
 /// closed without the redundant fetches.
+///
+/// `Some` carries `(new_composed_commit, resolution_key)` so the caller can
+/// record which recorded fix produced the build — see
+/// `crate::utils::build_record::ResolutionUse`.
 #[allow(clippy::too_many_arguments)] // current_head (lineage) joins 7 pre-existing params; a struct isn't worth it for one private, single-caller function
 fn try_replay_resolution(
     context: &GlobalContext,
@@ -1338,7 +1616,7 @@ fn try_replay_resolution(
     outcome: &crate::utils::git_operations::MergeTreeCompose,
     confirmed_keys: &mut std::collections::HashSet<String>,
     require_signed: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, String)>> {
     use crate::utils::resolutions;
 
     if outcome.conflicted_stages.is_empty() {
@@ -1504,7 +1782,12 @@ fn try_replay_resolution(
                 branch,
                 res.meta.recorded_by
             ));
-            Ok(Some(new_composed))
+            // The key rides out with the commit so a build record can name
+            // *which* recorded fix produced this build. The key is
+            // content-addressed, so the same branch replayed against a later
+            // conflict resolves under a different one — the branch name alone
+            // cannot say what was applied.
+            Ok(Some((new_composed, key)))
         }
         Err(e) => {
             context.log_verbose(&format!(
@@ -2051,8 +2334,10 @@ pub fn preflight_compatibility_merge_tree(
     Ok(None)
 }
 
-/// One branch's conflict, as found by `preflight_compatibility_report`.
-#[derive(Debug, Clone)]
+/// One branch's conflict, as reached by `compose_environment` (and, for the
+/// read-only display paths, by `preflight_compatibility_report`). Serialized
+/// into an environment's build record — see `crate::utils::build_record`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompatibilityConflict {
     /// The branch that could not be folded into the composition.
     pub branch: String,
@@ -2368,7 +2653,7 @@ mod publish_environment_build_tests {
 
         // First publish: dev has no prior archival refs, so this always
         // succeeded even before the fix.
-        publish_environment_build(&context, "dev", &sha1, same_timestamp, &None)?;
+        publish_environment_build(&context, "dev", &sha1, &[], same_timestamp, &None)?;
         assert_eq!(context.git().rev_parse("refs/heads/dev")?, sha1);
         assert_eq!(
             context
@@ -2381,7 +2666,7 @@ mod publish_environment_build_tests {
         // archival-ref `Create` edits would collide with the refs the first
         // publish just wrote, aborting the whole transaction and leaving
         // "dev" stuck on sha1. The branch move must still land.
-        publish_environment_build(&context, "dev", &sha2, same_timestamp, &None)?;
+        publish_environment_build(&context, "dev", &sha2, &[], same_timestamp, &None)?;
         assert_eq!(
             context.git().rev_parse("refs/heads/dev")?,
             sha2,
@@ -2491,12 +2776,217 @@ mod publish_environment_build_tests {
 
         // Before the fix, this failed the whole transaction (including the
         // environment-branch CAS) because the leftover ref already existed.
-        publish_environment_build(&context, "dev", &sha1, timestamp, &None)?;
+        publish_environment_build(&context, "dev", &sha1, &[], timestamp, &None)?;
 
         assert_eq!(
             context.git().rev_parse("refs/heads/dev")?,
             sha1,
             "publish must succeed and move the branch even with a leftover publish-journal ref"
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod compose_environment_tests {
+    use super::*;
+    use crate::commands::global_context::GlobalContext;
+    use crate::utils::logging::Logger;
+    use std::sync::Arc;
+
+    /// Test-only raw git invocation — see the identical helper in
+    /// `publish_environment_build_tests` above for why this bypasses
+    /// `GitOperations`/`run_git_command` deliberately.
+    #[allow(clippy::disallowed_methods)]
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// `compose_environment` must be a pure function of its pinned inputs.
+    ///
+    /// This is the property the whole phase rests on: it is what lets
+    /// `hitch rebuild --dry-run` be a *preview of the real build* rather than a
+    /// second, tree-based approximation of it (see `preflight_compatibility_report`,
+    /// which is exactly that approximation and which nothing may ever let gate
+    /// a mutation). If composition ever grew a side effect — writing a ref,
+    /// taking a lock, checking out, touching the network — then calling it for
+    /// a preview would no longer be safe, and the dry-run would have to go
+    /// back to approximating.
+    ///
+    /// Asserted three ways: the result is identical across two calls, no ref
+    /// anywhere moved, and no `refs/hitch/*` machinery appeared.
+    ///
+    /// The comparison is on the **tree**, not the commit SHA. `commit_tree`
+    /// stamps ambient wall-clock time with no `GIT_AUTHOR_DATE` override, so
+    /// two calls a second apart legitimately produce different commit OIDs for
+    /// identical content. The tree is pure content and timestamp-independent —
+    /// the same reasoning `crash_recovery_tests.rs` uses for its convergence
+    /// check, and the reason that test compares `<branch>^{tree}`.
+    #[test]
+    fn compose_environment_is_pure_and_deterministic() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join("base.txt"), "base\n")?;
+        git(repo, &["add", "base.txt"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+
+        // Two clean branches, then one that add/add-conflicts with the first.
+        // Without a real conflict the eject path never runs and the test would
+        // pass without exercising the part most worth pinning down.
+        for (branch, file, body) in [
+            ("feature-1", "1.txt", "one\n"),
+            ("feature-2", "2.txt", "two\n"),
+        ] {
+            git(repo, &["checkout", "-q", "-b", branch, "main"]);
+            std::fs::write(repo.join(file), body)?;
+            git(repo, &["add", file]);
+            git(repo, &["commit", "-q", "-m", branch]);
+        }
+        git(repo, &["checkout", "-q", "-b", "feature-3", "main"]);
+        std::fs::write(repo.join("1.txt"), "three\n")?;
+        git(repo, &["add", "1.txt"]);
+        git(repo, &["commit", "-q", "-m", "feature-3"]);
+        git(repo, &["checkout", "-q", "main"]);
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+                .expect("failed to build test GlobalContext");
+
+        let inputs = PinnedInputs {
+            base_name: "main".to_string(),
+            base_sha: git(repo, &["rev-parse", "main"]),
+            branches: vec![
+                (
+                    "feature-1".to_string(),
+                    git(repo, &["rev-parse", "feature-1"]),
+                ),
+                (
+                    "feature-2".to_string(),
+                    git(repo, &["rev-parse", "feature-2"]),
+                ),
+                (
+                    "feature-3".to_string(),
+                    git(repo, &["rev-parse", "feature-3"]),
+                ),
+            ],
+        };
+
+        // Snapshot every ref in the repository, and what the checkout is
+        // sitting on, so "no side effects" is checked against reality rather
+        // than assumed.
+        let refs_before = git(repo, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+        assert!(
+            refs_before.contains("refs/heads/feature-1"),
+            "the ref snapshot must actually contain refs, or 'nothing moved' below is vacuous"
+        );
+        let head_before = git(repo, &["rev-parse", "HEAD"]);
+        let status_before = git(repo, &["status", "--porcelain"]);
+
+        let no_steps = |_: &str| {};
+        let mut sink = no_steps;
+        let first = compose_environment(
+            &context,
+            &inputs,
+            "dev",
+            OnConflict::Eject,
+            false,
+            false,
+            &mut sink,
+        )?;
+
+        // The conflict was actually detected and ejected — otherwise the
+        // determinism assertions below would hold trivially.
+        assert_eq!(
+            first.held.len(),
+            1,
+            "feature-3 add/add-conflicts with feature-1 and must be ejected"
+        );
+        assert_eq!(first.held[0].branch, "feature-3");
+        assert_eq!(
+            first.held[0].conflicted_files,
+            vec!["1.txt".to_string()],
+            "the recorded conflict must name the file that actually conflicted"
+        );
+        assert_eq!(
+            first.included,
+            vec!["feature-1".to_string(), "feature-2".to_string()],
+            "the branches after the ejected one must still compose against what accumulated"
+        );
+        assert!(first.replayed.is_empty(), "replay was not requested");
+
+        // Second call, byte-identical inputs, still a fresh collector.
+        let mut sink2 = no_steps;
+        let second = compose_environment(
+            &context,
+            &inputs,
+            "dev",
+            OnConflict::Eject,
+            false,
+            false,
+            &mut sink2,
+        )?;
+
+        assert_eq!(
+            context
+                .git()
+                .rev_parse(&format!("{}^{{tree}}", first.result_sha))?,
+            context
+                .git()
+                .rev_parse(&format!("{}^{{tree}}", second.result_sha))?,
+            "the same pinned inputs must compose to the same tree"
+        );
+        assert_eq!(first.included, second.included);
+        // Whole `ResolutionUse`s, key included. Stronger than the branch-name
+        // comparison this replaced: a composition that somehow replayed a
+        // *different* recorded fix for the same branch would now fail here,
+        // where the old `Vec<String>` check would have passed.
+        assert_eq!(first.replayed, second.replayed);
+        assert_eq!(
+            first.held.len(),
+            second.held.len(),
+            "the same inputs must hold the same number of branches"
+        );
+        assert_eq!(first.held[0].branch, second.held[0].branch);
+        assert_eq!(
+            first.held[0].conflicted_files,
+            second.held[0].conflicted_files
+        );
+
+        // No side effects: not one ref moved, and in particular no
+        // publish-journal, build anchor, or archival ref appeared. Those are
+        // the publish half's job, and a preview must never create them.
+        let refs_after = git(repo, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+        assert_eq!(
+            refs_before, refs_after,
+            "compose_environment must not move, create, or delete any ref"
+        );
+        assert!(
+            !refs_after.contains("refs/hitch/"),
+            "compose_environment created publish machinery: {refs_after}"
+        );
+        assert_eq!(head_before, git(repo, &["rev-parse", "HEAD"]));
+        assert_eq!(
+            status_before,
+            git(repo, &["status", "--porcelain"]),
+            "compose_environment must not touch the checkout"
         );
 
         Ok(())

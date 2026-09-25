@@ -144,6 +144,29 @@ mod tests {
             let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
                 let from_sha = setup_with_pending_second_promotion(env)?;
 
+                // `setup_with_pending_second_promotion` promotes (and so
+                // rebuilds) once, so a build record already exists and names
+                // `from_sha`. Captured before the interrupted run so the
+                // journal-written arm can assert the record was not *touched*
+                // — which is a stronger claim than "no record exists", and
+                // the one that actually holds: a rebuild writes a record only
+                // inside the transaction that moves the branch, and that
+                // transaction has not run yet.
+                let state_oid_before = env
+                    .git
+                    .run(&[
+                        "for-each-ref",
+                        "--format=%(objectname)",
+                        "refs/hitch/state/dev",
+                    ])?
+                    .stdout()
+                    .trim()
+                    .to_string();
+                assert!(
+                    !state_oid_before.is_empty(),
+                    "the setup's own promote rebuilds, so it must have left a record"
+                );
+
                 // Interrupted run: expected to die, not to succeed.
                 let interrupted = env
                     .hitch
@@ -178,6 +201,16 @@ mod tests {
                     .stdout()
                     .trim()
                     .to_string();
+                let state_oid = env
+                    .git
+                    .run(&[
+                        "for-each-ref",
+                        "--format=%(objectname)",
+                        "refs/hitch/state/dev",
+                    ])?
+                    .stdout()
+                    .trim()
+                    .to_string();
 
                 match abort_after {
                     "journal-written" => {
@@ -196,6 +229,19 @@ mod tests {
                             dev_after_abort, from_sha,
                             "aborting after 'journal-written' should leave 'dev' unmoved"
                         );
+                        // The build record rides that same transaction, so the
+                        // interrupted build must not have touched it. This is
+                        // the assertion that makes the phase's central claim
+                        // testable: there is no window in which the tip has
+                        // moved and the record describing it has not, and none
+                        // in which a record describes a tip the branch lacks.
+                        assert_eq!(
+                            state_oid, state_oid_before,
+                            "aborting after 'journal-written' must leave the build \
+                             record exactly as the previous build left it — the record \
+                             is written inside the same atomic transaction as the branch \
+                             move, which has not run yet"
+                        );
                     }
                     "ref-moved" | "resync-done" => {
                         assert!(
@@ -213,6 +259,26 @@ mod tests {
                             dev_after_abort, from_sha,
                             "aborting after '{}' should have already moved 'dev'",
                             abort_after
+                        );
+
+                        // The transaction has landed, so the record exists — and
+                        // describes exactly the tip the abort left behind. Were
+                        // the two ever written in separate transactions, this is
+                        // the assertion that would fail.
+                        assert!(
+                            !state_oid.is_empty(),
+                            "aborting after '{}' should leave a build record, since the \
+                             transaction that moved 'dev' also wrote it",
+                            abort_after
+                        );
+                        let state_payload = env.git.run(&["cat-file", "-p", &state_oid])?.stdout();
+                        let build: serde_json::Value = serde_json::from_str(&state_payload)?;
+                        assert_eq!(
+                            build["result_sha"].as_str().unwrap(),
+                            dev_after_abort.as_str(),
+                            "the build record must describe the tip the abort left \
+                             behind — a record from a different transaction would name \
+                             a different commit"
                         );
 
                         // The whole point of `setup_with_pending_second_promotion`:

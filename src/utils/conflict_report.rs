@@ -108,6 +108,23 @@ impl MergeBaseInfo {
 /// * `env_name` - The environment name
 /// * `conflicts` - List of conflicted files with details
 /// * `merge_base` - Optional merge base information
+///
+/// A per-merge diagnostic carrying the merge base, per-file conflict types,
+/// and the conflicting content inline.
+/// **Currently unreferenced by production code.** This was the halt message
+/// `compose_environment` used to build, but it was only ever *reachable* when
+/// `--replay-resolutions` was set, because the `rebuild` command's separate
+/// pre-check intercepted every other halt first — so a halt under
+/// `OnConflict::Halt` printed two different reports depending on an unrelated
+/// flag. Phase P1 removed the pre-check and unified both paths on
+/// `prelude::format_compatibility_report_for_rebuild`, which is
+/// environment-level (it names the remedy directly) rather than
+/// merge-level.
+///
+/// Kept, rather than deleted, because it is `pub`, tested, and strictly
+/// richer than what replaced it. It is a deletion candidate, and a plausible
+/// input for the read-only display paths P7 re-plumbs. Nothing should call it
+/// to decide a mutation's outcome — that is exactly the mistake P1 removed.
 pub fn format_conflict_report(
     source_branch: &str,
     target_branch: &str,

@@ -1,5 +1,6 @@
 pub mod approvals;
 pub mod authorization;
+pub mod build_record;
 pub mod command_helpers;
 pub mod config_validation;
 pub mod confirm;

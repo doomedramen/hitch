@@ -44,19 +44,53 @@ eject-and-continue policy, `hitch resolve`) — check its
 "Implementation status" section before assuming a phase is done or before
 starting related work.
 
+`docs/superpowers/plans/2026-09-25-explainable-ux-program.md` is the master
+plan for the explainable-UX program: turning mutations into
+`INTENT → PLAN → APPLY → RESULT` so every one can explain itself. It
+implements `docs/explainable-ux-spec.md` (a verbatim copy of the author's
+original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
+**Global Constraints** before touching any code under it — they encode which
+line numbers are load-bearing and why. Two scope decisions differ from the
+spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
+to a separate repair stream, and the broken-`main` CI repair is handled
+independently of this program. P0 and P1 are authored; later phases are
+authored as they approach, because their `file:lines` references go stale the
+moment the previous phase lands.
+
 ## Build, test, lint
 
 Always use `just` recipes (see `justfile`) — they're what CI and pre-commit
 hooks run, so using anything else risks passing locally and failing there.
 
 ```bash
-just build              # cargo build
+just build              # cargo build --release -p hitch   (RELEASE — see note)
 just format             # cargo fmt
 just format-check       # cargo fmt --check  (CI gate)
 just lint                # cargo clippy -p hitch --all-targets -- -D warnings  (CI gate)
 just test               # cargo test -p hitch  (full suite)
-just test-file <name>   # cargo test --test <name>
 ```
+
+**`just test-file <name>` is broken for integration tests.** The
+`tests/integration/*_tests.rs` and `tests/scenarios/*_tests.rs` files are
+*modules* of a single `tests/mod.rs` test target, not separate targets — the
+only integration targets cargo knows are `mod` and `no_args_help`. So
+`just test-file rebuild` fails with `no test target named 'rebuild' in
+default-run packages`, and the recipe is not `-p hitch`-scoped like the gates
+above. Run one integration test with:
+
+```bash
+cargo test -p hitch --test mod -- integration::rebuild_tests::tests::<test_name> --exact
+```
+
+The full module path is required — a bare test *name* filter matches nothing,
+because the module path is part of the test's identity.
+
+**`just build` is a release build**, which matters for anything touching the
+crash-recovery abort hook: `HITCH_TEST_ABORT_AFTER` is
+`#[cfg(debug_assertions)]`-gated, so a release binary silently ignores it and
+exits *successfully*. Use `cargo build -p hitch` (debug, `target/debug/hitch`)
+for any manual verification of publish recovery — see the "Recovery is tested
+by interruption" gotcha below.
 
 **Before considering any change done**, run in this order and expect all
 three clean: `just format`, `just format-check && just lint`, `just test`.
@@ -87,8 +121,11 @@ covered.
 - `src/utils/prelude.rs` — the domain-logic hub: rebuild orchestration,
   metadata read/write transactions (`access_metadata_read_only`,
   `modify_metadata`), locking (`with_locked_env`), the conflict-preflight
-  functions. Large file; read the doc comment on the specific function you
-  need rather than the whole file.
+  functions, and the shared composition pair
+  `pin_environment_inputs` → `compose_environment` that both `rebuild` and
+  `rebuild --dry-run` run (see the "One composition, two callers" gotcha —
+  that pair is the invariant, not an implementation detail). Large file; read
+  the doc comment on the specific function you need rather than the whole file.
 - `src/utils/git_operations.rs` — the *only* place that shells out to `git`.
   Every git primitive is a named method (`merge_tree_compose`, `commit_tree`,
   `update_ref_cas`, ...). All of them build their subprocess through
@@ -146,6 +183,15 @@ covered.
   (replay also requires `source_branch_head` lineage — the current tip must
   be that commit or a descendant of it, not just match on stage OIDs),
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
+- `src/utils/build_record.rs` — what an environment branch's last build
+  *actually* contained, written as JSON at `refs/hitch/state/<env>` and
+  written by `rebuild_environment_opts` (not by `commands/rebuild.rs`, so
+  `promote`/`demote`/`approve`/post-release-rebuild get a current record
+  free). It replaces the old state layer's inference-from-timestamps. The
+  record's `RefEdit` rides `publish_branch`'s existing transaction, so
+  "environment tip moved" and "record describing that tip now exists" are
+  applied all-or-nothing. `read_state` has no production caller yet — P3
+  wires it into the state model.
 - `src/core/` — read-only view builders (workspace/status models).
   `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
   have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
@@ -161,6 +207,11 @@ covered.
   `tests/integration/*_tests.rs` is one file per command, `tests/unit/*` for
   pure-function tests. Follow the existing naming pattern:
   `test_<command>_<scenario>`.
+- `docs/superpowers/plans/` — house-format implementation plans (header block,
+  Global Constraints, `### Task N` with **Files**/**Interfaces** and checkbox
+  steps). The explainable-UX program's master plan and its phase plans live
+  here; P0's scenario-inventory table and behavioural-oracle tables are the
+  reference for any refactor that claims to preserve existing behaviour.
 
 ## Conventions
 
@@ -269,6 +320,72 @@ covered.
 
 ## Concrete gotchas, found the hard way
 
+**`refs/hitch/state/*` is a live pointer, not an archive — never add it to
+`cleanup`'s prunable set.** Every other family under `refs/hitch/` is either
+an archive (`prev/`, `backup/`, pruned to `ARCHIVE_REF_RETENTION` in
+`commands/cleanup.rs`'s `["backup", "prev"]`) or transient (`build/`,
+`publish/`, `resolutions/`). `state/` is the odd one out: exactly one record
+per environment, overwritten in place, and its whole job is to be the current
+answer to "what is in this environment branch". They look alike because they
+share the `refs/hitch/` root; they are not alike. `test_cleanup_does_not_prune_the_build_record_ref`
+holds the line, and asserts a prune that *does* fire alongside it so it can't
+pass vacuously.
+
+**A missing build record is `LegacyUnknown`, not "probably fine" — and
+`LegacyUnknown` is a normal state today, not a defect.** `read_state` returns
+a value for every failure mode (`LegacyUnknown` / `Known` /
+`ResultMismatch` / `Unreadable`) and `Err` only for genuine I/O failure,
+because the alternative is a `hitch status` that cannot render a repo
+containing one bad blob. Crucially, not every publish writes a record:
+`hitch release`'s branch and tag landing, `resolve`'s Mode A, and `resolve`'s
+Mode B all pass `extras: &[]` **on purpose**, because hitch has no truthful
+input for a record there (Mode B's included-branch list is the thing a human
+wrote by hand). So a reader finding no record must say "unknown", never
+substitute a guess — and the follow-up is to have those paths track what they
+composed, *not* to fabricate a record now. A corrupt, mismatched, or
+future-schema record is likewise an explicit value, not an `Err`. Note
+`read_state` probes `schema_version` **before** the full parse: deserializing
+straight into `EnvironmentBuildRecord` would fail on the first unknown field,
+so a newer hitch's record would be misreported as a corrupt blob instead of
+as "written by a newer hitch".
+
+**The state ref's `expected_old: Some(String::new())` is deliberate, and is
+NOT the publish-journal CAS mistake described under `publish_branch` above.**
+That entry's rule is about a *leftover record* being able to fail a
+transaction; here the opposite is true and the ref **must** be
+unconditionally writable. There is one live record per environment replaced in
+place, so under `RefEdit::Create` semantics the *second* rebuild of every
+environment would fail the whole batch — wedging publishing after exactly one
+successful build. A CAS buys nothing extra: the edit rides inside the same
+all-or-nothing batch as the branch move, which is itself CAS-guarded, so
+"unconditional" cannot clobber a concurrent publisher.
+
+**`metadata_sha` in a build record is a recorded fact and nothing more — it
+is not a usable staleness signal, and it looks broken if you expect it to
+equal `hitch-metadata`'s tip.** A rebuild brackets the commit it records on
+*both* sides with its own metadata writes: `with_locked_env` commits the
+lock before the declaration is read, and publishing commits the `rebuilt_at`
+stamp (`update_rebuilt_timestamp_for_rebuild` → `modify_metadata`) and the
+unlock after. So the recorded SHA is a commit that only ever existed as a
+transient tip, is not observable from outside the command at all, and is
+always a strict *ancestor* of the branch's final tip. On top of that it moves
+when an unrelated environment is promoted and returns to a previous value
+when a declaration edit is reverted. Staleness is decided by comparing
+`desired_branches` against the live refs — see `RepositoryStateSnapshot` in
+P3 — never by this field.
+
+**`hitch rebuild`'s exit code 2 is a CI contract, not a bug.** `rebuild` is
+the only command in the CLI with a non-0/1 exit code: `rebuild::run` returns
+`Ok(true)` when it succeeded *but held conflicting branches*, and `main.rs:122-129`
+turns that into `exit(2)` so a pipeline can warn on holds without failing the
+build. `Ok(false)` falls through to 0; any `Err` — including a halt-policy
+refusal — takes main's normal error path to 1. `--dry-run` uses the same
+signal: `Ok(true)` means "would hold", so a dry-run preview exits 2 as well.
+Collapsing `AppliedWithHolds` into a plain success would silently break every
+consumer relying on that distinction. The `stdout().flush()` immediately
+before the `process::exit` is load-bearing too — `process::exit` skips normal
+shutdown, so buffered output is lost when stdout isn't a TTY, i.e. in CI.
+
 **Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
 <X>` needs the *true common ancestor* of the two trees being compared —
 computed with `get_merge_base(a, b)` — never a branch's own current tip.
@@ -287,6 +404,78 @@ passing `--merge-base` — git computes it, including the virtual base for
 criss-cross histories, exactly as a real merge does. Don't "helpfully" add an
 explicit `--merge-base` there. The gotcha applies to the preflight callers
 (`merge_tree_write_tree_name_only`) that do pass one.
+
+**One composition, two callers — don't add a third.** `compose_environment`
+(`src/utils/prelude.rs`) is the *only* place a conflict verdict is reached:
+`rebuild_environment_opts` calls it, and `rebuild --dry-run` calls it over the
+same `pin_environment_inputs` result. That is the invariant, and it was
+expensive to establish: `--dry-run` used to short-circuit into
+`preflight_compatibility_report`, a *tree-based* loop over
+`merge_tree_write_tree_name_only` with an explicit `--merge-base`, while the
+build was a *commit-based* loop over `merge_tree_compose` (ORT, no explicit
+merge-base). Two doors into the merge engine, so two verdicts were possible,
+and the live symptom was `rebuild <env> --dry-run --replay-resolutions`
+reporting branches as **held** that the real build **composed** from the
+recording — exit 2, "would hold", for a build that was going to succeed.
+`preflight_compatibility_report` is **not yet** a display-only function, and
+the remaining mutation that depends on it is `hitch resolve`, not `rebuild`.
+`commands/resolve.rs:131` and `:180` use it to decide Mode A (rebase the branch
+onto the base) versus Mode B (peer conflict), and to refuse outright when it
+reports no conflict at all — so a preflight/composition disagreement would
+there pick the wrong resolution mode, not merely print a stale preview. The
+read-only callers are `conflicts.rs:44` and, via the offline
+`preflight_compatibility_report_local`, `status.rs:238` and `tree.rs:138`; those
+are legitimate, since a display preflight is allowed to approximate. Routing
+`resolve`'s mode selection through the shared primitive is **not yet done** —
+P1 scoped itself to `rebuild`'s dry-run, and re-plumbing `resolve` belongs with
+P4's planner. Do not add further dependants in the meantime.
+Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_replayed_resolutions`
+(resolve_tests) and `test_dry_run_and_real_build_agree_on_held_branches`
+(rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose
+— the two paths legitimately word the same event differently.
+
+**`compose_environment` must stay side-effect-free, and the dry-run's
+non-mutation is a separate, narrower guarantee.** Purity is what makes the
+preview safe: no ref moves, no locks, no checkout, no network. It's tested
+(`compose_environment_is_pure_and_deterministic`, which snapshots every ref
+before and after). But the dry-run's *ref* guarantee comes from
+`pin_environment_inputs(.., synchronize: false)`, not from composition —
+`synchronize_branches` fetches, fast-forwards local branches, and creates
+remote-only ones, so a preview that synchronized would move the user's
+branches. The real build passes `true`. That asymmetry is deliberate and
+documented at the call site: a preview reflects current *local* refs while the
+build syncs first, so a stale local branch can make the preview describe older
+content. That is ordinary staleness, categorically weaker than the bug P1
+removed (two merge engines disagreeing), but it is a real remaining difference
+— if a dry-run ever needs to be exactly predictive, the fix is to make sync a
+shared, user-visible step, not to re-add a second merge path.
+
+**A pre-check that intercepts makes a flag look like it works when it never
+reaches the code that matters.** `hitch rebuild <env> --on-conflict halt` was
+handled entirely by a separate pre-check in `commands/rebuild.rs`; the
+composition loop itself read `environment.on_conflict` from the config and had
+no way to receive the CLI override, so the flag had **no effect on the code
+that actually merged**. It worked by accident, through the duplicate. Deleting
+the duplicate (correctly — it was a second opinion from a second merge path)
+turned the flag into a silent no-op, which is how it was found. Generalised: if
+a flag's effect is observable only via a check that runs *instead of* the real
+operation, the flag is not wired to the operation. The override is now threaded
+explicitly as `rebuild_environment_opts(.., on_conflict_override: Option<OnConflict>)`,
+`None` meaning "use the environment's policy" — which is every caller except
+that one flag.
+
+The same duplicate was why a halt under `OnConflict::Halt` printed **two
+different reports** depending on an unrelated flag: the pre-check emitted
+`format_compatibility_report_for_rebuild`, while the composition's in-loop halt
+emitted `utils::conflict_report::format_conflict_report`, and only
+`--replay-resolutions` (which skipped the pre-check) ever reached the second.
+Both paths now halt inside `compose_environment` and render the former, which
+is why that formatter moved from `commands/rebuild.rs` into `prelude.rs` — the
+decider has to be able to render its own refusal. Consequence:
+`format_conflict_report` now has no production caller. It is kept (public,
+tested, strictly richer than what replaced it, and a plausible input for P7's
+display paths) and documented as a deletion candidate; nothing should call it
+to decide a mutation's outcome.
 
 **Composition happens in the object database, and must stay merge-identical.**
 `rebuild`/`release` build with `git merge-tree --write-tree -z` plus

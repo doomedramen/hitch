@@ -1,7 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::OnConflict;
 use crate::utils::prelude::{
-    access_metadata_read_only, preflight_compatibility_report, with_locked_env,
+    access_metadata_read_only, compose_environment, pin_environment_inputs, with_locked_env,
     CompatibilityConflict,
 };
 use anyhow::Result;
@@ -59,73 +59,96 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     crate::utils::prelude::pre_check(context)?;
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
 
-    let (base_branch, promoted_branches, env_on_conflict) =
-        access_metadata_read_only(context, |config| {
-            let env = config
-                .environments
-                .get(&args.env_name)
-                .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))?;
-            Ok((env.base.clone(), env.branches.clone(), env.on_conflict))
-        })?;
-    let on_conflict = args.on_conflict.unwrap_or(env_on_conflict);
+    let (environment, require_signed_resolutions) = access_metadata_read_only(context, |config| {
+        let env = config
+            .environments
+            .get(&args.env_name)
+            .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))?
+            .clone();
+        Ok((env, config.require_signed_resolutions))
+    })?;
+    let promoted_branches = environment.branches.clone();
+    let on_conflict = args.on_conflict.unwrap_or(environment.on_conflict);
 
     context.log_info(&format!(
-        "Checking compatibility of {} promoted branches...",
-        promoted_branches.len()
+        "Checking compatibility of {} promoted branch{}...",
+        promoted_branches.len(),
+        if promoted_branches.len() == 1 {
+            ""
+        } else {
+            "es"
+        }
     ));
 
     if args.dry_run {
-        let conflicts = preflight_compatibility_report(context, &base_branch, &promoted_branches)?;
-        if conflicts.is_empty() {
+        // Preview by running the real composition, not a tree-based
+        // approximation of it. `preflight_compatibility_report` used to answer
+        // this question here, and it could not see recorded resolutions — so
+        // `rebuild dev --dry-run --replay-resolutions` reported branches as
+        // held that replay would have composed. It also went through
+        // `merge-tree --write-tree-name-only` with a hand-passed
+        // `--merge-base`, i.e. a different door into the merge engine than the
+        // build. `pin_environment_inputs(.., false)` keeps the preview offline
+        // and read-only; see its doc comment for why the dry-run deliberately
+        // does not synchronize.
+        let inputs = pin_environment_inputs(context, &environment, false)?;
+        let result = compose_environment(
+            context,
+            &inputs,
+            &args.env_name,
+            on_conflict,
+            args.replay_resolutions,
+            require_signed_resolutions,
+            &mut |_| {},
+        )?;
+
+        if !result.replayed.is_empty() {
+            // Only the names are printed; the resolution *key* rides along in
+            // the data so a build record can cite it, but the CLI has never
+            // shown keys and this is not the place to start.
+            let names: Vec<&str> = result.replayed.iter().map(|r| r.branch.as_str()).collect();
+            context.log_info(&format!(
+                "♻️ {} branch{} would be composed from a recorded resolution: {}",
+                result.replayed.len(),
+                if result.replayed.len() == 1 { "" } else { "es" },
+                names.join(", ")
+            ));
+        }
+
+        if result.held.is_empty() {
+            // "branches", not "branchs": this line used to format
+            // `"{} branch{}"` with a `""`/`"s"` suffix, so every plural read
+            // "2 branchs". The `""`/`"es"` sibling lines were already right,
+            // which is why nothing caught it.
             context.log_success(&format!(
-                "'{}' would rebuild cleanly ({} branch{}).",
+                "'{}' would rebuild cleanly ({}).",
                 args.env_name,
-                promoted_branches.len(),
                 if promoted_branches.len() == 1 {
-                    ""
+                    "1 branch".to_string()
                 } else {
-                    "s"
+                    format!("{} branches", promoted_branches.len())
                 }
             ));
-            return Ok(false);
-        } else if on_conflict == OnConflict::Halt {
-            return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
-                &args.env_name,
-                &conflicts
-            )));
         } else {
-            context.log_warning(&format_held_report(&args.env_name, &conflicts));
+            context.log_warning(&format_held_report(&args.env_name, &result.held));
             context.log_success(&format!(
                 "'{}' would rebuild with {} of {} branches ({} held).",
                 args.env_name,
-                promoted_branches.len() - conflicts.len(),
+                promoted_branches.len() - result.held.len(),
                 promoted_branches.len(),
-                conflicts.len()
+                result.held.len()
             ));
-            return Ok(true);
         }
+
+        return Ok(!result.held.is_empty());
     }
 
-    // Halt policy refuses up front, before locking or creating anything, if
-    // any promoted branch conflicts — the original all-or-nothing behavior.
-    // Eject policy makes its decision live, branch by branch, inside
-    // rebuild_environment itself, using the same pinned SHAs the build uses
-    // (a single source of truth, rather than a second, separately-timed
-    // check that could in principle disagree with the real merge).
-    //
-    // Skipped when replaying: a recorded resolution may compose a conflict
-    // the read-only preflight (which knows nothing about resolutions) would
-    // flag, so the decision is deferred into rebuild_environment_opts, which
-    // tries replay first and only then halts on a still-unresolved conflict.
-    if on_conflict == OnConflict::Halt && !args.replay_resolutions {
-        let conflicts = preflight_compatibility_report(context, &base_branch, &promoted_branches)?;
-        if !conflicts.is_empty() {
-            return Err(anyhow::anyhow!(format_compatibility_report_for_rebuild(
-                &args.env_name,
-                &conflicts
-            )));
-        }
-    }
+    // No pre-check here. `compose_environment` makes the conflict decision
+    // in-loop, over the same pinned SHAs the build consumes, and that is the
+    // only place it is made — for the dry-run and the real run alike. The
+    // pre-check that used to live at this point was a second opinion from a
+    // different implementation, which is precisely what could disagree with
+    // the merge that followed it.
 
     // Step 3: Execute rebuild
     let replay = args.replay_resolutions;
@@ -134,10 +157,20 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             "Force rebuilding locked environment '{}'...",
             args.env_name
         ));
-        crate::utils::prelude::rebuild_environment_opts(context, &args.env_name, replay)?
+        crate::utils::prelude::rebuild_environment_opts(
+            context,
+            &args.env_name,
+            replay,
+            args.on_conflict,
+        )?
     } else {
         with_locked_env(context, &args.env_name, || {
-            crate::utils::prelude::rebuild_environment_opts(context, &args.env_name, replay)
+            crate::utils::prelude::rebuild_environment_opts(
+                context,
+                &args.env_name,
+                replay,
+                args.on_conflict,
+            )
         })?
     };
 
@@ -151,6 +184,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     }
 
     if !outcome.replayed.is_empty() {
+        let names: Vec<&str> = outcome.replayed.iter().map(|r| r.branch.as_str()).collect();
         context.log_info(&format!(
             "♻️ Composed {} branch{} from recorded resolutions: {}",
             outcome.replayed.len(),
@@ -159,7 +193,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             } else {
                 "es"
             },
-            outcome.replayed.join(", ")
+            names.join(", ")
         ));
     }
 
@@ -209,49 +243,6 @@ fn format_held_report(env_name: &str, held: &[CompatibilityConflict]) -> String 
             "  git checkout {} && git rebase {}\n",
             c.branch, c.conflicts_with
         ));
-    }
-
-    out
-}
-
-fn format_compatibility_report_for_rebuild(
-    env_name: &str,
-    conflicts: &[CompatibilityConflict],
-) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "✗ Cannot rebuild '{}' — compatibility check failed\n\n",
-        env_name
-    ));
-
-    for c in conflicts {
-        out.push_str(&format!(
-            "  {} conflicts with {}\n",
-            c.branch, c.conflicts_with
-        ));
-        for f in &c.conflicted_files {
-            out.push_str(&format!("    {}\n", f));
-        }
-        out.push('\n');
-    }
-
-    if let [only] = conflicts {
-        out.push_str(&format!("Fix {} first:\n", only.branch));
-        out.push_str(&format!(
-            "  git checkout {} && git rebase {}\n",
-            only.branch, only.conflicts_with
-        ));
-    } else {
-        out.push_str(&format!(
-            "Fix each of the {} branches above, then retry:\n",
-            conflicts.len()
-        ));
-        for c in conflicts {
-            out.push_str(&format!(
-                "  git checkout {} && git rebase {}\n",
-                c.branch, c.conflicts_with
-            ));
-        }
     }
 
     out

@@ -335,6 +335,7 @@ fn perform_release_core(
         context,
         target_branch,
         &new_sha,
+        &[],
         None,
         &retry_hint,
         &push_remedy,

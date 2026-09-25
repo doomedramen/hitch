@@ -436,6 +436,7 @@ fn finish_mode_a(
         context,
         branch,
         new_sha,
+        &[],
         None,
         retry_hint,
         &push_remedy,
@@ -731,8 +732,14 @@ fn continue_session(
         .rev_parse_opt(&format!("refs/remotes/origin/{}", env_name))?;
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
 
-    let publish_result =
-        publish_environment_build(context, env_name, &new_sha, &timestamp, &remote_sha_before);
+    let publish_result = publish_environment_build(
+        context,
+        env_name,
+        &new_sha,
+        &[],
+        &timestamp,
+        &remote_sha_before,
+    );
     cleanup();
     publish_result?;
 

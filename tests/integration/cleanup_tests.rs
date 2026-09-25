@@ -260,4 +260,137 @@ mod tests {
 
         Ok(())
     }
+
+    /// `refs/hitch/state/*` is a **live pointer**, not an archive, and cleanup
+    /// must never prune it.
+    ///
+    /// The distinction is easy to get wrong later because every other
+    /// `refs/hitch/*` family is either an archive (`prev`, `backup` — pruned
+    /// down to `ARCHIVE_REF_RETENTION`) or transient (`build`, `publish`,
+    /// `resolutions` — not hitch's to keep). `state` is the one ref whose
+    /// whole purpose is to be the *current* answer to "what is in this
+    /// environment branch", so deleting it as a stale artefact would silently
+    /// degrade the tool back to guessing. `cleanup.rs`'s prunable set names
+    /// `["backup", "prev"]` explicitly and this test is what holds it to that.
+    ///
+    /// Asserts both halves. "The state ref survived" alone would pass even if
+    /// cleanup had stopped pruning anything at all, so the archive refs are
+    /// planted and their post-cleanup count is checked too.
+    #[test]
+    fn test_cleanup_does_not_prune_the_build_record_ref() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // A real build, so the record is written by the product rather
+            // than planted — this is testing that cleanup spares it, not that
+            // it can be conjured.
+            env.git
+                .run(&["checkout", "-b", "feature-1"])?
+                .assert_success();
+            env.fs.write_file("1.txt", "one")?;
+            env.git.run(&["add", "."])?.assert_success();
+            env.git
+                .run(&["commit", "-m", "feature 1"])?
+                .assert_success();
+            env.git.run(&["checkout", "main"])?.assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            let state_oid_before = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(objectname)",
+                    "refs/hitch/state/dev",
+                ])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert!(
+                !state_oid_before.is_empty(),
+                "the promote's rebuild must have left a build record"
+            );
+
+            // Plant more archive refs than retention keeps, so cleanup has real
+            // work and the second assertion below is not vacuous.
+            let head = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            for i in 0..15 {
+                env.git
+                    .run(&[
+                        "update-ref",
+                        &format!("refs/hitch/prev/dev/2020010100{:04}", i),
+                        &head,
+                    ])?
+                    .assert_success();
+            }
+
+            env.hitch
+                .run()
+                .args(&["cleanup", "--apply"])
+                .execute()?
+                .assert_success();
+
+            // 1. The live record survived, unchanged and still readable.
+            let state_oid_after = env
+                .git
+                .run(&[
+                    "for-each-ref",
+                    "--format=%(objectname)",
+                    "refs/hitch/state/dev",
+                ])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert_eq!(
+                state_oid_after, state_oid_before,
+                "cleanup must not touch refs/hitch/state/dev — it is the live \
+                 answer to what the environment branch contains, not an archive"
+            );
+            let payload = env.git.run(&["cat-file", "-p", &state_oid_after])?.stdout();
+            let record: serde_json::Value = serde_json::from_str(&payload)?;
+            assert_eq!(
+                record["result_sha"].as_str().unwrap(),
+                env.git.run(&["rev-parse", "dev"])?.stdout().trim(),
+                "and it must still parse and describe the live tip"
+            );
+
+            // 2. Cleanup really did prune, so assertion 1 is about the state
+            // ref specifically rather than about cleanup doing nothing.
+            let remaining = env
+                .git
+                .run(&["for-each-ref", "--format=%(refname)", "refs/hitch/prev/dev"])?
+                .stdout();
+            let surviving: Vec<&str> = remaining
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect();
+            assert_eq!(
+                surviving.len(),
+                10,
+                "cleanup should have pruned the planted archive refs down to the \
+                 retention limit, but left {} of them: {:?}",
+                surviving.len(),
+                surviving
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
 }
