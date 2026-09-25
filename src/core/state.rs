@@ -48,7 +48,13 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Everything hitch knows about the repository's declared and built state, at
 /// one instant.
-#[derive(Debug, Clone)]
+// `PartialEq`/`Eq` so a whole snapshot can be compared — `crate::operations`'s
+// `ExecutionReceipt` carries one, and the plan-vs-apply tests compare what
+// hitch says the state is against what the repository actually is. The one
+// field that is not obviously a value is `captured_at`; it is a
+// `DateTime<Utc>`, so it is a value too, and a test comparing snapshots
+// should compare the environments rather than the capture time anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryStateSnapshot {
     /// Tip of `hitch-metadata` as read locally, if it resolves.
     ///

@@ -932,16 +932,17 @@ pub fn rebuild_environment_opts(
     let git_dir = std::path::PathBuf::from(context.git().get_git_dir());
     let _rebuild_lock = crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
 
-    // Get environment configuration to understand how to rebuild
-    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = config
-        .environments
-        .get(env_name)
-        .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))?
-        .clone();
-    let on_conflict = on_conflict_override.unwrap_or(environment.on_conflict);
-
-    // Set up step logging: sync+pin, one step per branch to merge, publish.
+    // Step logging spans planning *and* applying, so the caller owns one
+    // `StepLogger` and both halves report into it — a logger per phase would
+    // print two headers for one operation, and the header promises a step
+    // count that covers the whole thing.
+    let environment = access_metadata_read_only(context, |config| {
+        config
+            .environments
+            .get(env_name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))
+    })?;
     let merge_steps = environment.branches.len().max(1);
     let total_steps = 2 + merge_steps;
     let mut logger = StepLogger::new_with_output(
@@ -950,125 +951,27 @@ pub fn rebuild_environment_opts(
         context.output.clone(),
     );
 
-    // Step 1: synchronize base + every promoted branch once, then pin each to
-    // the concrete SHA we will actually build from. Everything below composes
-    // against these pinned values instead of the mutable branch names, so a
-    // ref moving mid-build (another push, a concurrent rebuild) cannot change
-    // what we compose. Shared with the `--dry-run` preview via
-    // `pin_environment_inputs`, so a preview cannot pin differently from the
-    // build it is previewing.
-    logger.step("Synchronizing branches".to_string());
-    let pinned = pin_environment_inputs(context, &environment, true)?;
-
-    // Snapshot the remote environment SHA now, before building, so the
-    // eventual push is leased against what we actually observed — not
-    // whatever `origin/<env>` happens to be once the build finishes.
-    let remote_env_sha_before = context
-        .git()
-        .rev_parse_opt(&format!("refs/remotes/origin/{}", env_name))?;
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-
-    // Step 2..N: compose the promoted branches, in order.
-    // `compose_environment` is the single implementation of that decision —
-    // the `--dry-run` preview calls the same function over the same pinned
-    // inputs, so a preview cannot disagree with the build it previews.
-    let composition = compose_environment(
-        context,
-        &pinned,
-        env_name,
-        on_conflict,
+    let options = crate::operations::rebuild::RebuildPlanOptions {
         replay,
-        config.require_signed_resolutions,
+        on_conflict: on_conflict_override,
+    };
+
+    // Plan, then apply, with the plan's own step callback threaded into both.
+    // `apply_rebuild_plan` validates the fingerprint before anything moves, so
+    // a plan that has gone stale in the window between the two is refused
+    // rather than landed.
+    let plan = crate::operations::rebuild::plan_rebuild(
+        context,
+        env_name,
+        options,
+        crate::operations::rebuild::PlanPurpose::Confirm,
         &mut |step| logger.step(step.to_string()),
     )?;
-
-    if environment.branches.is_empty() {
-        logger.step("No promoted branches to merge".to_string());
-    }
-
-    let new_sha = composition.result_sha.clone();
-
-    // The record of what this build consumed and produced, written *here*
-    // rather than in `src/commands/rebuild.rs` so that every caller which
-    // routes through `rebuild_environment_opts` — `promote`, `demote`,
-    // `approve`, and `release`'s post-release rebuild — gets a current record
-    // for free. Building it in the command would make the record only as fresh
-    // as the one command someone remembered to instrument, which is exactly
-    // the stale-Actual inference this replaces.
-    //
-    // `desired` is `pinned` verbatim, and `included` is `pinned` *filtered by
-    // membership*, never a `filter_map` over `composition.included` looking
-    // each name up: composition walks `pinned.branches` in order, so
-    // `included` is a subsequence of it and this yields the same list in
-    // promotion order — while a name that failed to look up would be silently
-    // dropped, and a record that drops a branch lies about what was built.
-    let pin = |(branch, sha): &(String, String)| crate::utils::build_record::PinnedBranch {
-        branch: branch.clone(),
-        sha: sha.clone(),
-    };
-    let desired: Vec<crate::utils::build_record::PinnedBranch> =
-        pinned.branches.iter().map(pin).collect();
-    let included: Vec<crate::utils::build_record::PinnedBranch> = pinned
-        .branches
-        .iter()
-        .filter(|(branch, _)| composition.included.iter().any(|n| n == branch))
-        .map(pin)
-        .collect();
-
-    let record = crate::utils::build_record::EnvironmentBuildRecord::new(
-        env_name,
-        crate::utils::build_record::resolve_metadata_sha(context.git())?,
-        pinned.base_name.clone(),
-        pinned.base_sha.clone(),
-        desired,
-        included,
-        // Cloned: `composition.held` is moved into the returned
-        // `RebuildOutcome` below, and the record only borrows it.
-        composition.held.clone(),
-        composition.replayed.clone(),
-        new_sha.clone(),
-    );
-
-    // Unconditional overwrite (`Update` with an empty expected-old), not
-    // `Create`. There is exactly one live record per environment and it is
-    // replaced in place, so a second rebuild would fail the whole batch under
-    // create semantics — wedging publishing for that environment after exactly
-    // one successful build. A CAS would buy nothing here that the enclosing
-    // all-or-nothing transaction does not already give, since the branch move
-    // it rides with is itself guarded.
-    let (state_ref, state_blob) = crate::utils::build_record::record_blob(context.git(), &record)?;
-    let state_edit = crate::utils::git_operations::RefEdit::Update {
-        refname: state_ref,
-        new_oid: state_blob,
-        expected_old: Some(String::new()),
-    };
-
-    // The composed commit is only reachable from this process until the
-    // publish CAS lands. Anchor it under a ref for that window so a
-    // concurrent `git gc --prune=now` cannot collect it out from under us.
-    let build_ref = format!("refs/hitch/build/{}/{}", env_name, timestamp);
-    context.git().update_ref(&build_ref, &new_sha)?;
-    let drop_build_ref = || {
-        let _ = context.git().delete_ref(&build_ref);
-    };
-
-    // Publish, push, and record the timestamp — shared with `hitch resolve`'s
-    // Mode B, which produces a build the same way but from a hand-resolved
-    // worktree instead of a straight-through compose. The anchor ref is only
-    // dropped *after* publish is attempted, so the new commit stays reachable
-    // for the whole window until `refs/heads/<env>` takes over that job.
-    logger.step(format!("Publishing '{}'", env_name));
-    let publish_result = publish_environment_build(
-        context,
-        env_name,
-        &new_sha,
-        std::slice::from_ref(&state_edit),
-        &timestamp,
-        &remote_env_sha_before,
-    );
-    drop_build_ref();
-    publish_result?;
+    let held = plan.detail.held.clone();
+    let replayed = plan.detail.replayed.clone();
+    let receipt = crate::operations::rebuild::apply_rebuild_plan(context, &plan, &mut |step| {
+        logger.step(step.to_string())
+    })?;
 
     logger.complete();
 
@@ -1076,10 +979,18 @@ pub fn rebuild_environment_opts(
         "✓ Rebuild process completed for environment '{}'",
         env_name
     ));
-    Ok(RebuildOutcome {
-        held: composition.held,
-        replayed: composition.replayed,
-    })
+    // The receipt is the richer account of what happened; `RebuildOutcome` is
+    // the narrow one four other commands already consume, and it is derived
+    // from the same `plan.detail` the receipt was, so the two cannot disagree.
+    debug_assert_eq!(
+        receipt.outcome,
+        if held.is_empty() {
+            crate::operations::model::OperationOutcome::Applied
+        } else {
+            crate::operations::model::OperationOutcome::AppliedWithHolds
+        }
+    );
+    Ok(RebuildOutcome { held, replayed })
 }
 
 /// If `hitch setup` has been run for this repository, use the deploy key to
@@ -1300,6 +1211,58 @@ pub(crate) fn resync_checkouts(
 /// fast-forward/merge — suggesting `-f` there would tell a user to
 /// force-push a release target, exactly what `hitch setup`'s
 /// branch-protection ruleset exists to prevent.
+/// What became of the push that `publish_branch` owed, if any.
+///
+/// This enum exists because of a specific lie the CLI could previously tell.
+/// A failed push is not fatal to a publish — the local branch really did move,
+/// and the journal record genuinely remains so the next mutating command
+/// reports the debt — so `publish_branch` logs a warning and returns `Ok(())`.
+/// That is right for a CLI and useless for a *receipt*: a receipt built from
+/// `Ok(())` reports the operation as applied, and a reader concludes
+/// everything is synced when the remote is behind. The information exists at
+/// the call site and was being thrown away; these variants are the minimum
+/// that keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// Pushing was not attempted: `--no-push`/`HITCH_NO_PUSH`, or there is
+    /// nothing to push. Nothing is owed to a remote.
+    NotAttempted,
+    /// A human was asked and said no. Nothing is owed, but the remote *is*
+    /// behind — a declined push is a decision, not a success.
+    Declined,
+    /// The push landed.
+    Pushed,
+    /// The push was attempted and failed. The local branch is published; the
+    /// remote is not, and the journal record survives so the debt is
+    /// reported again until it is settled.
+    Failed { error: String },
+}
+
+impl PushOutcome {
+    /// True when the remote is now known to hold what we published.
+    pub fn landed(self) -> bool {
+        matches!(self, PushOutcome::Pushed)
+    }
+
+    /// True when something is still owed to a remote — a failed push, or a
+    /// declined one. Deliberately *not* the same as "failed": both leave the
+    /// remote behind, and a receipt that called a declined push an error
+    /// would be as dishonest as one that called a failed push a success.
+    pub fn owes_push(self) -> bool {
+        matches!(self, PushOutcome::Declined | PushOutcome::Failed { .. })
+    }
+}
+
+/// What `publish_branch` did, for a caller that needs to say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishOutcome {
+    pub push: PushOutcome,
+    /// Whether the publish-journal record is gone. `false` means it was
+    /// deliberately left in place, which is the only correct outcome of a
+    /// push that did not land.
+    pub journal_cleared: bool,
+}
+
 #[allow(clippy::too_many_arguments)] // `extras` rides the same transaction as `new_sha`; a struct isn't worth it for one private, 3-caller function whose params are heterogeneous git-plumbing values
 pub(crate) fn publish_branch(
     context: &GlobalContext,
@@ -1309,8 +1272,8 @@ pub(crate) fn publish_branch(
     backup_timestamp: Option<&str>,
     retry_hint: &str,
     push_remedy: &str,
-    push: impl FnOnce() -> Result<()>,
-) -> Result<()> {
+    push: impl FnOnce() -> Result<PushOutcome>,
+) -> Result<PublishOutcome> {
     let branch_ref = format!("refs/heads/{}", branch);
     let old_sha = context.git().rev_parse_opt(&branch_ref)?;
 
@@ -1451,14 +1414,24 @@ pub(crate) fn publish_branch(
     if !context.should_push() {
         // Nothing else is owed — drop the record now.
         crate::utils::publish_journal::clear(context, branch);
-        return Ok(());
+        return Ok(PublishOutcome {
+            push: PushOutcome::NotAttempted,
+            journal_cleared: true,
+        });
     }
 
-    match push() {
-        Ok(()) => {
+    let push_outcome = match push() {
+        Ok(outcome) => {
+            // `Pushed` and `Declined` both *settle* the obligation — a real
+            // push landed, or a human declined and so nothing is owed. They
+            // differ only in what the caller is told, which is why they are
+            // two variants of one `Ok` and not one. The abort point, the
+            // `mark_push_done`, and the clear therefore fire for both, exactly
+            // as they did when a declined push reported `Ok(())`.
             crate::utils::publish_journal::maybe_abort_for_test("push-succeeded");
             let _ = crate::utils::publish_journal::mark_push_done(context, branch);
             crate::utils::publish_journal::clear(context, branch);
+            outcome
         }
         Err(e) => {
             context.log_warning(&format!(
@@ -1472,10 +1445,16 @@ pub(crate) fn publish_branch(
             ));
             // Leave the record in place — this is precisely the state the
             // journal exists to remember.
+            PushOutcome::Failed {
+                error: e.to_string(),
+            }
         }
-    }
+    };
 
-    Ok(())
+    Ok(PublishOutcome {
+        journal_cleared: !matches!(push_outcome, PushOutcome::Failed { .. }),
+        push: push_outcome,
+    })
 }
 
 /// Publish `new_sha` as environment `env_name`'s new content: back up the
@@ -1508,11 +1487,11 @@ pub(crate) fn publish_environment_build(
     extras: &[crate::utils::git_operations::RefEdit],
     backup_timestamp: &str,
     remote_sha_before: &Option<String>,
-) -> Result<()> {
+) -> Result<PublishOutcome> {
     let retry_hint = format!("hitch rebuild {}", env_name);
     let push_remedy = format!("hitch push {} -f", env_name);
 
-    publish_branch(
+    let outcome = publish_branch(
         context,
         env_name,
         new_sha,
@@ -1534,17 +1513,20 @@ pub(crate) fn publish_environment_build(
                     env_name, env_name, env_name
                 ));
                 // A declined push is not a failure — the local publish already
-                // succeeded. Report it as success to `publish_branch` so the
-                // journal record clears; there is nothing left to retry.
-                return Ok(());
+                // succeeded, and a human said the remote is not to be touched,
+                // so nothing is owed and there is nothing to retry. It is not a
+                // *success* either: the remote is behind, and the caller is
+                // told so via the variant rather than by inferring it from an
+                // `Ok(())` that could have meant either.
+                return Ok(PushOutcome::Declined);
             }
 
             context.log_info(&format!(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name
             ));
-            force_push_with_deploy_key_if_configured(context, env_name, remote_sha_before).map_err(
-                |e| {
+            force_push_with_deploy_key_if_configured(context, env_name, remote_sha_before)
+                .map_err(|e| {
                     anyhow::anyhow!(
                         "Failed to force push rebuilt '{}' branch: {}. Someone may have \
                          pushed to '{}' while this rebuild ran, or the deploy key may be \
@@ -1553,13 +1535,13 @@ pub(crate) fn publish_environment_build(
                         e,
                         env_name
                     )
-                },
-            )
+                })
+                .map(|()| PushOutcome::Pushed)
         },
     )?;
 
     update_rebuilt_timestamp_for_rebuild(context, env_name)?;
-    Ok(())
+    Ok(outcome)
 }
 
 /// Attempt to compose a conflicting branch from a recorded resolution rather

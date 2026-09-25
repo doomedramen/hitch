@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0, P1, and P2 are authored and complete; P3 is
+independently of this program. P0–P4 are authored and complete; P5 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
@@ -193,7 +193,12 @@ covered.
   *actually* contained, written as JSON at `refs/hitch/state/<env>` and
   written by `rebuild_environment_opts` (not by `commands/rebuild.rs`, so
   `promote`/`demote`/`approve`/post-release-rebuild get a current record
-  free). It replaces the old state layer's inference-from-timestamps. The
+  free). Since P4 the `hitch rebuild` path writes it from a *plan* —
+  `plan_rebuild` computes the `RefEdit` once at plan time and
+  `apply_rebuild_plan` passes that same value through verbatim, because the
+  record is a claim about *that* composition and recomputing it at apply time
+  would be a second decision point. It replaces the old state layer's
+  inference-from-timestamps. The
   record's `RefEdit` rides `publish_branch`'s existing transaction, so
   "environment tip moved" and "record describing that tip now exists" are
   applied all-or-nothing. Its reader, `read_state`, is the sole input to
@@ -212,6 +217,14 @@ covered.
     have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
     Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
     `details.rs` and `status.rs` are the other two view builders.
+- `src/operations/` — the plan → apply → receipt architecture, one operation
+  at a time. `model.rs` is operation-agnostic (`OperationPlan<I>` generic over
+  its per-operation detail, `PlanFingerprint`, `PlannedEffect`/`AppliedEffect`,
+  `ExecutionReceipt`, `OperationOutcome`, `PlanApplyError`); `rebuild.rs` is
+  the only implemented operation. A new operation adds a `*PlanDetail` and a
+  `plan_*`/`apply_*` pair, and reuses the fingerprint, validation, and receipt
+  assembly as shared machinery rather than re-deriving them. One planner per
+  operation, on purpose — see the "one planner per operation" gotcha.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
@@ -327,7 +340,10 @@ covered.
   done via `publish_journal::mark_push_done`) once the push succeeds, cleared
   if the user declines the push prompt, and left in place on push failure, so
   a crash in any of those windows is recoverable or at least reported by
-  `recover` on the next mutating command.
+  `recover` on the next mutating command. Since P4 `publish_branch` returns
+  `PublishOutcome { push, journal_cleared }` rather than `()`, because a caller
+  building a receipt has to be able to tell "pushed" from "declined" from
+  "failed and still owed" — see the gotcha below.
 - **Compare checkout paths with `GitOperations::same_checkout_path`, never
   `==`.** `git worktree list` reports fully resolved paths; on macOS the temp
   dir and plenty of real project paths sit behind symlinks, so a string
@@ -484,6 +500,98 @@ consumer relying on that distinction. The `stdout().flush()` immediately
 before the `process::exit` is load-bearing too — `process::exit` skips normal
 shutdown, so buffered output is lost when stdout isn't a TTY, i.e. in CI.
 
+`OperationOutcome::AppliedWithHolds` is the *typed* expression of the same
+fact — `apply_rebuild_plan` returns it, and `rebuild::run` still returns
+`Ok(true)` for the same condition. The two are not interchangeable: the enum is
+what a receipt records, the `bool` is what `main.rs` turns into exit 2. Adding
+a third path that computes holds its own way is the drift to watch for;
+`tests/integration/plan_apply_tests.rs` checks both the library verdict and the
+CLI exit code in the same test, so they cannot quietly diverge.
+
+**A plan is a decision, not a recipe — and the reason is the wall clock.**
+`plan_rebuild` *composes* the environment and carries the resulting commit;
+`apply_rebuild_plan` lands that commit rather than recomposing one. This is not
+an optimisation. `commit_tree` stamps the ambient time with no
+`GIT_AUTHOR_DATE` override, so re-composing the same inputs a second later
+yields a **different SHA** — a re-planning executor would publish a commit other
+than the one its own receipt promised, and the `^{tree}` content would be
+identical, so nothing else would catch it. Three consequences follow, all
+already bitten or already guarded:
+- Two compositions of identical inputs must be compared on `^{tree}`, never on
+  the commit. This is the same trap the crash-fuzz convergence check in
+  `crash_recovery_tests.rs` already documents.
+- The commit is unreachable until the CAS lands, so the plan **anchors** it
+  under `refs/hitch/build/<env>/<sha>` for the window between planning and
+  publishing, exactly as `rebuild_environment_opts` always did — moved earlier
+  in the sequence, not a new mechanism.
+- That anchor is a live leak, because nothing prunes `refs/hitch/build/*`
+  (`cleanup`'s prunable set is `["backup", "prev"]` — see the `state/` entry
+  above for the sibling trap). `apply_rebuild_plan` therefore calls
+  `discard_plan` as an unconditional `finally` around its inner call, **not**
+  as a numbered step: the exit path most likely to be missed is the `?` on
+  `validate_plan`, which fires before anything else has run and is invisible on
+  a green run. Do not "tidy" it into a step, and give every new planner the
+  same `finally`.
+
+**`PlanPurpose` is an enum because "a preview that mutates" must be
+unrepresentable.** `Preview` differs from `Confirm` in *all three* ways that
+make `--dry-run` safe — it does not synchronise branches, does not take the
+environment lock, and does not anchor. Encoding them as one variant means a new
+caller cannot opt into safety by omission, and P1's deliberate
+`synchronize: false` asymmetry for previews is preserved by construction rather
+than by a comment. `--dry-run` in `commands/rebuild.rs` is now a *renderer*
+over `plan_rebuild(…, PlanPurpose::Preview, …)`, so it reads
+`plan.detail.held` / `plan.detail.replayed` and never calls
+`compose_environment` itself.
+
+**A halt is decided inside composition, so a plan can never report one.**
+`OnConflict::Halt` returns `Err` from inside `compose_environment`, which means
+the plan is never built at all. That is the right behaviour — the operation
+refused rather than partially applying — but it makes `PlanWarning.blocking`
+unreachable from `rebuild` and `PlanApplyError::PolicyBlocked` unconstructed
+there. Both are kept deliberately: approvals (P5) are the intended first
+producers. Do not "fix" the halt by moving it after planning; that would
+introduce a plan for an operation that never happens. A manual check confirms
+`--on-conflict halt` still exits 1 with the single `format_compatibility_report_for_rebuild`
+report and its `git checkout … && git rebase …` next step.
+
+**`publish_branch` returns `PublishOutcome { push, journal_cleared }`, and
+that is not optional detail.** A receipt cannot be assembled from `Ok(())`:
+"published and pushed", "published, push declined", and "published, push
+failed — the journal record is still owed" are three different truths, and the
+`PushOutcome` is what distinguishes them. `a_failed_push_is_reported_as_owed_rather_than_as_fully_synced`
+in `plan_apply_tests.rs` is the test that fails if a failed push is ever
+flattened into a success; it uses a `pre-receive` hook in a bare origin so
+`fetch` still works and the failure is unambiguously a *push* failure. A
+declined push still fires `maybe_abort_for_test("push-succeeded")`,
+`mark_push_done`, and `clear` — refusing to push still settles the obligation.
+
+**A fingerprint is a whitelist of what a plan depends on, not a snapshot of
+every ref.** `PlanFingerprint { metadata_sha, refs, remote_refs,
+resolution_keys }` names the environment's base, its promoted branches, its own
+ref, the remote-tracking refs it read, and the resolution keys it replayed.
+Adding an unrelated branch does not make every plan stale, and that is
+intentional. Resolution *keys* suffice without the blobs because a key is a
+content hash — a key match **is** an identical-content match, so putting the
+blobs in the fingerprint would buy nothing. A resolution that has *disappeared*
+counts as a change, not a non-event: the replay would now miss, so the branch
+would be **held** instead of composed, which is a materially different
+operation. `PlanFingerprint::digest` is a git object hash over a hand-rolled
+canonical encoding (via `hash_object_bytes`, the same mechanism as
+`resolutions::resolution_key`) — deliberately not `serde_json`, whose output is
+not stable enough for "same inputs → same digest" to be a testable property, and
+deliberately not a new `sha2` dependency.
+
+**One planner per operation, and a typed error that survives `anyhow`.**
+`PlanApplyError` derives `std::error::Error` and crosses the boundary via
+`into_anyhow` rather than being stringified, so
+`err.downcast_ref::<PlanApplyError>()` still yields a `StalePlan` with its
+`changed` list. "Refused *because it went stale*" has to stay a distinguishable
+claim, not "something failed" — that distinction is the entire value of the
+error type. `validate_plan` is `pub` so tests can assert a refusal with the
+repository unmoved, which is what distinguishes "the validator said no" from
+"the validator said no and the apply then stopped".
+
 **Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
 <X>` needs the *true common ancestor* of the two trees being compared —
 computed with `get_merge_base(a, b)` — never a branch's own current tip.
@@ -504,9 +612,11 @@ explicit `--merge-base` there. The gotcha applies to the preflight callers
 (`merge_tree_write_tree_name_only`) that do pass one.
 
 **One composition, two callers — don't add a third.** `compose_environment`
-(`src/utils/prelude.rs`) is the *only* place a conflict verdict is reached:
-`rebuild_environment_opts` calls it, and `rebuild --dry-run` calls it over the
-same `pin_environment_inputs` result. That is the invariant, and it was
+(`src/utils/prelude.rs`) is the *only* place a conflict verdict is reached.
+Since P4 that is `plan_rebuild` (`src/operations/rebuild.rs`) alone: a real
+rebuild reaches it by way of a `Confirm` plan, and `--dry-run` by way of a
+`Preview` one, both over the same `pin_environment_inputs` result. That is the
+invariant, and it was
 expensive to establish: `--dry-run` used to short-circuit into
 `preflight_compatibility_report`, a *tree-based* loop over
 `merge_tree_write_tree_name_only` with an explicit `--merge-base`, while the
@@ -524,9 +634,11 @@ there pick the wrong resolution mode, not merely print a stale preview. The
 read-only callers are `conflicts.rs:44` and, via the offline
 `preflight_compatibility_report_local`, `status.rs:238` and `tree.rs:138`; those
 are legitimate, since a display preflight is allowed to approximate. Routing
-`resolve`'s mode selection through the shared primitive is **not yet done** —
-P1 scoped itself to `rebuild`'s dry-run, and re-plumbing `resolve` belongs with
-P4's planner. Do not add further dependants in the meantime.
+`resolve`'s mode selection through the shared primitive is **still not done**.
+P1 scoped itself to `rebuild`'s dry-run, and P4 built the planner `resolve`
+would need to choose a mode from — but deliberately did not re-plumb `resolve`
+itself, so its two decision points are untouched. Do not add further dependants
+in the meantime.
 Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_replayed_resolutions`
 (resolve_tests) and `test_dry_run_and_real_build_agree_on_held_branches`
 (rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose
@@ -540,7 +652,9 @@ before and after). But the dry-run's *ref* guarantee comes from
 `pin_environment_inputs(.., synchronize: false)`, not from composition —
 `synchronize_branches` fetches, fast-forwards local branches, and creates
 remote-only ones, so a preview that synchronized would move the user's
-branches. The real build passes `true`. That asymmetry is deliberate and
+branches. The real build passes `true`. Since P4 that choice is made by the
+`PlanPurpose::Preview` variant rather than at the call site, so a future planner
+cannot get it wrong by forgetting an argument. That asymmetry is deliberate and
 documented at the call site: a preview reflects current *local* refs while the
 build syncs first, so a stale local branch can make the preview describe older
 content. That is ordinary staleness, categorically weaker than the bug P1

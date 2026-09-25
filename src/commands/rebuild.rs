@@ -1,9 +1,7 @@
 use crate::commands::global_context::GlobalContext;
+use crate::operations::rebuild::{plan_rebuild, PlanPurpose, RebuildPlanOptions};
 use crate::types::OnConflict;
-use crate::utils::prelude::{
-    access_metadata_read_only, compose_environment, pin_environment_inputs, with_locked_env,
-    CompatibilityConflict,
-};
+use crate::utils::prelude::{access_metadata_read_only, with_locked_env, CompatibilityConflict};
 use anyhow::Result;
 use clap::Args;
 
@@ -59,16 +57,19 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     crate::utils::prelude::pre_check(context)?;
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
 
-    let (environment, require_signed_resolutions) = access_metadata_read_only(context, |config| {
-        let env = config
+    // Only the branch list is needed here. The environment's `on_conflict` and
+    // the repo's `require_signed_resolutions` are both read by the planner
+    // itself, from the same config read it composes against — threading them
+    // through the command would be a second copy of the declaration to keep in
+    // step with the one the planner actually uses.
+    let environment = access_metadata_read_only(context, |config| {
+        config
             .environments
             .get(&args.env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))?
-            .clone();
-        Ok((env, config.require_signed_resolutions))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", args.env_name))
     })?;
     let promoted_branches = environment.branches.clone();
-    let on_conflict = args.on_conflict.unwrap_or(environment.on_conflict);
 
     context.log_info(&format!(
         "Checking compatibility of {} promoted branch{}...",
@@ -81,41 +82,55 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     ));
 
     if args.dry_run {
-        // Preview by running the real composition, not a tree-based
-        // approximation of it. `preflight_compatibility_report` used to answer
-        // this question here, and it could not see recorded resolutions — so
-        // `rebuild dev --dry-run --replay-resolutions` reported branches as
-        // held that replay would have composed. It also went through
-        // `merge-tree --write-tree-name-only` with a hand-passed
-        // `--merge-base`, i.e. a different door into the merge engine than the
-        // build. `pin_environment_inputs(.., false)` keeps the preview offline
-        // and read-only; see its doc comment for why the dry-run deliberately
-        // does not synchronize.
-        let inputs = pin_environment_inputs(context, &environment, false)?;
-        let result = compose_environment(
+        // Preview by planning, not by composing separately. Both paths call
+        // `plan_rebuild`, which calls `compose_environment` — the same one
+        // implementation, over the same pinned inputs, so a preview cannot
+        // disagree with the build it previews.
+        //
+        // `preflight_compatibility_report` used to answer this question here,
+        // and it could not see recorded resolutions — so `rebuild dev
+        // --dry-run --replay-resolutions` reported branches as held that replay
+        // would have composed. It also went through `merge-tree
+        // --write-tree-name-only` with a hand-passed `--merge-base`, i.e. a
+        // different door into the merge engine than the build.
+        //
+        // `PlanPurpose::Preview` is what keeps the preview offline and
+        // read-only: no synchronisation (see its doc comment for why that
+        // asymmetry is deliberate), no environment lock, no anchor ref.
+        let plan = plan_rebuild(
             context,
-            &inputs,
             &args.env_name,
-            on_conflict,
-            args.replay_resolutions,
-            require_signed_resolutions,
+            RebuildPlanOptions {
+                replay: args.replay_resolutions,
+                on_conflict: args.on_conflict,
+            },
+            PlanPurpose::Preview,
             &mut |_| {},
         )?;
 
-        if !result.replayed.is_empty() {
+        if !plan.detail.replayed.is_empty() {
             // Only the names are printed; the resolution *key* rides along in
             // the data so a build record can cite it, but the CLI has never
             // shown keys and this is not the place to start.
-            let names: Vec<&str> = result.replayed.iter().map(|r| r.branch.as_str()).collect();
+            let names: Vec<&str> = plan
+                .detail
+                .replayed
+                .iter()
+                .map(|r| r.branch.as_str())
+                .collect();
             context.log_info(&format!(
                 "♻️ {} branch{} would be composed from a recorded resolution: {}",
-                result.replayed.len(),
-                if result.replayed.len() == 1 { "" } else { "es" },
+                plan.detail.replayed.len(),
+                if plan.detail.replayed.len() == 1 {
+                    ""
+                } else {
+                    "es"
+                },
                 names.join(", ")
             ));
         }
 
-        if result.held.is_empty() {
+        if plan.detail.held.is_empty() {
             // "branches", not "branchs": this line used to format
             // `"{} branch{}"` with a `""`/`"s"` suffix, so every plural read
             // "2 branchs". The `""`/`"es"` sibling lines were already right,
@@ -130,17 +145,17 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
                 }
             ));
         } else {
-            context.log_warning(&format_held_report(&args.env_name, &result.held));
+            context.log_warning(&format_held_report(&args.env_name, &plan.detail.held));
             context.log_success(&format!(
                 "'{}' would rebuild with {} of {} branches ({} held).",
                 args.env_name,
-                promoted_branches.len() - result.held.len(),
+                promoted_branches.len() - plan.detail.held.len(),
                 promoted_branches.len(),
-                result.held.len()
+                plan.detail.held.len()
             ));
         }
 
-        return Ok(!result.held.is_empty());
+        return Ok(!plan.detail.held.is_empty());
     }
 
     // No pre-check here. `compose_environment` makes the conflict decision

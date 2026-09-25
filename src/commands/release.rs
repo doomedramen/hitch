@@ -339,7 +339,10 @@ fn perform_release_core(
         None,
         &retry_hint,
         &push_remedy,
-        || push_branch_with_deploy_key_if_configured(context, target_branch),
+        || {
+            push_branch_with_deploy_key_if_configured(context, target_branch)
+                .map(|()| crate::utils::prelude::PushOutcome::Pushed)
+        },
     );
     cleanup();
     publish_result?;

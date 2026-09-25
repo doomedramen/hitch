@@ -432,6 +432,12 @@ fn finish_mode_a(
     // base forward, so the new tip is never a fast-forward of whatever is
     // already on origin. A plain push here would simply be rejected.
     let push_remedy = format!("hitch push {} -f", branch);
+    // The `PublishOutcome` is deliberately dropped here. Mode A has no receipt
+    // to fill in — P4 gave receipts to `rebuild` only — and the value it would
+    // carry (pushed vs declined vs failed) is already reported to the user by
+    // `publish_branch`'s own logging, which is the correct place for a
+    // non-migrated operation's guidance. When `resolve` gains a plan of its
+    // own, this is where the outcome gets consumed.
     crate::utils::prelude::publish_branch(
         context,
         branch,
@@ -451,14 +457,14 @@ fn finish_mode_a(
                     "Not pushed. Push manually when ready: hitch push {} -f",
                     branch
                 ));
-                return Ok(());
+                return Ok(crate::utils::prelude::PushOutcome::Declined);
             }
 
             context.log_info(&format!("Force pushing rebased '{}' to origin", branch));
             match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
                 Ok(()) => {
                     context.log_success(&format!("✓ Pushed '{}'", branch));
-                    Ok(())
+                    Ok(crate::utils::prelude::PushOutcome::Pushed)
                 }
                 Err(e) => Err(anyhow::anyhow!(
                     "Failed to push '{}': {}. Someone may have pushed to '{}' in the meantime.",

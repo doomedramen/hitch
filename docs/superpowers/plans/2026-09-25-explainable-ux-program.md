@@ -16,15 +16,16 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Three commits, so far:
+Four commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
 - `310de28` — the P0–P2 phase plans' "As executed" sections.
+- `05f7126` — P3: the new `src/core/state.rs`, the timestamp→SHA staleness fix, and the pure `core/status.rs` projection.
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
-**P0, P1, P2, and P3 are complete. P4 is next** — see the P3 phase plan's "What P4 inherits" section for the four things it must not get wrong, and `src/core/state.rs` for the model its planner will render. `read_state` now has its production reader, and `core/status.rs` no longer contains a staleness check at all.
+**P0–P4 are complete. P5 is next** — see the P4 phase plan's "What P5 inherits" for the four things it must not get wrong. The short version: `src/operations/` has a planner, an executor, and a receipt, wired end to end for `rebuild` only; `rebuild_environment_opts` still exists as a thin plan-then-apply wrapper and is still what `promote`, `demote`, `approve`, and `release` call, so **those four still do not show a plan** — that is P5's job, not a bug to fix in passing.
 
 ---
 
@@ -103,7 +104,7 @@ P0  scenario inventory
      P10 docs + legacy removal ─────────┘
 ```
 
-**Authoring note:** P0–P3 are authored and **all four are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, `2026-09-25-explainable-ux-P2-build-provenance.md`, and `2026-09-25-explainable-ux-P3-state-model.md`. Each carries an "Implementation status" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P4's task steps are authored next, because P3 rewrote `core/status.rs` into a pure projection of `src/core/state.rs` and moved the verdict out of `commands/status.rs` entirely — the file `main.rs` and P4's planner both dispatch through now points at different code than it did before P3. P5–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
+**Authoring note:** P0–P4 are authored and **all five are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, `2026-09-25-explainable-ux-P2-build-provenance.md`, `2026-09-25-explainable-ux-P3-state-model.md`, and `2026-09-25-explainable-ux-P4-plan-apply.md`. Each carries an "As executed" / "Implementation status" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P5's task steps are authored next, because P4 created `src/operations/` — a new module with a planner, an executor, and a receipt — and P5 is the first phase to consume it, so its `file:lines` references would all be wrong against the tree as P4 authored them. P5–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
 
 **What P1 handed forward, beyond `compose_environment` and `PinnedInputs`:**
 
@@ -117,6 +118,15 @@ P0  scenario inventory
 - **`core/status.rs` is now a pure projection** — `build_status_model(&snapshot)`, no `GlobalContext`, no repo handle. That is deliberate: it makes "the view cannot disagree with the model" true by construction rather than by discipline, and P4's dry-run/preview output should take the same shape. `commands/status.rs` now formats and decides nothing.
 - **`preflight_compatibility_report` is still a prediction, and P3 made that explicit rather than fixing it.** The ⛔ glyph used to print "held on rebuild" for a *next-build* prediction, which reads as a fact about the branch in front of you. It now consults the build record's `held` list (a fact) first and words the two cases differently — "held in the last build" vs "would be held on the next rebuild". This is a naming fix, not a resolution of P1's open item: `commands/resolve.rs:131,180` still chooses its resolution mode from a second merge opinion, and `preflight_compatibility_report_local` is still called from `conflicts.rs:44`, `status.rs`, and `tree.rs:138`. **P4 owns that.** `resolve` needs a *plan* to choose a mode from, which is exactly what P4 builds.
 - **`hitch status` is now fully offline.** P3 removed the per-branch `branch_exists_anywhere` (a `git ls-remote --heads origin` per promoted branch) from the render loop, so the snapshot's `rev_parse_opt refs/heads/*` → `refs/remotes/origin/*` resolution is the only ref lookup. Any new status-shaped path inherits that for free; do not add a network call to one.
+
+**What P4 handed forward, for P5 specifically:**
+
+- **`src/operations/` is the pattern to copy, and it has exactly one operation in it.** `model.rs` holds the operation-agnostic types (`OperationPlan<I>`, `PlanFingerprint`, `PlannedEffect`/`AppliedEffect`, `ExecutionReceipt`, `OperationOutcome`, `PlanApplyError`); `rebuild.rs` holds `plan_rebuild` / `validate_plan` / `apply_rebuild_plan` / `assemble_receipt` / `discard_plan`. A second planner reuses the first four; it does not re-derive the fingerprint or the receipt.
+- **The plan carries an already-composed commit, not a recipe.** `commit_tree` stamps wall-clock time, so re-composing at apply time yields a *different* SHA than the plan promised. This is why `PlanPurpose::Preview` does not synchronise (P1's deliberate asymmetry) and why a preview/confirm pair is compared on `^{tree}`, never on the commit. Anything that re-plans mid-apply has to answer for the SHA it is about to land.
+- **Three model members are declared but unproduced, deliberately:** `PlanApplyError::PolicyBlocked`, `PlanWarning.blocking == true`, and `OperationOutcome::ApprovalRequested`. P5's approvals are the intended first producers. `OperationKind` likewise has one variant (`Rebuild`) — add `Promote`/`Demote`/`Release` *before* writing their planners, so a receipt can never be ambiguous about what it was.
+- **`publish_branch` now returns `PublishOutcome { push, journal_cleared }`** rather than `Result<()>`. A receipt cannot be built from `Ok(())` — that is the whole reason it changed, and the reason a failed push is representable at all. Two call sites (`commands/resolve.rs`, `commands/release.rs`) still drop the outcome; P5 does not need to touch them, but P6/P7 will want it.
+- **The anchor under `refs/hitch/build/*` is a live leak risk, and it is now a `finally`.** Nothing prunes that family (`cleanup`'s prunable set is `["backup", "prev"]`), so `apply_rebuild_plan` calls `discard_plan` unconditionally after the inner call rather than per exit path — see the P4 plan's deviation 5. Every new planner owes the same `finally`.
+- **P1's open `resolve` item is still open.** P4 built the thing `resolve` needs a plan *from*, but did not re-plumb it: `commands/resolve.rs:131,180` still selects Mode A vs Mode B from `preflight_compatibility_report`. Do not add a further dependant on that function while it is still a second merge opinion.
 
 ---
 
@@ -228,7 +238,9 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 - Produces: `ExecutionReceipt { plan_id, operation, started_at, completed_at, outcome, effects, warnings, resulting_state }` and `OperationOutcome { Applied, AppliedWithHolds, ApprovalRequested, NoChange }`.
 - Produces: `PlanApplyError { StalePlan { changed }, PolicyBlocked, Conflict, PublishRace, RemotePushFailed }`.
 
-**Exit criteria:** Plan then mutate metadata → apply refused. Plan then move a feature ref → apply refused. Unchanged plan applies exactly the predicted effects. Receipt reports the real published SHAs. A push failure is a warning with an owed effect, never a false "fully synced". `AppliedWithHolds` is preserved distinctly and the rebuild exit-code-2 distinction survives. Repo and environment locks preserved. All four gates green.
+**Status: COMPLETE** (2026-09-25). `src/operations/{mod,model,rebuild}.rs` is new; `hitch rebuild` is plan → validate → apply → receipt, and `--dry-run` is a renderer over the same planner rather than a second merge path. `publish_branch` gained a `PublishOutcome` so a failed push is representable; `rebuild_environment_opts` survives as a thin plan-then-apply wrapper for its other four callers. `just test` 405 + 1, zero ignored; all four gates green. Three findings worth carrying: **a plan can never report a halt** (`OnConflict::Halt` errors out of `compose_environment` before a plan exists, so `PlanWarning.blocking` and `PlanApplyError::PolicyBlocked` are unreachable from `rebuild` until P5's approvals use them), **the anchor release has to be a `finally` rather than a numbered step** (the `?` on `validate_plan` fires first and is invisible on a green run), and **two compositions of identical inputs get different commit SHAs** — which is the reason the plan carries its commit at all. Non-vacuity was probed by short-circuiting `validate_plan` and confirming exactly the three staleness tests fail. Full deviations, the manual-check transcript, and P5's inheritance list in the phase plan.
+
+**Exit criteria:** met. Plan then mutate metadata → apply refused, naming the ref. Plan then move a feature ref → apply refused, naming the ref and both SHAs. Unchanged plan applies exactly the predicted effects, and plan/receipt/repository agree on every one. Receipt reports the real published SHAs. A push failure is a warning with an owed effect and a surviving journal record, never a false "fully synced", and the command still exits 0. `AppliedWithHolds` preserved distinctly, and the rebuild exit-code-2 distinction survives (re-checked from the library side as well as through the CLI). Repo lock, `RebuildLock`, and the `locked` flag all still apply. `--dry-run` agrees with a real run. `git diff --name-only main..explainable-ux -- crates/` empty.
 
 ---
 
@@ -239,8 +251,9 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 **Architecture:** Same plan/apply/receipt shape, one planner each. Promote adds approvals and the environment-name-expands-to-branches form. Demote adds removals. Release is the most explicit plan in the product and adds dependent-environment rebuilds, promotion pruning, the release tag, and remote writes.
 
 **Interfaces:**
-- Consumes: P4's plan/apply/receipt types.
+- Consumes: P4's plan/apply/receipt types, and — the thing to be careful about — the `rebuild_environment_opts` wrapper P4 left in place, which is what all four of these commands currently call.
 - Produces: per-operation planners. Extends `PlannedEffect` with `DependentEnvironmentRebuild` and `PromotionPrune`.
+- `OperationKind` gains `Promote`/`Demote`/`Release` **before** their planners, and this is also where `PolicyBlocked`, `PlanWarning.blocking`, and `OperationOutcome::ApprovalRequested` get their first real producers.
 - Release must keep all-or-nothing semantics (source §3, §16): a release that cannot compose changes nothing and says so.
 
 **Exit criteria:** Each of the three has a planner that is side-effect-free apart from the fetch/pin it shares with execution, and a receipt that matches its plan. Same-inputs→same-plan and changed-input→different-fingerprint hold for each. All four gates green.

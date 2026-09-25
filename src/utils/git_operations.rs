@@ -113,7 +113,10 @@ pub struct MergeTreeWriteTreeResult {
 /// should replace rather than fail the whole batch), not for anything where
 /// last-writer-wins could silently discard someone else's state.
 /// `Delete { expected_old: None }` deletes whatever is there.
-#[derive(Debug, Clone)]
+// `PartialEq`/`Eq` so an `OperationPlan` — which carries its own `RefEdit` as
+// part of what it intends to write — can be compared whole. Every field is a
+// plain string, so this is a value comparison and costs nothing to maintain.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefEdit {
     Update {
         refname: String,
