@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RebuildStatus"],"fn":["check_and_display_cleanup_needs","determine_rebuild_status","display_diff","display_environment_status","display_overall_summary","display_protection_status","display_status","display_status_summary","format_relative_time","format_timestamp","run"],"struct":["StatusCommand"]};

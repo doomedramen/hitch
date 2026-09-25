@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["capture_config_state","restore_previous_state","rollback_metadata_changes"]};

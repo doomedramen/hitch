@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ZERO_OID"],"enum":["RefEdit"],"struct":["CommitInfo","GitOperations","MergeConflictResult","MergeTreeCompose","MergeTreeWriteTreeResult","PendingBranchWrite","WorktreeInfo"],"type":["MergeStages","StageOids"]};

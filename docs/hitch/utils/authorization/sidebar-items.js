@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_current_user","get_remaining_approvers","is_authorized_approver","validate_approval_authorization","validate_cancellation_authorization","validate_rejection_authorization"]};

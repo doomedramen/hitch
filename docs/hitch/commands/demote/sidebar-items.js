@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["demote_branches_from_environment","resolve_to_branches","run","validate_preconditions"],"struct":["DemoteCommand"]};

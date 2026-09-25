@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["apply_changes","has_changes","run","show_changes","validate_preconditions"],"struct":["SetCommand"]};

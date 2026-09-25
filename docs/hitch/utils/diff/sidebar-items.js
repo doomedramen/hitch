@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConfigChange"],"fn":["create_summary","diff_configs","format_diff","json_diff"]};

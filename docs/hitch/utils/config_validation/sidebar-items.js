@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_BRANCHES_PER_ENV","MAX_CONFIG_BYTES","MAX_ENVIRONMENTS"],"fn":["parse_untrusted_config"]};

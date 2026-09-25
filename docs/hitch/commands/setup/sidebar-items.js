@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["discover_branches","gh_put","run"],"struct":["SetupCommand"]};

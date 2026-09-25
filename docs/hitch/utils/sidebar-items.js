@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["approvals","authorization","command_helpers","config_validation","confirm","conflict_report","diff","file_lock","gh","git_operations","log_macros","logging","output","pr_status","prelude","progress","publish_journal","rebuild_lock","repo_lock","resolutions","rollback","setup","snapshot","validation"]};
