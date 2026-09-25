@@ -4,378 +4,668 @@
 
 # Hitch
 
-> Git branch management for environment-based deployments
+> **Git environments as desired state, not merge history.**
 
-Hitch treats environment branches as composable layers, not ordinary Git merge targets. You keep working on normal feature or bug branches, promote those branches into an environment's list, and Hitch rebuilds the environment branch from that list. Demote a branch to remove it from the environment. Release commands are available, but the core idea is explicit branch composition rather than manual environment merges.
+Hitch is a Git tool for teams where branches such as `dev`, `qa`, or `staging` represent deployed environments.
 
-## 🚀 Quick Start
+Instead of permanently merging work into those branches, Hitch treats them as **generated outputs**.
 
-```bash
-# Initialize Hitch in your Git repository
-hitch init
+You tell Hitch which feature branches should exist in an environment:
 
-# Add environments for your deployment pipeline
-hitch add dev --base main
-hitch add qa --base main
-hitch add production --base main
+```text
+dev = main + feature/auth + feature/search + feature/new-ui
 
-# Promote branches to environments
-hitch promote feature/user-auth dev
-hitch promote feature/user-auth qa
-hitch promote feature/user-auth production
-
-# Check the status of all environments
-hitch status
+qa  = main + feature/auth + feature/search
 ```
 
-## 🎯 What Problem Does Hitch Solve?
+Hitch builds the corresponding `dev` and `qa` branches for you.
 
-- **"What branches are actually in `dev` right now?"** – Full audit trail of promotions
-- **"How do I rebuild `qa` with the latest from all promoted features?"** – `hitch rebuild` regenerates environment branches
-- **"Can I test one feature in `dev`, then the same feature in `qa`, then ship it to `main`?"** – One possible workflow is to promote the feature branch through each environment
-- **"Can I add or remove individual features from a test environment?"** – Each promoted branch is an entry in the environment's branch list
-- **"How is this different from normal Git merging?"** – Environments are rebuilt from a declared list of branches instead of accumulating hand-made merge commits
-- **"Can we freeze production during critical periods?"** – `hitch lock production`
-- **"How do we require team approval before production deployments?"** – Approval workflow with configurable thresholds
+**That is the core idea.**
 
-## 🔧 Core Concepts
+---
 
-### Environment Branches Are Rebuilt From a List
+## Why does Hitch exist?
 
-Hitch's main difference from plain Git merging is that an environment is defined by metadata: a base branch plus an ordered list of promoted branches. The environment branch is output that Hitch can regenerate.
+A common Git deployment workflow looks roughly like this:
 
-<p align="center">
-  <img src="docs/hitch-composition.png" alt="Hitch rebuilds an environment branch from a base branch plus an ordered list of promoted branches.">
-</p>
-
-One common workflow is to let a feature branch move through deployment environments:
-
-```bash
-# Work on a feature or bug branch as usual
-git checkout -b feature/user-auth main
-
-# Put that feature onto the dev environment branch
-hitch promote feature/user-auth dev
-# CI/CD for dev can now deploy the dev branch
-
-# When dev testing passes, put the same branch onto qa
-hitch promote feature/user-auth qa
-# CI/CD for qa can now deploy the qa branch
-
-# When qa passes, release it to main or production
-hitch release qa main
-# CI/CD for main can now deploy the production site
+```text
+feature branches
+       ↓
+      dev
+       ↓
+      qa
+       ↓
+     main
 ```
 
-This gives you a visible list of single features layered on top of the source branch (`main`). You can add a branch to an environment with `promote`, remove it with `demote`, and rebuild the environment branch from the current list at any time.
+This seems simple until several features are being worked on at once.
 
-### Environments as Composable Layers
+Imagine `dev` contains:
 
-Each environment branch is a stack built on top of a base:
-
-```
-production = main + feature/auth
-qa         = main + feature/auth + feature/payments
-dev        = main + feature/auth + feature/payments + feature/ui + feature/api
+```text
+feature/A
+feature/B
+feature/C
 ```
 
-When you promote or demote, Hitch rebuilds the environment by squashing all promoted branches together. Environment branches are **regenerated**, not manually merged.
+`A` and `C` are ready for QA.
 
-<p align="center">
-  <img src="docs/hitch-vs-git-merge.png" alt="Ordinary Git environment branches accumulate merge history, while Hitch stores desired contents and regenerates the branch.">
-</p>
+`B` is not.
 
-Rebuild composes branches in an isolated worktree — your own checkout is never touched — and always tells you exactly which branch and files conflict. By default a conflicting branch is *held*: it's excluded from this build (named, with what it collides with) while the rest still compose and publish, so one broken branch never blocks the others. Set `on_conflict: halt` (`hitch set <env> --on-conflict halt`, or `--on-conflict halt` for one run) to go back to refusing the whole rebuild until every branch composes cleanly. `hitch conflicts <env>` and `hitch rebuild <env> --dry-run` show what would happen without building anything.
+If `dev` is just a normal branch containing accumulated merges, you now have a problem:
 
-### Release and Merge Fixes
+**How do you move the tested work forward without also moving `B`?**
 
-`hitch release <environment> <target>` merges the environment's promoted branches into a target branch and lets your existing CI/CD take over from there. Some teams use this to move tested changes from `dev` to `qa` to `main`; others may use Hitch only to assemble and rebuild test environments.
+You can start cherry-picking, reverting, maintaining multiple integration branches, or carefully merging individual features into every environment.
 
-The tradeoff is merge fixes. Because Hitch repeatedly composes branches against a base and against each other, conflicts are still real Git conflicts. If a branch needs a compatibility fix in one environment, you may need to carry that fix back into the branch or repeat equivalent fixes when composing it elsewhere. Hitch makes the environment contents explicit and rebuildable; it does not erase the underlying Git cost of resolving conflicting changes.
+But your environment branches gradually become another source of truth that humans have to manage.
 
-**Release also rebuilds dependent environments.** Once a release moves `<target>`, any environment whose `base` is `<target>` — and transitively, any environment based on *those* — is now stale relative to its own definition, so Hitch rebuilds (and pushes) each of them as part of the same release. This is common: if `dev`'s base is `main` and you `hitch release dev main`, `dev` itself qualifies and gets rebuilt right after. In practice this is usually a no-op, since `main` now already contains what `dev` was rebuilding from — it only does real work when other promoted branches or dependent environments are still layered on top. This step is best-effort (a rebuild failure is reported as a warning, not a release failure) and can be skipped with `--no-rebuild-dependents`.
+Hitch changes that model.
 
-## 🧩 Handling Merge Conflicts
+### Environment branches are outputs
 
-When a promoted branch can't compose cleanly, Hitch tells you exactly which branch, what it conflicts with, and gives you a guided path to fix it — instead of leaving you to work it out with raw `git`.
+With Hitch:
 
-**1. See what's wrong.** A conflicting branch is *held* — excluded from the build while the rest still compose (see below) — and named with what it collides with:
+```text
+dev = main + A + B + C
 
-```bash
-hitch rebuild dev
-# ⛔ 'dev': 1 branch held (excluded from this build)
-#   branch-b conflicts with branch-a
-#     shared.txt
-
-hitch conflicts dev          # same report, without rebuilding
-hitch status                 # ⛔ glyph next to the held branch, anywhere in the tree
+qa  = main + A + C
 ```
 
-**2. Resolve it — Hitch picks the right mode for you:**
+`dev` and `qa` are not the history of how changes arrived there.
 
-```bash
-hitch resolve dev            # infers the branch if only one is held, else use --branch
+They simply represent:
+
+> **What should be deployed here right now?**
+
+```mermaid
+flowchart LR
+    M["main"]
+
+    A["feature/A"]
+    B["feature/B"]
+    C["feature/C"]
+
+    DEV["dev<br/>generated"]
+    QA["qa<br/>generated"]
+
+    M --> DEV
+    A --> DEV
+    B --> DEV
+    C --> DEV
+
+    M --> QA
+    A --> QA
+    C --> QA
 ```
 
-- **Conflicts with the base branch** (most common — base moved on after you branched): Hitch checks out your branch and runs `git rebase <base>`, then hands off to plain Git. Fix the conflict, `git add`, `git rebase --continue`, push, done — this is the durable fix, since the branch itself is repaired.
-- **Conflicts with another promoted branch** (neither branch can own the fix alone): Hitch builds the composition up to that point in an isolated worktree — your own checkout is never touched — and leaves you real conflict markers there:
+If `B` is removed from `dev`, Hitch just rebuilds:
 
-  ```bash
-  # edit the files in the printed worktree path, then:
-  hitch resolve dev --branch branch-b --continue
-  # or: hitch resolve dev --branch branch-b --abort
-  # or: hitch resolve dev --branch branch-b --path   (print the path, e.g. to open in an editor)
-  # or add --tool to the first call to run `git mergetool` instead of editing by hand
-  ```
-
-  `--continue` publishes the resolved build immediately, so the fix is live in `dev` right away — but it's a **one-time inclusion**: nothing is saved, so the same conflict comes back on the next plain rebuild unless you carry the fix into a real branch, or record it (next step).
-
-**3. Optionally, record the resolution for reuse:**
-
-```bash
-hitch resolve dev --branch branch-b --continue --record   # save it locally
-hitch resolve dev --branch branch-b --continue --share    # save it and push to origin for the team
+```text
+dev = main + A + C
 ```
 
-A later rebuild can replay it instead of re-resolving by hand:
+There is no need to work out how to "undo the merge of B without undoing everything after it."
 
-```bash
-hitch rebuild dev --replay-resolutions
+---
+
+# The mental model
+
+There are four important kinds of branch in a Hitch repository:
+
+| Thing             | Purpose                                                     |
+| ----------------- | ----------------------------------------------------------- |
+| `main`            | Durable Git history / release branch                        |
+| `feature/*`       | The real work developers create and review                  |
+| `dev`, `qa`, etc. | Generated environment branches                              |
+| `hitch-metadata`  | Hitch's declaration of what each environment should contain |
+
+The important distinction is:
+
+```text
+feature branches + main = source
+
+dev / qa / staging      = generated output
 ```
 
-Replay only ever fires when the conflicting content on both sides matches the recording exactly — if either branch changes even slightly, it's a clean miss and the branch is held normally, never a wrong or stale fix. Without `--yes` you're asked to confirm the first time each recorded resolution is applied; recording and sharing never happen silently — `--record`/`--share` must be passed explicitly.
+You should not manually maintain Hitch environment branches.
 
-```bash
-hitch resolutions list                          # see what's recorded
-hitch resolutions show <key>                     # inspect one
-hitch resolutions forget <key>                   # delete it once retired
-hitch doctor --max-resolution-age-days 30        # fail CI if a recording is going stale
+Hitch can regenerate them whenever their inputs change.
+
+---
+
+# How Hitch works
+
+Each environment has:
+
+```text
+base + ordered list of branches
 ```
 
-Recorded resolutions are a convenience, not a substitute for fixing the branch — treat them as debt to retire, not permanent infrastructure.
+For example:
 
-**4. If you'd rather nothing ship until every branch composes cleanly**, set the environment (or a single run) to halt instead of eject:
-
-```bash
-hitch set dev --on-conflict halt          # persist the policy
-hitch rebuild dev --on-conflict halt      # or just override this run
+```text
+dev:
+    base: main
+    branches:
+        - feature/auth
+        - feature/payments
+        - feature/new-ui
 ```
 
-## 📋 Key Commands
+Conceptually, Hitch evaluates:
 
-```bash
-
-# Create a new feature branch and set up promotion targets
-hitch branch feature/foo develop --to dev --to qa
-
-# Create a branch and set up promotion targets
-hitch branch feature/foo main --to dev --to qa
-
-# Open a GitHub PR (infers base from promotion targets)
-hitch pr
-
-# Diagnose gh setup for hitch pr
-hitch doctor
-
-# Promote/demote branches through environments
-hitch promote feature/new-api dev
-hitch demote feature/new-api dev
-
-# Rebuild environment with all promoted branches
-# (conflicting branches are held/excluded by default — see hitch conflicts)
-hitch rebuild production
-
-# See what a rebuild would do without building anything
-hitch rebuild production --dry-run
-
-# See which promoted branches currently conflict
-hitch conflicts production
-
-# Lock/unlock environments (freeze promotions)
-hitch lock production
-hitch unlock production
-
-# View environment status
-hitch status
-
-# View branch hierarchy
-hitch tree
-
-# Release environment to target branch
-hitch release production main
-
-# Guard environment branches from direct commits
-hitch guard
-
-# Update environment configuration
-hitch set dev --base main           # Change base branch
-hitch set production --requires-approval true
-hitch set production --min-approvals 2
-hitch set production --add-approver alice@example.com
-hitch set production --on-conflict halt   # refuse the whole rebuild on any conflict
+```text
+dev = main
+    + feature/auth
+    + feature/payments
+    + feature/new-ui
 ```
 
-## 🖥️ Desktop GUI (`hitch-desktop`)
+and publishes the result as the `dev` branch.
 
-Hitch also ships with a desktop GUI as a separate tool: `hitch-desktop`.
+The configuration is stored in `hitch.json` on the dedicated `hitch-metadata` branch.
 
-The CLI (`hitch`) is always available and prints help when run with no subcommand:
+```mermaid
+flowchart LR
+    META["hitch-metadata<br/>desired state"]
+    MAIN["main"]
+    FEATURES["feature branches"]
 
-```bash
-hitch --help
-hitch status
-hitch rebuild dev
+    HITCH["Hitch<br/>compose"]
+
+    DEV["dev"]
+    QA["qa"]
+
+    CICD["Your existing<br/>CI / CD"]
+
+    META --> HITCH
+    MAIN --> HITCH
+    FEATURES --> HITCH
+
+    HITCH --> DEV
+    HITCH --> QA
+
+    DEV --> CICD
+    QA --> CICD
 ```
 
-### Development (from source)
+Hitch does **not** replace your deployment system.
 
-```bash
-# From the repo root
-just desktop-dev
-```
+Your CI/CD can continue deploying when `dev`, `qa`, `main`, etc. change exactly as it does today.
 
-### Build (macOS)
+Hitch controls **what Git puts on those branches**.
 
-```bash
-# Builds a .dmg in crates/hitch-desktop/src-tauri/target/release/bundle/
-just desktop-build-dmg
-```
+---
 
-If you update `hitch.svg` and want the desktop app icon to match:
+# A normal Hitch workflow
 
-```bash
-just desktop-icons
-```
+Install Hitch:
 
-## 🛡️ Approval Workflow
-
-For sensitive environments, require multi-person approval before promotions:
-
-```json
-// hitch.json
-{
-  "environments": {
-    "production": {
-      "requires_approval": true,
-      "min_approvals": 2
-    }
-  }
-}
-```
-
-```bash
-# Request promotion (requires approval before applying)
-hitch promote feature/new-api production
-
-# Approvers approve the request
-hitch approvals approve <request-id> "Ready for production"
-
-# View pending requests
-hitch approvals list --status pending
-```
-
-> **Note:** The approval workflow is an advisory/audit aid, not a security
-> boundary. Approver identity comes from local `git config user.email`, and the
-> approval state lives in the `hitch-metadata` branch that anyone with write
-> access can edit. For real enforcement, use server-side branch protection and
-> required reviews. See [SECURITY.md](SECURITY.md) for details. Note also that
-> `hitch release` is **not** approval-gated — releasing an approval-required
-> environment requires `--force`.
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for detailed approval workflow documentation.
-
-## 🔀 GitHub Pull Requests with Hitch
-
-When `main` is production and environment branches (`dev`, `qa`) are rebuilt by Hitch, there's no obviously valid branch to target a GitHub PR against — environment branches are force-pushed on every rebuild, which invalidates any open PR.
-
-Hitch solves this by treating `hitch release` as the actual merge step, not GitHub's merge button:
-
-```bash
-git checkout -b feature/foo main                       # create branch
-hitch branch feature/foo main --to dev --to qa         # set promotion targets
-hitch pr                                               # push to origin and open PR
-
-hitch promote feature/foo dev                         # rebuilds/deploys dev only
-hitch promote feature/foo qa                          # rebuilds/deploys qa only
-
-hitch release qa main                                 # one push to main, one prod deploy
-```
-
-### How it works
-
-1. **PRs target `main`.** Opening, reviewing, and approving a PR are read-only operations on GitHub's side — they never write to `main`. A GitHub ruleset blocks the push that clicking "Merge" would attempt, for anyone except the accounts allowed to run `hitch release` — so an approved PR can't reach production through the GitHub UI for anyone else.
-
-2. **`hitch release` does `--no-ff` merges** of each promoted branch into the target. When GitHub sees the PR's head commits become reachable from `main`, it automatically marks the PR as **Merged**. No webhooks, no API integration — the PR lifecycle becomes truthful for free.
-
-3. **The PR is open from day one** for code review. Testing and deployment gates (`hitch promote`, `hitch release`) run alongside, not instead of, the PR.
-
-### GitHub configuration
-
-Create a **repository ruleset on `main`** (not classic branch protection — see below) with an `update` rule (blocks all pushes, including merge-button clicks), bypassed only by the accounts allowed to run `hitch release`:
-
-- Rulesets can't bypass one specific person directly — only a role (org owner / repo admin), a team, a GitHub App, or a deploy key, and role-based bypass readmits everyone with that role. Create a small dedicated team scoped to exactly the intended release identities and bypass that team.
-- Do **not** enable "Require a pull request before merging" — that rule lets non-bypass actors merge via an approved PR instead of being blocked outright, and would separately reject `hitch release`'s own push unless exempted.
-- Required approvals / required reviews (via classic protection, which layers independently) can stay on — they gate nothing hitch does but keep review discipline visible.
-
-**Why a ruleset, not classic branch protection's "Restrict who can push":** classic protection's admin bypass (`enforce_admins`) is all-or-nothing — off, and *every* repo admin/org owner bypasses the restriction, not just your intended release identities; on, and admins also get blocked by required PR reviews, breaking `hitch release`'s own push. Rulesets support an explicit bypass list independent of admin/owner role.
-
-**Residual gap:** GitHub can't tell "pushed via `git push`" apart from "pushed by clicking Merge" for the same identity — both are just a push. So bypass-listed accounts can still technically click merge on an approved PR; only non-bypass accounts are fully blocked. Disabling the repo's PR merge methods doesn't fix this (GitHub requires at least one enabled, and it wouldn't stop a bypass actor anyway). Use a bot/deploy-key bypass identity if no human should ever be able to merge via GitHub; otherwise this is a process-discipline tradeoff for whoever's on the bypass team.
-
-Hitch's existing environment gates (`requires_approval`, `min_approvals`, `lock`) remain the release-time authority, as today.
-
-### `hitch pr` command
-
-Open a GitHub PR for the current branch:
-
-```bash
-hitch pr                  # infers PR base from promotion targets, pushes, runs gh pr create
-hitch pr --title "Add login" --draft
-hitch pr --base develop   # override inferred base
-```
-
-The PR base is inferred from the shared `base` branch of all environments the branch is promoted to.
-
-### `hitch doctor` command
-
-Verify that `gh` is installed, authenticated, and has the scopes `hitch pr` needs:
-
-```bash
-hitch doctor
-# gh found on PATH (/usr/bin/gh)
-# Authenticated to github.com as your-github-username (active)
-#   Scopes: repo, workflow
-# All checks passed — 'hitch pr' should work.
-```
-
-`hitch doctor` checks for `gh` on PATH, authentication status against each GitHub host, and that the classic token carries the `repo` scope. It's safe to run anytime — it only reads, never writes.
-
-### Squash releases
-
-`hitch release --squash` rewrites commits, so GitHub cannot auto-detect the merge. Use normal `--no-ff` merges (the default) when using GitHub PRs so the PR lifecycle stays accurate.
-
-## 📦 Installation
-
-### Cargo (Recommended)
 ```bash
 cargo install hitch
 ```
 
-### From Source
-```bash
-git clone https://github.com/doomedramen/hitch
-cd hitch
-cargo install --path .
-```
+or on macOS:
 
-### Homebrew (macOS)
 ```bash
 brew install doomedramen/homebrew-hitch/hitch
 ```
 
-## 🔧 Development
+Initialize it:
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for development setup and guidelines.
+```bash
+hitch init
 
-## 📄 License
+hitch add dev --base main
+hitch add qa --base main
+```
 
-MIT License
+Then develop normally:
+
+```bash
+git switch -c feature/login main
+
+# work, commit, push...
+```
+
+Deploy the feature to development:
+
+```bash
+hitch promote feature/login dev
+```
+
+Hitch now declares:
+
+```text
+dev = main + feature/login
+```
+
+and rebuilds `dev`.
+
+Once it passes development testing:
+
+```bash
+hitch promote feature/login qa
+```
+
+Now:
+
+```text
+dev = main + feature/login
+qa  = main + feature/login
+```
+
+### Notice what did *not* happen
+
+Hitch did **not** merge:
+
+```text
+dev → qa
+```
+
+It added the same real feature branch to QA's desired state.
+
+That distinction is important.
+
+If `dev` also contained experimental work:
+
+```text
+dev = main + login + new-dashboard + debug-tools
+```
+
+QA can still be:
+
+```text
+qa = main + login
+```
+
+without taking the other changes with it.
+
+---
+
+# Releasing
+
+Environment branches are temporary compositions.
+
+Your feature branches contain the real work.
+
+When an environment has been tested and you want those features to become part of a durable branch:
+
+```bash
+hitch release qa main
+```
+
+Hitch merges the feature branches promoted to `qa` into `main`.
+
+```mermaid
+flowchart LR
+    F["feature/login"]
+
+    DEV["dev<br/>generated"]
+    QA["qa<br/>generated"]
+    MAIN["main<br/>durable history"]
+
+    F -->|"promote"| DEV
+    F -->|"promote"| QA
+    F -->|"release"| MAIN
+```
+
+So the lifecycle is:
+
+```text
+feature branch
+      │
+      ├── promote → dev
+      │
+      ├── promote → qa
+      │
+      └── release → main
+```
+
+The feature branch is the durable unit moving through the system.
+
+The environment branches are just different compositions of those units.
+
+`release` is optional: Hitch can also be used purely to build temporary integration environments if your existing release process handles production differently.
+
+---
+
+# Promotion and demotion
+
+### Promote
+
+```bash
+hitch promote feature/foo dev
+```
+
+means:
+
+> Add `feature/foo` to the list of things that should be in `dev`.
+
+By default Hitch then rebuilds the environment.
+
+### Demote
+
+```bash
+hitch demote feature/foo dev
+```
+
+means:
+
+> Remove `feature/foo` from the list of things that should be in `dev`.
+
+Hitch regenerates the environment without it.
+
+So if:
+
+```text
+dev = main + A + B + C
+```
+
+then:
+
+```bash
+hitch demote B dev
+```
+
+produces:
+
+```text
+dev = main + A + C
+```
+
+This is one of the main reasons environment branches are generated rather than maintained manually.
+
+---
+
+# Rebuilding
+
+You can regenerate an environment at any time:
+
+```bash
+hitch rebuild dev
+```
+
+This takes the environment's current declaration and recreates its branch from the current inputs.
+
+You can preview the result first:
+
+```bash
+hitch rebuild dev --dry-run
+```
+
+Or see current conflicts:
+
+```bash
+hitch conflicts dev
+```
+
+Hitch performs composition away from your normal working checkout, so rebuilding an environment does not require Hitch to check out `dev` over your work.
+
+---
+
+# What happens when branches conflict?
+
+Git conflicts still exist.
+
+Hitch makes them visible and gives them environment-level semantics rather than pretending they disappear.
+
+If an already-promoted branch no longer composes cleanly, the default rebuild policy is to **hold** that branch:
+
+```text
+dev = main + A + B + C
+
+B conflicts
+       ↓
+
+build = main + A + C
+held  = B
+```
+
+`B` remains part of the environment declaration and will be tried again on future rebuilds.
+
+You can see held branches with:
+
+```bash
+hitch conflicts dev
+```
+
+and use the guided resolver:
+
+```bash
+hitch resolve dev
+```
+
+Hitch distinguishes two important cases:
+
+```text
+feature ↔ base conflict
+        → fix the feature branch, normally by rebasing
+
+feature ↔ feature conflict
+        → resolve their environment composition
+```
+
+If you prefer an environment to fail completely rather than build without a conflicting branch:
+
+```bash
+hitch set dev --on-conflict halt
+```
+
+A **release is always all-or-nothing**: Hitch does not partially merge a broken environment into the release target.
+
+For advanced reusable conflict resolutions, see [`docs/merge-conflict-handling-plan.md`](docs/merge-conflict-handling-plan.md).
+
+---
+
+# GitHub Pull Requests
+
+Because Hitch environment branches are generated and may be replaced during rebuilds, you generally should **not target PRs at `dev` or `qa`**.
+
+PRs target the durable base branch — usually `main`.
+
+```text
+feature/foo ── PR ───────→ main
+     │
+     ├── promoted → dev
+     ├── promoted → qa
+     │
+     └── hitch release qa main
+                     │
+                     └── GitHub sees the feature commits on main
+                         and marks the PR merged
+```
+
+Hitch can create the PR:
+
+```bash
+hitch pr
+```
+
+and can configure the GitHub protection needed for this workflow:
+
+```bash
+hitch setup
+```
+
+By default `hitch release` preserves Git ancestry, allowing GitHub to recognise the feature PR as merged when its commits reach `main`.
+
+If you use:
+
+```bash
+hitch release --squash
+```
+
+that ancestry is rewritten, so GitHub cannot automatically detect the PR as merged.
+
+See [`docs/github-pr-workflow-plan.md`](docs/github-pr-workflow-plan.md) for the full GitHub model.
+
+---
+
+# See what is deployed
+
+```bash
+hitch status
+```
+
+shows your environments and their promoted branches.
+
+```bash
+hitch tree
+```
+
+shows the relationship between environments and branches.
+
+This makes questions such as:
+
+```text
+What is in dev?
+
+What has made it to QA?
+
+What is being held because of a conflict?
+
+Which features would be released?
+```
+
+answerable from Hitch's explicit state rather than reconstructed from Git merge history.
+
+---
+
+# Safety controls
+
+Environments can be frozen:
+
+```bash
+hitch lock production
+hitch unlock production
+```
+
+Promotions can require approval:
+
+```bash
+hitch set production --requires-approval true
+hitch set production --min-approvals 2
+```
+
+Multiple changes can be staged before rebuilding:
+
+```bash
+hitch promote feature/a dev --no-rebuild
+hitch promote feature/b dev --no-rebuild
+
+hitch rebuild dev
+```
+
+And commands can operate without pushing:
+
+```bash
+hitch --no-push ...
+```
+
+---
+
+# Common commands
+
+| Command                       | Meaning                                               |
+| ----------------------------- | ----------------------------------------------------- |
+| `hitch init`                  | Initialize Hitch                                      |
+| `hitch add dev --base main`   | Create an environment                                 |
+| `hitch promote A dev`         | Put feature `A` into `dev`                            |
+| `hitch demote A dev`          | Remove feature `A` from `dev`                         |
+| `hitch rebuild dev`           | Regenerate `dev`                                      |
+| `hitch rebuild dev --dry-run` | Preview a rebuild                                     |
+| `hitch conflicts dev`         | Show branches that cannot currently compose           |
+| `hitch resolve dev`           | Guided conflict resolution                            |
+| `hitch status`                | Show environment state                                |
+| `hitch tree`                  | Show the environment/branch hierarchy                 |
+| `hitch release qa main`       | Merge QA's promoted features into `main`              |
+| `hitch lock qa`               | Freeze changes to an environment                      |
+| `hitch unlock qa`             | Unfreeze it                                           |
+| `hitch pr`                    | Open a PR for the current feature branch              |
+| `hitch setup`                 | Configure GitHub protection for the Hitch PR workflow |
+| `hitch doctor`                | Check repository/Hitch integration health             |
+
+Run:
+
+```bash
+hitch --help
+```
+
+for the complete command reference.
+
+---
+
+# What Hitch is not
+
+**Hitch is not a replacement for Git.**
+
+Feature branches, commits, merges, rebases and PRs remain ordinary Git.
+
+**Hitch is not a CI/CD platform.**
+
+It produces environment branches; your existing CI/CD decides what happens when those branches change.
+
+**Hitch does not make merge conflicts disappear.**
+
+It detects them, attributes them and gives you tools for resolving them.
+
+**Environment branches are not normal development branches.**
+
+They are generated output and should not be manually maintained.
+
+---
+
+# The entire idea in one picture
+
+```mermaid
+flowchart TB
+    subgraph Source["Durable source of truth"]
+        MAIN["main"]
+        A["feature/A"]
+        B["feature/B"]
+        C["feature/C"]
+        META["hitch-metadata"]
+    end
+
+    subgraph Hitch["Hitch"]
+        DECLARE["desired state"]
+        BUILD["compose / rebuild"]
+    end
+
+    subgraph Environments["Generated environment branches"]
+        DEV["dev<br/>main + A + B + C"]
+        QA["qa<br/>main + A + C"]
+    end
+
+    MAIN --> BUILD
+    A --> BUILD
+    B --> BUILD
+    C --> BUILD
+
+    META --> DECLARE --> BUILD
+
+    BUILD --> DEV
+    BUILD --> QA
+
+    QA -->|"hitch release"| MAIN
+```
+
+**Feature branches are the work.**
+
+**`hitch-metadata` says where that work should currently appear.**
+
+**Environment branches are generated from that declaration.**
+
+That is Hitch.
+
+---
+
+## Development
+
+See [`DEVELOPMENT.md`](DEVELOPMENT.md).
+
+## License
+
+MIT.
