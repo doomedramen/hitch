@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::state::{build_state_snapshot, EnvironmentHealth};
 use crate::core::status::{build_status_model, EnvironmentStatusModel, StatusModel};
 use crate::core::timeline::{
     build_combined_timeline, HitchEventFilter, HitchEventScope, TimelineItem,
@@ -64,7 +65,11 @@ pub fn build_environment_details_model(
     env_sha: String,
     metadata_sha: Option<String>,
 ) -> Result<EnvironmentDetailsModel> {
-    let status = build_status_model(context)?;
+    // One snapshot, projected twice. Building it here and passing it on is
+    // what keeps the overview and the status model describing the same
+    // instant rather than two independent reads of the repository.
+    let snapshot = build_state_snapshot(context)?;
+    let status = build_status_model(&snapshot);
     let env = status
         .environments
         .iter()
@@ -117,18 +122,43 @@ fn build_env_overview(env: &EnvironmentStatusModel) -> String {
     if env.branches.len() > limit {
         lines.push(format!("  … +{} more", env.branches.len() - limit));
     }
-    match &env.rebuild_state {
-        crate::core::status::RebuildState::UpToDate => {
-            lines.push("rebuild: up to date".to_string())
+    lines.push(match &env.state.health {
+        EnvironmentHealth::Realised => "rebuild: up to date".to_string(),
+        EnvironmentHealth::NeverBuilt => "rebuild: never rebuilt".to_string(),
+        EnvironmentHealth::MissingBranch => {
+            "rebuild: environment branch does not exist".to_string()
         }
-        crate::core::status::RebuildState::NeverRebuilt => {
-            lines.push("rebuild: never rebuilt".to_string())
+        // An honest "I don't know", not a soft "probably fine". The previous
+        // layer had no way to express this at all, so an environment last
+        // published by `hitch release` — which writes no record, by design —
+        // rendered as "up to date", claiming a build hitch cannot describe.
+        EnvironmentHealth::LegacyUnknown => {
+            "rebuild: actual unknown (no build record for this environment)".to_string()
         }
-        crate::core::status::RebuildState::NeedsRebuild { newer_branches } => lines.push(format!(
-            "rebuild: needed (new commits in {})",
-            newer_branches.join(", ")
-        )),
-    }
+        EnvironmentHealth::PartiallyRealised { held } => format!(
+            "rebuild: current, with {} held: {}",
+            held.len(),
+            held.join(", ")
+        ),
+        EnvironmentHealth::NeedsRebuild {
+            changed_inputs,
+            added,
+            removed,
+        } => {
+            let mut parts = Vec::new();
+            for change in changed_inputs {
+                let (from, to) = change.short();
+                parts.push(format!("{} {from} → {to}", change.branch));
+            }
+            for branch in added {
+                parts.push(format!("{branch} added since last build"));
+            }
+            for branch in removed {
+                parts.push(format!("{branch} removed since last build"));
+            }
+            format!("rebuild: needed ({})", parts.join(", "))
+        }
+    });
     if env.requires_approval {
         lines.push(format!(
             "approvals: required (min {}, approvers {})",

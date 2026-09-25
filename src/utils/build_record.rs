@@ -68,7 +68,11 @@ pub struct ResolutionUse {
 /// inferred afterwards. There is deliberately no `Default` impl: a record that
 /// silently filled in a missing `result_sha` would describe a build that never
 /// happened, which is the one failure this whole module exists to prevent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq`/`Eq` are derived so `core::state` can compare
+/// whole records; every field is a plain value, `DateTime<Utc>` and the
+/// `CompatibilityConflict` list included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentBuildRecord {
     /// Always [`SCHEMA_VERSION`] as written.
     pub schema_version: u32,
@@ -92,7 +96,7 @@ pub struct EnvironmentBuildRecord {
     /// environment is promoted, and it returns to a previous value when a
     /// declaration edit is reverted. Staleness is decided by comparing
     /// `desired_branches` against the live refs — see
-    /// `RepositoryStateSnapshot` in P3 — never by this field.
+    /// `RepositoryStateSnapshot` in `core::state` — never by this field.
     pub metadata_sha: String,
     pub base_name: String,
     pub base_sha: String,

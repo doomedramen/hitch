@@ -1,7 +1,4 @@
-use crate::commands::global_context::GlobalContext;
-use crate::types::Environment;
-use crate::utils::prelude::access_metadata_read_only;
-use anyhow::Result;
+use crate::core::state::{EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot};
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
@@ -10,13 +7,6 @@ pub struct StatusSummary {
     pub locked_envs: usize,
     pub needs_rebuild_envs: usize,
     pub never_rebuilt_envs: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RebuildState {
-    UpToDate,
-    NeedsRebuild { newer_branches: Vec<String> },
-    NeverRebuilt,
 }
 
 #[derive(Debug, Clone)]
@@ -32,43 +22,69 @@ pub struct EnvironmentStatusModel {
     pub requires_approval: bool,
     pub min_approvals: usize,
     pub approvers: Vec<String>,
-    pub rebuild_state: RebuildState,
+    /// The environment's single verdict, carried whole so a renderer cannot
+    /// re-derive one. This replaces a private `RebuildState` enum that
+    /// answered the same question a fourth time, by timestamp.
+    pub state: EnvironmentState,
 }
 
 #[derive(Debug, Clone)]
 pub struct StatusModel {
-    #[allow(dead_code)]
     pub current_branch: Option<String>,
     pub summary: StatusSummary,
     pub environments: Vec<EnvironmentStatusModel>,
 }
 
-pub fn build_status_model(context: &GlobalContext) -> Result<StatusModel> {
-    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-
-    let current_branch = context.git().get_current_branch().ok();
-
-    let mut environments: Vec<EnvironmentStatusModel> = config
+/// Project a snapshot into the status view.
+///
+/// Takes the snapshot rather than building one, and is infallible by
+/// construction: a view that re-read the repository could disagree with the
+/// snapshot it is supposed to be describing, and nothing in the caller would
+/// notice.
+pub fn build_status_model(snapshot: &RepositoryStateSnapshot) -> StatusModel {
+    let environments: Vec<EnvironmentStatusModel> = snapshot
         .environments
         .iter()
-        .map(|(name, env)| build_env_model(context, name, env))
-        .collect::<Result<Vec<_>>>()?;
-
-    environments.sort_by(|a, b| a.name.cmp(&b.name));
+        .map(|state| EnvironmentStatusModel {
+            name: state.name.clone(),
+            base: state.base.clone(),
+            branches: state
+                .desired
+                .branches
+                .iter()
+                .map(|b| b.name.clone())
+                .collect(),
+            locked: state.locked,
+            locked_by: state.locked_by.clone(),
+            locked_at: state.locked_at,
+            rebuilt_at: state.rebuilt_at,
+            released_at: state.released_at,
+            requires_approval: state.approval_policy.required,
+            min_approvals: state.approval_policy.min_approvals,
+            approvers: state.approval_policy.approvers.clone(),
+            state: state.clone(),
+        })
+        .collect();
 
     let total_envs = environments.len();
     let locked_envs = environments.iter().filter(|e| e.locked).count();
+    // `is_actionable` rather than a local `matches!`: the question "is there
+    // pending work here" is answered by the health enum, and re-deciding it
+    // here is exactly how a second verdict gets invented.
     let needs_rebuild_envs = environments
         .iter()
-        .filter(|e| matches!(e.rebuild_state, RebuildState::NeedsRebuild { .. }))
+        .filter(|e| e.state.health.is_actionable())
         .count();
+    // Never-built is a *subset* of actionable, not an alternative to it — an
+    // environment that has never been built certainly has pending work — so it
+    // is counted separately rather than subtracted out.
     let never_rebuilt_envs = environments
         .iter()
-        .filter(|e| matches!(e.rebuild_state, RebuildState::NeverRebuilt))
+        .filter(|e| matches!(e.state.health, EnvironmentHealth::NeverBuilt))
         .count();
 
-    Ok(StatusModel {
-        current_branch,
+    StatusModel {
+        current_branch: snapshot.current_branch.clone(),
         summary: StatusSummary {
             total_envs,
             locked_envs,
@@ -76,77 +92,5 @@ pub fn build_status_model(context: &GlobalContext) -> Result<StatusModel> {
             never_rebuilt_envs,
         },
         environments,
-    })
-}
-
-fn build_env_model(
-    context: &GlobalContext,
-    name: &str,
-    env: &Environment,
-) -> Result<EnvironmentStatusModel> {
-    Ok(EnvironmentStatusModel {
-        name: name.to_string(),
-        base: env.base.clone(),
-        branches: env.branches.clone(),
-        locked: env.is_locked(),
-        locked_by: env.locked_by.clone(),
-        locked_at: env.locked_at,
-        rebuilt_at: env.rebuilt_at,
-        released_at: env.released_at,
-        requires_approval: env.requires_approval,
-        min_approvals: env.min_approvals,
-        approvers: env.approvers.clone(),
-        rebuild_state: determine_rebuild_state(context, env),
-    })
-}
-
-fn determine_rebuild_state(context: &GlobalContext, env: &Environment) -> RebuildState {
-    let rebuilt_at = match env.rebuilt_at {
-        Some(ts) => ts,
-        None => return RebuildState::NeverRebuilt,
-    };
-
-    let mut newer = Vec::new();
-
-    // Base branch
-    if context
-        .git()
-        .branch_exists_anywhere(&env.base)
-        .ok()
-        .unwrap_or(false)
-    {
-        if let Ok(sha) = context.git().get_branch_commit_sha(&env.base) {
-            if let Ok(ts) = context.git().get_commit_timestamp(&sha) {
-                if ts > rebuilt_at {
-                    newer.push(env.base.clone());
-                }
-            }
-        }
-    }
-
-    // Promoted branches
-    for branch in &env.branches {
-        if context
-            .git()
-            .branch_exists_anywhere(branch)
-            .ok()
-            .unwrap_or(false)
-        {
-            if let Ok(sha) = context.git().get_branch_commit_sha(branch) {
-                if let Ok(ts) = context.git().get_commit_timestamp(&sha) {
-                    if ts > rebuilt_at {
-                        newer.push(branch.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    if newer.is_empty() {
-        RebuildState::UpToDate
-    } else {
-        RebuildState::NeedsRebuild {
-            newer_branches: newer,
-        }
     }
 }

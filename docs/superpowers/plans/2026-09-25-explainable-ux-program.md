@@ -16,14 +16,15 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Two commits, so far:
+Three commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
+- `310de28` — the P0–P2 phase plans' "As executed" sections.
 
-Neither commit touches `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
+None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
-**P0, P1, P2 are complete. P3 is next** — see the P2 phase plan's "What P3 inherits" section for the five things it must not get wrong, and `src/utils/build_record.rs` for the reader it consumes (`read_state` is written and unit-tested but has no production caller yet).
+**P0, P1, P2, and P3 are complete. P4 is next** — see the P3 phase plan's "What P4 inherits" section for the four things it must not get wrong, and `src/core/state.rs` for the model its planner will render. `read_state` now has its production reader, and `core/status.rs` no longer contains a staleness check at all.
 
 ---
 
@@ -102,13 +103,20 @@ P0  scenario inventory
      P10 docs + legacy removal ─────────┘
 ```
 
-**Authoring note:** P0, P1, and P2 are authored and **all three are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, and `2026-09-25-explainable-ux-P2-build-provenance.md`. Each carries an "Implementation status" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P3's task steps are authored next, because P2 shifted line numbers in `src/utils/prelude.rs` again (the record construction sits between the compose and the publish) and because P3 replaces `core/status.rs`'s staleness check — both need re-resolving against the post-P2 tree. P4–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
+**Authoring note:** P0–P3 are authored and **all four are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, `2026-09-25-explainable-ux-P2-build-provenance.md`, and `2026-09-25-explainable-ux-P3-state-model.md`. Each carries an "Implementation status" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P4's task steps are authored next, because P3 rewrote `core/status.rs` into a pure projection of `src/core/state.rs` and moved the verdict out of `commands/status.rs` entirely — the file `main.rs` and P4's planner both dispatch through now points at different code than it did before P3. P5–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
 
 **What P1 handed forward, beyond `compose_environment` and `PinnedInputs`:**
 
 - `commands/resolve.rs:131,180` still selects its Mode A vs Mode B and its "nothing to resolve" refusal from `preflight_compatibility_report` — a tree-based approximation. P1's central invariant ("one composition") therefore holds for `rebuild` and is still **violated** for `resolve`. P4's planner is the natural place to fix it, since `resolve` needs a *plan* to choose a mode from rather than a second ad-hoc opinion. Until then, do not add further dependants.
 - `prelude::format_compatibility_report_for_rebuild` is the single halt renderer, and `utils::conflict_report::format_conflict_report` now has no production caller (kept, public, tested, a deletion candidate). If a later phase needs a richer per-merge diagnostic, that is the function to reach for — but never to decide a mutation's outcome.
 - `rebuild_environment_opts` takes `on_conflict_override: Option<OnConflict>`; `rebuild_environment` passes `None`. Any new caller that needs to influence composition must go through a parameter like it, not through a pre-check.
+
+**What P2 and P3 handed forward, for P4 specifically:**
+
+- **`src/core/state.rs` is the only place a staleness verdict may be computed.** `build_state_snapshot` reads Desired live from refs and Actual from the build record and returns a `RepositoryStateSnapshot`; `EnvironmentHealth` is the verdict, and `ChangedInput { branch, previous_sha, current_sha }` is the "`old → new`" material spec §11.2 asks for. P4's planner renders a *future* state, so it should build a plan and then project it — not reach for `get_commit_timestamp`, and not call `read_state` itself. The old timestamp heuristic is gone and reintroducing it is a regression with tests guarding it (see `AGENTS.md`).
+- **`core/status.rs` is now a pure projection** — `build_status_model(&snapshot)`, no `GlobalContext`, no repo handle. That is deliberate: it makes "the view cannot disagree with the model" true by construction rather than by discipline, and P4's dry-run/preview output should take the same shape. `commands/status.rs` now formats and decides nothing.
+- **`preflight_compatibility_report` is still a prediction, and P3 made that explicit rather than fixing it.** The ⛔ glyph used to print "held on rebuild" for a *next-build* prediction, which reads as a fact about the branch in front of you. It now consults the build record's `held` list (a fact) first and words the two cases differently — "held in the last build" vs "would be held on the next rebuild". This is a naming fix, not a resolution of P1's open item: `commands/resolve.rs:131,180` still chooses its resolution mode from a second merge opinion, and `preflight_compatibility_report_local` is still called from `conflicts.rs:44`, `status.rs`, and `tree.rs:138`. **P4 owns that.** `resolve` needs a *plan* to choose a mode from, which is exactly what P4 builds.
+- **`hitch status` is now fully offline.** P3 removed the per-branch `branch_exists_anywhere` (a `git ls-remote --heads origin` per promoted branch) from the render loop, so the snapshot's `rev_parse_opt refs/heads/*` → `refs/remotes/origin/*` resolution is the only ref lookup. Any new status-shaped path inherits that for free; do not add a network call to one.
 
 ---
 
@@ -202,6 +210,8 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 - Produces: feature×environment membership as a first-class query, generalising what `src/core/workspace_index.rs` already computes locally (but without reshaping its public types — see Global Constraint 2).
 
 **Exit criteria:** Same branch promoted to multiple environments; remote-only feature; missing branch; feature already integrated into base; base changed after rebuild; feature changed after rebuild; locked/approval metadata all represented accurately. `status` and the snapshot agree. All four gates green.
+
+**Status: COMPLETE** (2026-09-25). `src/core/state.rs` is the new module; `core/status.rs` is now a pure projection of the snapshot; `commands/status.rs` formats and decides nothing. All seven exit-criterion scenarios have named tests in `tests/integration/state_model_tests.rs`, and the two long-`#[ignore]`d timing tests in `status_tests.rs` are live again with their `sleep(2)` calls and a `--date 2099-01-01` hack deleted — that is the strongest single piece of evidence the fix worked, since those tests previously could not pass without help from a clock. `just test` 68 + 387, zero ignored. Two findings worth carrying: **there were more than the four copies of the timestamp comparison the plan predicted** (the summary blocks re-derived the verdict per environment, so one `hitch status` computed it up to three times), and **no existing test asserted the wrong behaviour** — the full suite passed with zero test changes after the rewrite, which is why Task 6 exists at all. Details, deviations, and P4's inheritance list in the phase plan.
 
 ---
 

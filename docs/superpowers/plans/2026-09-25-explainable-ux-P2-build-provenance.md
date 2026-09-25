@@ -449,6 +449,14 @@ Debug binary (`cargo build -p hitch`), throwaway repo in `/tmp/hitchp2/repo`. Ra
 
 **Caveat on step 6, stated so nobody over-reads it:** "nothing crashes when the record is missing" is currently *trivially* true, because `build_record::read_state` has no production caller yet — P2 built the writer, P3 wires the reader. The only consumer of the missing-record path today is the unit test. Step 6 confirms the ref's absence does not disturb anything that reads refs; it does **not** yet demonstrate graceful degradation in `hitch status`, because nothing reads the record there. Do not cite it as evidence that P3's reader is safe.
 
+> **Resolved by P3** (2026-09-25), as this caveat predicted it would be:
+> `test_hitch_status_renders_legacy_unknown_and_still_exits_zero` in
+> `tests/integration/state_model_tests.rs` is the demonstration this section
+> says was not available — a missing record renders as an explicit "Actual
+> unknown", `hitch status` exits 0, and nothing claims the environment is up
+> to date. See the P3 phase plan's Finding 3 for why a `hitch release`-based
+> test would *not* have exercised this path.
+
 ### What P3 inherits
 
 - `read_state` is written, unit-tested against all four states, and **unused**. P3's `RepositoryStateSnapshot` is its first caller.

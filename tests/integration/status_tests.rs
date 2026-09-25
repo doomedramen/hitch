@@ -410,8 +410,14 @@ mod tests {
         Ok(())
     }
 
+    /// Was `#[ignore]`d as "timing-sensitive: relies on git commit timestamps
+    /// being newer than rebuild timestamp". That dependency *was* the bug — the
+    /// verdict used to come from comparing a commit's date against a wall-clock
+    /// `rebuilt_at`, so a test could only pass by sleeping long enough for the
+    /// clock to tick. The verdict is now a SHA comparison against the build
+    /// record, so the assertion below needs no clock at all, and neither does
+    /// the test (the `sleep(2)` that bought a second is gone).
     #[test]
-    #[ignore = "Timing-sensitive test: relies on git commit timestamps being newer than rebuild timestamp"]
     fn test_hitch_status_detects_base_branch_changes() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
@@ -423,29 +429,35 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Rebuild the environment (sets rebuilt_at timestamp)
+            // Rebuild, which pins main's current SHA into the build record.
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result.assert_success();
 
-            // Wait enough time to ensure we're in a different second
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
             // Make a new commit directly to main (simulating an external merge)
             env.fs.write_file("external.txt", "external change")?;
-            env.git.run(&["add", "."])?;
+            env.git.run(&["add", "-f", "external.txt"])?;
             env.git.run(&["commit", "-m", "External change to main"])?;
 
-            // Run hitch status - should detect that main has newer commits
+            // Run hitch status - should detect that main has moved
             let result = env.hitch.run().args(&["status"]).execute()?;
             let stdout = result.stdout();
 
             result.assert_success();
             assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
 
-            // The status should indicate rebuild is needed since main has new commits
+            // The summary of *which* input moved, in the form spec §11.2 asks
+            // for: an explicit before → after rather than a bare verdict. This
+            // is a stronger assertion than the one it replaces — the old one
+            // accepted any of two loosely-related strings and would have passed
+            // against an output that named the wrong branch.
             assert!(
-                stdout.contains("Rebuild needed") || stdout.contains("main has newer commits"),
-                "Expected status to show rebuild needed. Got:\n{}",
+                stdout.contains("has new commits") && stdout.contains("main"),
+                "Expected status to say main has new commits. Got:\n{}",
+                stdout
+            );
+            assert!(
+                stdout.contains('\u{2192}'),
+                "Expected a from \u{2192} to SHA arrow for the changed input. Got:\n{}",
                 stdout
             );
 
@@ -455,8 +467,10 @@ mod tests {
         Ok(())
     }
 
+    /// Un-ignored for the same reason as
+    /// `test_hitch_status_detects_base_branch_changes`: the clock dependency
+    /// was the defect, not an environmental hazard.
     #[test]
-    #[ignore = "Timing-sensitive test: relies on git commit timestamps being newer than rebuild timestamp"]
     fn test_hitch_status_multiple_envs_with_changed_base() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
@@ -477,12 +491,11 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "qa"]).execute()?;
             result.assert_success();
 
-            // Wait to ensure timestamp difference
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
-            // Make a new commit to main
+            // Make a new commit to main. No sleep, and no wait for a clock to
+            // tick: both environments' records pinned main's SHA at their own
+            // rebuild, and this commit moves it for both of them.
             env.fs.write_file("external.txt", "external change")?;
-            env.git.run(&["add", "."])?;
+            env.git.run(&["add", "-f", "external.txt"])?;
             env.git.run(&["commit", "-m", "External change to main"])?;
 
             // Run hitch status
@@ -492,10 +505,28 @@ mod tests {
             result.assert_success();
             assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
             assert!(stdout.contains("qa"), "Expected status to contain 'qa'");
-            // Both environments should show rebuild needed
+            // Both environments should show rebuild needed, each naming the
+            // input that moved and by how much. Counting the arrows is what
+            // makes this a two-environment assertion rather than a one: the old
+            // `contains("main has newer commits")` was satisfied by whichever
+            // environment rendered first.
+            let arrows = stdout.matches('\u{2192}').count();
+            assert_eq!(
+                arrows, 2,
+                "both dev and qa share main as a base, so both must report it moved. Got:\n{}",
+                stdout
+            );
             assert!(
-                stdout.contains("Rebuild needed") || stdout.contains("main has newer commits"),
-                "Expected status to show rebuild needed. Got:\n{}",
+                stdout.contains("has new commits") && stdout.contains("main"),
+                "Expected status to say main has new commits. Got:\n{}",
+                stdout
+            );
+            // Assert the command hints, not the labels: the suggestion list
+            // colourises the environment name with ANSI escapes, so the literal
+            // text "Rebuild dev" never appears even though the row does.
+            assert!(
+                stdout.contains("hitch rebuild dev") && stdout.contains("hitch rebuild qa"),
+                "and both environments should get a rebuild hint. Got:\n{}",
                 stdout
             );
 
@@ -533,21 +564,20 @@ mod tests {
                 .assert_success();
 
             // Add a new commit to the branch AFTER promotion (making it stale).
-            // Use an explicit future author-date to guarantee the commit timestamp is
-            // newer than the rebuild's `rebuilt_at` timestamp regardless of
-            // how fast the test runs.
+            //
+            // This used to carry an explicit future author-date
+            // (`--date 2099-01-01T00:00:00+00:00`) so the commit's timestamp
+            // would outrank the rebuild's `rebuilt_at` however fast the test
+            // ran. That hack is exactly the bug: a staleness check that needs a
+            // faked clock to notice a *content* change is not reading content.
+            // The record pins the branch's SHA, so an ordinary commit is now
+            // enough and the faked date is gone.
             env.git.run(&["checkout", "stale-feature"])?;
             env.fs.write_file("stale.txt", "v2 - new content")?;
             env.git.run(&["add", "-f", "stale.txt"])?;
-            // Use an explicit future author-date so the commit is guaranteed
-            // to be newer than the rebuild's rebuilt_at timestamp.
-            env.git.run(&[
-                "commit",
-                "-m",
-                "Update after promotion",
-                "--date",
-                "2099-01-01T00:00:00+00:00",
-            ])?;
+            env.git
+                .run(&["commit", "-m", "Update after promotion"])?
+                .assert_success();
             env.git.run(&["checkout", "main"])?;
 
             // Status should now show the branch as stale
@@ -566,8 +596,15 @@ mod tests {
         Ok(())
     }
 
-    /// `hitch status` should flag a branch that would be held on the next
+    /// `hitch status` should flag a branch that *would* be held on the next
     /// rebuild (⛔), without fetching or building anything.
+    ///
+    /// This repo has never been built, so there is no record and the ⛔ comes
+    /// from the local preflight — a prediction. It is worded as one: "would be
+    /// held on the next rebuild". See
+    /// `test_status_distinguishes_a_held_branch_from_one_that_would_be_held`
+    /// in `state_model_tests.rs` for the record-backed (fact) wording, which
+    /// used to be conflated with this one.
     #[test]
     fn test_status_shows_held_branch_glyph() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -610,11 +647,22 @@ mod tests {
             env.git.run(&["checkout", "main"])?;
 
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
                 .assert_stdout_contains("⛔")
                 .assert_stdout_contains("branch-b")
-                .assert_stdout_contains("held on rebuild");
+                // A prediction, so it is worded as one. The previous phrasing,
+                // "held on rebuild", read as a statement about the branch's
+                // current state when it was describing the *next* build.
+                .assert_stdout_contains("would be held on the next rebuild")
+                .stdout()
+                .to_string();
+            // No build has happened, so nothing may claim a past one.
+            assert!(
+                !stdout.contains("held in the last build"),
+                "nothing was built, so no branch can have been held in a build. Got:\n{}",
+                stdout
+            );
 
             Ok::<(), anyhow::Error>(())
         });

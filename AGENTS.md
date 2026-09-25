@@ -196,12 +196,22 @@ covered.
   free). It replaces the old state layer's inference-from-timestamps. The
   record's `RefEdit` rides `publish_branch`'s existing transaction, so
   "environment tip moved" and "record describing that tip now exists" are
-  applied all-or-nothing. `read_state` has no production caller yet — P3
-  wires it into the state model.
-- `src/core/` — read-only view builders (workspace/status models).
-  `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
-  have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
-  Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
+  applied all-or-nothing. Its reader, `read_state`, is the sole input to
+  `src/core/state.rs`'s Actual side.
+- `src/core/` — read-only view builders (workspace/status/state models).
+  - `state.rs` is **the** authority on "does this environment need a
+    rebuild, and what actually moved". `build_state_snapshot` returns a
+    `RepositoryStateSnapshot` — Desired read live from refs, Actual read
+    from the build record, Health classified by comparing the two — and
+    every display of that verdict must read it from here rather than
+    re-deriving it. `status.rs` is now a *pure projection*:
+    `build_status_model(&snapshot)` takes no context, opens no repo, and
+    cannot disagree with the snapshot it was handed. `commands/status.rs`
+    reads the same snapshot and only formats it.
+  - `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
+    have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
+    Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
+    `details.rs` and `status.rs` are the other two view builders.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
@@ -355,6 +365,24 @@ straight into `EnvironmentBuildRecord` would fail on the first unknown field,
 so a newer hitch's record would be misreported as a corrupt blob instead of
 as "written by a newer hitch".
 
+P3 is the reader, and it renders this as a first-class state rather than as
+missing work: `hitch status` prints "Actual unknown — no build record for this
+environment", keeps its exit code at 0, and does **not** count it under "need
+rebuild" (`is_actionable()` is false for `LegacyUnknown` — it is a different
+signal, not a stale one), while still offering `hitch rebuild <env>` as the
+thing that would make it known. `test_hitch_status_renders_legacy_unknown_and_still_exits_zero`
+holds that, and
+`test_an_environment_built_without_a_record_is_legacy_unknown` simulates a
+pre-P2 repo by building for real, asserting `refs/hitch/state/dev` exists so
+the test cannot pass vacuously, and then `git update-ref -d`-ing it. Note the
+real-world driver of this state is a **repo last built by a pre-P2 hitch**, not
+`hitch release` — a release prunes the integrated environment branch, so it
+reads as `MissingBranch` (with `ActualComposition::LegacyUnknown` underneath),
+and its default dependent rebuild writes a record for everything else. One
+ordering rule in `src/core/state.rs`: a *declared branch with no ref anywhere*
+is decided before the record is read, because a missing branch is missing
+whether or not we happen to know what was in the last build.
+
 **The state ref's `expected_old: Some(String::new())` is deliberate, and is
 NOT the publish-journal CAS mistake described under `publish_branch` above.**
 That entry's rule is about a *leftover record* being able to fail a
@@ -378,7 +406,71 @@ always a strict *ancestor* of the branch's final tip. On top of that it moves
 when an unrelated environment is promoted and returns to a previous value
 when a declaration edit is reverted. Staleness is decided by comparing
 `desired_branches` against the live refs — see `RepositoryStateSnapshot` in
-P3 — never by this field.
+`src/core/state.rs` — never by this field.
+
+**The staleness verdict is a SHA comparison. Reintroducing a timestamp
+comparison is a regression, and the tests are built to catch it.** Until P3,
+"does this environment need a rebuild?" was answered by asking whether the
+newest commit among the environment's inputs was newer than a wall-clock
+`rebuilt_at` read out of `hitch.json`. That is wrong in three independent ways,
+all of which were live in shipped code: a rebased or cherry-picked branch
+produces a commit whose *date* can easily be older than the last build while
+its *content* is completely different, so a rebased feature read as up to
+date; a `hitch promote --no-rebuild` moves nothing's date, so it read as up to
+date too; and a clock skew or a backdated commit flips the verdict either way.
+The check also could not see a *removed* branch at all. It is now
+`EnvironmentHealth::NeedsRebuild { changed_inputs }` in `src/core/state.rs`,
+comparing the record's pinned `desired_branches` SHAs and base SHA against
+freshly pinned ones, and naming what moved as `previous → current`. The
+regression tests are the point: `test_a_rebased_feature_is_needs_rebuild_even_though_its_commits_are_newer`
+and `test_a_backdated_commit_still_counts_as_needs_rebuild` fail if the clock
+is consulted, and `test_hitch_status_detects_base_branch_changes` /
+`test_hitch_status_multiple_envs_with_changed_base` used to be `#[ignore]`d as
+"timing-sensitive" for exactly this reason — they are live now and their
+`sleep(2)` is gone. Do not reintroduce `get_commit_timestamp` into any
+verdict: it has exactly one production caller left,
+`core/timeline.rs:96`, which formats a date for display.
+
+**A display of a verdict must read the verdict, not re-derive it — and
+`hitch status` used to derive it four times.** The old status command called
+`determine_rebuild_state` in the per-environment renderer *and* in both summary
+blocks, so one `hitch status` computed the same answer once per environment in
+the top summary, again in the body, and again in the bottom summary. That is
+the shape of bug where two of the three can drift. `build_status_model` is now
+a pure function of the snapshot, `commands/status.rs` formats the snapshot
+rather than deciding anything, and
+`test_the_snapshot_and_the_status_model_never_disagree` plus
+`test_hitch_status_renders_exactly_what_the_snapshot_reports` (both in
+`tests/integration/state_model_tests.rs`) hold the two together. A new display
+path should take a `&EnvironmentState`, not a `GlobalContext`.
+
+**A fact and a prediction must not share a glyph, a word, or a code path.** The
+⛔ on a promoted branch used to always read "(conflicts with X — held on
+rebuild)", but it was driven by `preflight_compatibility_report_local`, which
+answers "would the *next* build hold this?" — a prediction, dressed as a
+statement about the branch in front of you. Now the record's `held` list
+(a fact about the last build) is consulted first and the preflight only fills
+the gap, and the two are worded differently: "held in the last build" versus
+"would be held on the next rebuild". Same glyph, because both are worth a
+glance; different words, because they call for different urgency.
+`test_status_distinguishes_a_held_branch_from_one_that_would_be_held` holds
+both arms. The same rule is why `preflight_compatibility_report` is still a
+*prediction* everywhere it is called from — do not promote a prediction into a
+verdict just because one is more convenient to compute.
+
+**`build_state_snapshot` is offline, and that is a guarantee not an
+accident.** It resolves each declared branch with `rev_parse_opt
+refs/heads/<b>` and falls back to the cached `refs/remotes/origin/<b>`; it
+never calls `ls-remote` and never fetches. Two consequences worth knowing.
+First, a branch that exists only on the remote and has never been fetched
+resolves to `None` and is classified `MissingBranch` — correct, because
+hitch could not have built from it either. Second, `hitch status` used to
+call `branch_exists_anywhere` once per promoted branch inside its render
+loop, which is a `git ls-remote --heads origin` per branch: a network round
+trip per row, in a read-only command. The renderer now reads existence from
+the snapshot it was handed, so the command is genuinely offline end to end.
+If you add a per-branch check to a status-style path, check the snapshot
+first.
 
 **`hitch rebuild`'s exit code 2 is a CI contract, not a bug.** `rebuild` is
 the only command in the CLI with a non-0/1 exit code: `rebuild::run` returns

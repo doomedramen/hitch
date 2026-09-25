@@ -1,4 +1,8 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::state::{
+    build_state_snapshot, ActualComposition, ApprovalPolicy, DeclaredBranch, DesiredComposition,
+    EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
+};
 use crate::types::{Environment, HitchConfig};
 use crate::utils::prelude::access_metadata_read_only;
 use crate::utils::setup;
@@ -33,8 +37,20 @@ pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
 
     context.log_verbose("Successfully retrieved metadata using read-only access");
 
+    // One snapshot for the whole command. `config` above is still needed for
+    // the protection/protection-adjacent sections and for the environment
+    // list, but every staleness verdict below now comes from here, so the
+    // per-branch glyphs and the per-environment verdict cannot disagree with
+    // each other or with `hitch details`.
+    let snapshot = build_state_snapshot(&context)?;
+    context.log_verbose(&format!(
+        "Built state snapshot: {} environment(s), {} feature(s)",
+        snapshot.environments.len(),
+        snapshot.features.len(),
+    ));
+
     // Display status
-    display_status(&context, &config)?;
+    display_status(&context, &config, &snapshot)?;
 
     // Show diff if requested
     if args.diff {
@@ -46,9 +62,13 @@ pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
 }
 
 /// Display formatted status information
-fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
+fn display_status(
+    context: &GlobalContext,
+    config: &HitchConfig,
+    snapshot: &RepositoryStateSnapshot,
+) -> Result<()> {
     // Display overall summary
-    display_overall_summary(context, config)?;
+    display_overall_summary(context, config, snapshot)?;
 
     if config.environments.is_empty() {
         context.log_info("No environments configured.");
@@ -62,11 +82,11 @@ fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 
     for env_name in env_names {
         let env = &config.environments[env_name];
-        display_environment_status(context, env_name, env, config)?;
+        display_environment_status(context, env_name, env, config, snapshot)?;
     }
 
     // Display summary at the end
-    display_status_summary(context, config)?;
+    display_status_summary(snapshot)?;
 
     display_protection_status(context, config);
 
@@ -74,7 +94,11 @@ fn display_status(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
 }
 
 /// Display overall project summary
-fn display_overall_summary(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
+fn display_overall_summary(
+    context: &GlobalContext,
+    config: &HitchConfig,
+    snapshot: &RepositoryStateSnapshot,
+) -> Result<()> {
     println!("{}", "🚀 Hitch Environment Status".bright_green().bold());
     println!("{}", "─".repeat(50).dimmed());
 
@@ -85,18 +109,16 @@ fn display_overall_summary(context: &GlobalContext, config: &HitchConfig) -> Res
         .values()
         .filter(|e| e.is_locked())
         .count();
-    let mut needs_rebuild = 0;
-    let mut never_rebuilt = 0;
-
-    for env in config.environments.values() {
-        if let Ok(status) = determine_rebuild_status(context, env) {
-            match status {
-                RebuildStatus::UpToDate => {}
-                RebuildStatus::NeedsRebuild(_) => needs_rebuild += 1,
-                RebuildStatus::NeverRebuilt => never_rebuilt += 1,
-            }
-        }
-    }
+    let needs_rebuild = snapshot
+        .environments
+        .iter()
+        .filter(|e| e.health.is_actionable())
+        .count();
+    let never_rebuilt = snapshot
+        .environments
+        .iter()
+        .filter(|e| matches!(e.health, EnvironmentHealth::NeverBuilt))
+        .count();
 
     // Display summary line
     println!(
@@ -123,32 +145,35 @@ fn display_overall_summary(context: &GlobalContext, config: &HitchConfig) -> Res
 }
 
 /// Display status summary at the end
-fn display_status_summary(context: &GlobalContext, config: &HitchConfig) -> Result<()> {
+fn display_status_summary(snapshot: &RepositoryStateSnapshot) -> Result<()> {
     println!("{}", "─".repeat(50).dimmed());
 
     // Quick action suggestions
     let mut suggestions = Vec::new();
 
-    // Check for environments that need rebuilding
-    for (env_name, env) in &config.environments {
-        if let Ok(status) = determine_rebuild_status(context, env) {
-            match status {
-                RebuildStatus::NeedsRebuild(_) => {
-                    suggestions.push(format!(
-                        "• Rebuild {}: 'hitch rebuild {}'",
-                        env_name.bright_green(),
-                        env_name
-                    ));
-                }
-                RebuildStatus::NeverRebuilt => {
-                    suggestions.push(format!(
-                        "• Initial rebuild {}: 'hitch rebuild {}'",
-                        env_name.bright_green(),
-                        env_name
-                    ));
-                }
-                RebuildStatus::UpToDate => {}
+    // Check for environments that need rebuilding. `LegacyUnknown` gets no
+    // suggestion: there is nothing obviously wrong to fix, and nudging a
+    // rebuild on every `hitch release`-published environment would be noise.
+    for state in &snapshot.environments {
+        let env_name = &state.name;
+        match &state.health {
+            EnvironmentHealth::NeedsRebuild { .. } | EnvironmentHealth::MissingBranch => {
+                suggestions.push(format!(
+                    "• Rebuild {}: 'hitch rebuild {}'",
+                    env_name.bright_green(),
+                    env_name
+                ));
             }
+            EnvironmentHealth::NeverBuilt => {
+                suggestions.push(format!(
+                    "• Initial rebuild {}: 'hitch rebuild {}'",
+                    env_name.bright_green(),
+                    env_name
+                ));
+            }
+            EnvironmentHealth::Realised
+            | EnvironmentHealth::PartiallyRealised { .. }
+            | EnvironmentHealth::LegacyUnknown => {}
         }
     }
 
@@ -177,7 +202,18 @@ fn display_environment_status(
     env_name: &str,
     env: &Environment,
     config: &HitchConfig,
+    snapshot: &RepositoryStateSnapshot,
 ) -> Result<()> {
+    // The environment's own snapshot entry. Falling back to a synthesised
+    // LegacyUnknown state (rather than unwrapping) keeps status renderable if
+    // the two ever drift — a display command that panics on an internal
+    // mismatch is worse than one that admits it has nothing to show.
+    let state = snapshot
+        .environments
+        .iter()
+        .find(|e| e.name == env_name)
+        .cloned()
+        .unwrap_or_else(|| unknown_environment_state(env_name, env));
     // Environment header with visual separator and more info
     let status_indicator = if env.is_locked() {
         "🔒".bright_yellow()
@@ -232,21 +268,33 @@ fn display_environment_status(
             }
         }
 
-        // Local-only, no-fetch compatibility check so a branch that would be
-        // held on the next rebuild (see docs/merge-conflict-handling-plan.md)
-        // shows up here too, without slowing status down with a network fetch.
-        let held = crate::utils::prelude::preflight_compatibility_report_local(
+        // Two different questions, deliberately kept apart. The build record
+        // says what the *last* build did, which is a fact; this local-only
+        // preflight says what the *next* build would do, which is a prediction.
+        // The old code conflated them, printing "held on rebuild" for a
+        // prediction — which reads as a claim about the branch's current state.
+        let held_last_build = match &state.actual {
+            ActualComposition::FromRecord(actual) => Some(actual.held.clone()),
+            _ => None,
+        };
+        let would_be_held = crate::utils::prelude::preflight_compatibility_report_local(
             context,
             &env.base,
             &env.branches,
         );
 
         for (i, branch) in env.branches.iter().enumerate() {
-            // Check if branch exists locally or remotely
-            let branch_exists = context
-                .git()
-                .branch_exists_anywhere(branch)
-                .unwrap_or(false);
+            // Existence comes from the snapshot, which already resolved every
+            // declared branch against `refs/heads/*` and then the cached
+            // remote-tracking ref. The old `branch_exists_anywhere` shelled out
+            // to `git ls-remote --heads origin` once per branch, so this loop
+            // cost a network round trip per promoted branch. The whole command
+            // is offline now.
+            let branch_exists = state
+                .desired
+                .branches
+                .iter()
+                .any(|b| &b.name == branch && b.sha.is_some());
 
             let is_in_source = branch_exists
                 && context
@@ -254,22 +302,28 @@ fn display_environment_status(
                     .is_branch_merged_into(branch, &env.base)
                     .unwrap_or(false);
 
-            // Check if branch has new commits since the last rebuild (staleness)
-            let is_stale = branch_exists
-                && env.rebuilt_at.is_some_and(|rebuilt_at| {
-                    context
-                        .git()
-                        .get_branch_commit_sha(branch)
-                        .ok()
-                        .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
-                        .is_some_and(|ts| ts > rebuilt_at)
-                });
+            // Staleness now comes from the snapshot's SHA comparison, not from
+            // comparing a commit timestamp against a wall-clock `rebuilt_at`.
+            // Those disagree for every rebased or cherry-picked branch, and
+            // the old form also could not see a `--no-rebuild` promotion at
+            // all, because nothing about that moves a timestamp.
+            let is_stale = match &state.health {
+                EnvironmentHealth::NeedsRebuild { changed_inputs, .. } => {
+                    changed_inputs.iter().any(|c| &c.branch == branch)
+                }
+                _ => false,
+            };
 
-            let held_conflict = held.iter().find(|c| &c.branch == branch);
+            // The record's verdict, when it has one, is the fact; the preflight
+            // only fills the gap when the record is silent about this branch.
+            let held_in_last_build = held_last_build
+                .as_ref()
+                .and_then(|held| held.iter().find(|c| &c.branch == branch));
+            let held_next_build = would_be_held.iter().find(|c| &c.branch == branch);
 
             let branch_status = if !branch_exists {
                 "❌".bright_red().to_string()
-            } else if held_conflict.is_some() {
+            } else if held_in_last_build.is_some() || held_next_build.is_some() {
                 "⛔".red().to_string()
             } else if is_in_source {
                 "⚠️ ".bright_yellow().to_string()
@@ -293,10 +347,22 @@ fn display_environment_status(
                 "".to_string()
             };
 
-            let held_warning = if let Some(c) = held_conflict {
-                format!(" (conflicts with {} — held on rebuild)", c.conflicts_with)
-                    .red()
-                    .to_string()
+            // "was held" and "would be held" are different claims and get
+            // different words. Only the prediction is actionable now.
+            let held_warning = if let Some(c) = held_in_last_build {
+                format!(
+                    " (held in the last build — conflicts with {})",
+                    c.conflicts_with
+                )
+                .red()
+                .to_string()
+            } else if let Some(c) = held_next_build {
+                format!(
+                    " (would be held on the next rebuild — conflicts with {})",
+                    c.conflicts_with
+                )
+                .red()
+                .to_string()
             } else {
                 "".to_string()
             };
@@ -312,19 +378,14 @@ fn display_environment_status(
         }
     }
 
-    // Check if base branch itself has new commits since last rebuild
-    let base_is_stale = env.rebuilt_at.is_some_and(|rebuilt_at| {
-        context
-            .git()
-            .branch_exists_anywhere(&env.base)
-            .unwrap_or(false)
-            && context
-                .git()
-                .get_branch_commit_sha(&env.base)
-                .ok()
-                .and_then(|sha| context.git().get_commit_timestamp(&sha).ok())
-                .is_some_and(|ts| ts > rebuilt_at)
-    });
+    // The base's staleness is the same question as any other input's, and is
+    // answered by the same comparison.
+    let base_is_stale = match &state.health {
+        EnvironmentHealth::NeedsRebuild { changed_inputs, .. } => {
+            changed_inputs.iter().any(|c| c.branch == env.base)
+        }
+        _ => false,
+    };
 
     // Rebuilt information with relative time
     println!("├─ Rebuilt:");
@@ -369,23 +430,95 @@ fn display_environment_status(
 
     // Status section with enhanced details
     println!("└─ Status:");
-    let rebuild_status = determine_rebuild_status(context, env)?;
-    match rebuild_status {
-        RebuildStatus::UpToDate => {
+    match &state.health {
+        EnvironmentHealth::Realised => {
             println!("   {}", "✅ Up to date".bright_green());
         }
-        RebuildStatus::NeedsRebuild(reason) => {
-            println!("   {} {}", "⚠️ ".bright_yellow(), reason.bright_yellow());
+        EnvironmentHealth::PartiallyRealised { held } => {
+            println!(
+                "   {} {}",
+                "⚠️ ".bright_yellow(),
+                format!(
+                    "Current, but {} branch(es) held on the last build: {}",
+                    held.len(),
+                    held.join(", ")
+                )
+                .bright_yellow()
+            );
+            println!(
+                "   {}",
+                format!("💡 Run 'hitch rebuild {}' to retry them", env_name).dimmed()
+            );
+        }
+        EnvironmentHealth::NeedsRebuild {
+            changed_inputs,
+            added,
+            removed,
+        } => {
+            for change in changed_inputs {
+                let (from, to) = change.short();
+                println!(
+                    "   {} {}",
+                    "⚠️ ".bright_yellow(),
+                    format!("{from} → {to}  {}", change.branch).bright_yellow()
+                );
+            }
+            for branch in added {
+                println!(
+                    "   {} {}",
+                    "⚠️ ".bright_yellow(),
+                    format!("{branch}  promoted since the last build").bright_yellow()
+                );
+            }
+            for branch in removed {
+                println!(
+                    "   {} {}",
+                    "⚠️ ".bright_yellow(),
+                    format!("{branch}  demoted since the last build").bright_yellow()
+                );
+            }
             println!(
                 "   {}",
                 format!("💡 Run 'hitch rebuild {}' to update", env_name).dimmed()
             );
         }
-        RebuildStatus::NeverRebuilt => {
+        EnvironmentHealth::NeverBuilt => {
             println!("   {} {}", "⚠️ ".bright_red(), "Never rebuilt".bright_red());
             println!(
                 "   {}",
                 format!("💡 Run 'hitch rebuild {}' to initialize", env_name).dimmed()
+            );
+        }
+        // `hitch release` and both of `hitch resolve`'s publish paths land a
+        // branch without writing a record, on purpose — hitch has no truthful
+        // input for one. So this is a normal state, and saying "up to date"
+        // here would be a claim about a build hitch cannot describe.
+        EnvironmentHealth::LegacyUnknown => {
+            println!(
+                "   {} {}",
+                "❓ ".bright_yellow(),
+                "Actual unknown — no build record for this environment".bright_yellow()
+            );
+            println!(
+                "   {}",
+                "  (it was last built by a hitch that does not record builds, \
+                 or published by 'hitch release'/'hitch resolve')"
+                    .dimmed()
+            );
+            println!(
+                "   {}",
+                format!("💡 Run 'hitch rebuild {}' to make it known", env_name).dimmed()
+            );
+        }
+        EnvironmentHealth::MissingBranch => {
+            println!(
+                "   {} {}",
+                "❌ ".bright_red(),
+                format!("Environment branch '{}' does not exist", env_name).bright_red()
+            );
+            println!(
+                "   {}",
+                format!("💡 Run 'hitch rebuild {}' to create it", env_name).dimmed()
             );
         }
     }
@@ -393,62 +526,6 @@ fn display_environment_status(
     // Add spacing between environments
     println!();
     Ok(())
-}
-
-/// Rebuild status for an environment
-enum RebuildStatus {
-    UpToDate,
-    NeedsRebuild(String),
-    NeverRebuilt,
-}
-
-/// Determine if an environment needs rebuilding
-fn determine_rebuild_status(context: &GlobalContext, env: &Environment) -> Result<RebuildStatus> {
-    // Return early if never rebuilt
-    let rebuilt_at = match env.rebuilt_at {
-        Some(timestamp) => timestamp,
-        None => return Ok(RebuildStatus::NeverRebuilt),
-    };
-
-    let mut newer_branches = Vec::new();
-
-    // Check base branch
-    if let Ok(base_exists) = context.git().branch_exists_anywhere(&env.base) {
-        if base_exists {
-            if let Ok(base_sha) = context.git().get_branch_commit_sha(&env.base) {
-                if let Ok(base_timestamp) = context.git().get_commit_timestamp(&base_sha) {
-                    if base_timestamp > rebuilt_at {
-                        newer_branches.push(env.base.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    // Check promoted branches
-    for branch in &env.branches {
-        if let Ok(branch_exists) = context.git().branch_exists_anywhere(branch) {
-            if branch_exists {
-                if let Ok(branch_sha) = context.git().get_branch_commit_sha(branch) {
-                    if let Ok(branch_timestamp) = context.git().get_commit_timestamp(&branch_sha) {
-                        if branch_timestamp > rebuilt_at {
-                            newer_branches.push(branch.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if newer_branches.is_empty() {
-        Ok(RebuildStatus::UpToDate)
-    } else {
-        let reason = format!(
-            "Rebuild needed ({} has newer commits)",
-            newer_branches.join(", ")
-        );
-        Ok(RebuildStatus::NeedsRebuild(reason))
-    }
 }
 
 /// Format a timestamp for display
@@ -626,4 +703,41 @@ fn display_protection_status(context: &GlobalContext, config: &HitchConfig) {
     }
 
     let _ = cache;
+}
+
+/// A stand-in state for an environment the snapshot does not contain.
+///
+/// Only reachable if the snapshot and `hitch.json` disagree, which they should
+/// not — but a display command that panics on an internal mismatch is strictly
+/// worse than one that says it has nothing to show. Every field is the honest
+/// unknown, and `LegacyUnknown` is a state the CLI already knows how to render.
+fn unknown_environment_state(env_name: &str, env: &Environment) -> EnvironmentState {
+    EnvironmentState {
+        name: env_name.to_string(),
+        base: env.base.clone(),
+        desired: DesiredComposition {
+            base: env.base.clone(),
+            base_sha: None,
+            branches: env
+                .branches
+                .iter()
+                .map(|name| DeclaredBranch {
+                    name: name.clone(),
+                    sha: None,
+                })
+                .collect(),
+        },
+        actual: ActualComposition::LegacyUnknown,
+        health: EnvironmentHealth::LegacyUnknown,
+        locked: env.is_locked(),
+        approval_policy: ApprovalPolicy {
+            required: env.requires_approval,
+            min_approvals: env.min_approvals,
+            approvers: env.approvers.clone(),
+        },
+        locked_by: env.locked_by.clone(),
+        locked_at: env.locked_at,
+        rebuilt_at: env.rebuilt_at,
+        released_at: env.released_at,
+    }
 }

@@ -18,6 +18,7 @@ pub mod release_tests;
 pub mod resolve_crash_recovery_tests;
 pub mod resolve_tests;
 pub mod set_tests;
+pub mod state_model_tests;
 pub mod status_tests;
 pub mod tree_tests;
 pub mod trust_boundary_tests;
