@@ -53,9 +53,15 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0 and P1 are authored; later phases are
-authored as they approach, because their `file:lines` references go stale the
-moment the previous phase lands.
+independently of this program. P0, P1, and P2 are authored and complete; P3 is
+next. Later phases are authored as they approach, because their `file:lines`
+references go stale the moment the previous phase lands.
+
+**The program lives on the `explainable-ux` branch, not `main`.** It forked from
+`main` at `5d81fb2` and `main` is meant to stay exactly there for its duration —
+don't rebase it forward, don't cherry-pick phase commits onto it, don't "just
+land this one bit." The branch's "Where this work lives" section in the master
+plan carries the commit list and the standing check that `crates/` is untouched.
 
 ## Build, test, lint
 

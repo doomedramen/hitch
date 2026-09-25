@@ -12,6 +12,21 @@
 
 ---
 
+## Where this work lives
+
+**Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
+
+Two commits, so far:
+
+- `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
+- `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
+
+Neither commit touches `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
+
+**P0, P1, P2 are complete. P3 is next** — see the P2 phase plan's "What P3 inherits" section for the five things it must not get wrong, and `src/utils/build_record.rs` for the reader it consumes (`read_state` is written and unit-tested but has no production caller yet).
+
+---
+
 ## Scope
 
 **In scope:** the shared Rust core, the CLI, and the structured typed API that the desktop app will later consume. Phases P0–P10 below. Covers the source spec's §5–§19, §27–§28 (M1–M8, M12, M13), §30–§37, and the non-desktop rows of §40.
