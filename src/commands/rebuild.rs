@@ -1,7 +1,11 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::operations::model::OperationOutcome;
 use crate::operations::rebuild::{plan_rebuild, PlanPurpose, RebuildPlanOptions};
 use crate::types::OnConflict;
-use crate::utils::prelude::{access_metadata_read_only, with_locked_env, CompatibilityConflict};
+use crate::utils::prelude::{
+    access_metadata_read_only, rebuild_environment_gated, with_locked_env, StepNarration,
+};
 use anyhow::Result;
 use clap::Args;
 
@@ -51,8 +55,6 @@ pub struct RebuildCommand {
 /// `Ok(false)` is a fully clean success; `Err` covers both a halt-policy
 /// refusal and any other failure (both exit 1, matching prior behavior).
 pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
-    context.log_info(&format!("Rebuilding environment '{}'...", args.env_name));
-
     // Step 1: Precondition checks (require clean working tree)
     crate::utils::prelude::pre_check(context)?;
     validate_environment_exists_and_unlocked(context, &args.env_name, args.force)?;
@@ -81,6 +83,11 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
         }
     ));
 
+    let options = RebuildPlanOptions {
+        replay: args.replay_resolutions,
+        on_conflict: args.on_conflict,
+    };
+
     if args.dry_run {
         // Preview by planning, not by composing separately. Both paths call
         // `plan_rebuild`, which calls `compose_environment` — the same one
@@ -95,66 +102,27 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
         // different door into the merge engine than the build.
         //
         // `PlanPurpose::Preview` is what keeps the preview offline and
-        // read-only: no synchronisation (see its doc comment for why that
-        // asymmetry is deliberate), no environment lock, no anchor ref.
+        // side-effect-free, and it is also why planning here happens *outside*
+        // the environment lock, inverting P5's rule. That inversion is safe for
+        // one reason only: **a preview plan is never applied, so nothing can go
+        // stale between planning and applying it.** The rule is safe because
+        // the planner does not consult `is_locked()` — which is why the human
+        // lock refusal above, and not the planner, is what enforces it. Were
+        // the planner ever to gate on the lock, a preview would have to take the
+        // lock too, and a read-only command would start mutating metadata.
         let plan = plan_rebuild(
             context,
             &args.env_name,
-            RebuildPlanOptions {
-                replay: args.replay_resolutions,
-                on_conflict: args.on_conflict,
-            },
+            options,
             PlanPurpose::Preview,
             &mut |_| {},
         )?;
 
-        if !plan.detail.replayed.is_empty() {
-            // Only the names are printed; the resolution *key* rides along in
-            // the data so a build record can cite it, but the CLI has never
-            // shown keys and this is not the place to start.
-            let names: Vec<&str> = plan
-                .detail
-                .replayed
-                .iter()
-                .map(|r| r.branch.as_str())
-                .collect();
-            context.log_info(&format!(
-                "♻️ {} branch{} would be composed from a recorded resolution: {}",
-                plan.detail.replayed.len(),
-                if plan.detail.replayed.len() == 1 {
-                    ""
-                } else {
-                    "es"
-                },
-                names.join(", ")
-            ));
-        }
+        emit_plan(context, &plan)?;
 
-        if plan.detail.held.is_empty() {
-            // "branches", not "branchs": this line used to format
-            // `"{} branch{}"` with a `""`/`"s"` suffix, so every plural read
-            // "2 branchs". The `""`/`"es"` sibling lines were already right,
-            // which is why nothing caught it.
-            context.log_success(&format!(
-                "'{}' would rebuild cleanly ({}).",
-                args.env_name,
-                if promoted_branches.len() == 1 {
-                    "1 branch".to_string()
-                } else {
-                    format!("{} branches", promoted_branches.len())
-                }
-            ));
-        } else {
-            context.log_warning(&format_held_report(&args.env_name, &plan.detail.held));
-            context.log_success(&format!(
-                "'{}' would rebuild with {} of {} branches ({} held).",
-                args.env_name,
-                promoted_branches.len() - plan.detail.held.len(),
-                promoted_branches.len(),
-                plan.detail.held.len()
-            ));
-        }
-
+        // Exit 2 for "would hold", matching a real rebuild that held: the
+        // signal is about the composition, and a preview that cannot express
+        // it would make `--dry-run` a worse predictor than it is meant to be.
         return Ok(!plan.detail.held.is_empty());
     }
 
@@ -162,31 +130,53 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
     // in-loop, over the same pinned SHAs the build consumes, and that is the
     // only place it is made — for the dry-run and the real run alike. The
     // pre-check that used to live at this point was a second opinion from a
-    // different implementation, which is precisely what could disagree with
-    // the merge that followed it.
+    // different implementation, which is precisely what could disagree with the
+    // merge that followed it.
+    //
+    // The gate is the caller's, and it sees the finished plan — which is the
+    // point of a plan. `hitch rebuild` asks about it; the nested rebuilds inside
+    // promote/demote/release do not, because the user already answered the
+    // question that produced them.
+    let gate =
+        |plan: &crate::operations::model::OperationPlan<
+            crate::operations::rebuild::RebuildPlanDetail,
+        >|
+         -> Result<bool> { confirm_plan(context, &render_plan(plan), &plan.confirmation) };
 
-    // Step 3: Execute rebuild
-    let replay = args.replay_resolutions;
-    let outcome = if args.force {
+    let run = if args.force {
         context.log_info(&format!(
             "Force rebuilding locked environment '{}'...",
             args.env_name
         ));
-        crate::utils::prelude::rebuild_environment_opts(
+        rebuild_environment_gated(
             context,
             &args.env_name,
-            replay,
-            args.on_conflict,
+            options.replay,
+            options.on_conflict,
+            // The plan says which branches compose and which are held, in one
+            // place; `StepLogger` would say it again in a second vocabulary.
+            StepNarration::Suppressed,
+            gate,
         )?
     } else {
         with_locked_env(context, &args.env_name, || {
-            crate::utils::prelude::rebuild_environment_opts(
+            rebuild_environment_gated(
                 context,
                 &args.env_name,
-                replay,
-                args.on_conflict,
+                options.replay,
+                options.on_conflict,
+                StepNarration::Suppressed,
+                gate,
             )
         })?
+    };
+
+    let Some(run) = run else {
+        // The gate already showed the plan, and it already logged the answer.
+        // Nothing was written, so there is nothing further to report and — more
+        // to the point — no reason to print a "rolled back" line for a no-op.
+        // Exit 0: declining is not a failure.
+        return Ok(false);
     };
 
     if args.pr_comments {
@@ -194,73 +184,19 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             context,
             &args.env_name,
             &promoted_branches,
-            &outcome.held,
+            &run.plan.detail.held,
         );
     }
 
-    if !outcome.replayed.is_empty() {
-        let names: Vec<&str> = outcome.replayed.iter().map(|r| r.branch.as_str()).collect();
-        context.log_info(&format!(
-            "♻️ Composed {} branch{} from recorded resolutions: {}",
-            outcome.replayed.len(),
-            if outcome.replayed.len() == 1 {
-                ""
-            } else {
-                "es"
-            },
-            names.join(", ")
-        ));
-    }
+    emit_receipt(context, &run.plan, &run.receipt)?;
 
-    if outcome.held.is_empty() {
-        context.log_success(&format!(
-            "Environment '{}' rebuilt successfully!",
-            args.env_name
-        ));
-        Ok(false)
-    } else {
-        context.log_warning(&format_held_report(&args.env_name, &outcome.held));
-        context.log_success(&format!(
-            "Environment '{}' rebuilt with {} branch{} held.",
-            args.env_name,
-            outcome.held.len(),
-            if outcome.held.len() == 1 { "" } else { "es" }
-        ));
-        Ok(true)
-    }
-}
-
-/// Format the branches excluded from a build under `OnConflict::Eject` — a
-/// warning, not a failure: the rebuild itself still succeeded with the rest.
-fn format_held_report(env_name: &str, held: &[CompatibilityConflict]) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "⛔ '{}': {} branch{} held (excluded from this build)\n\n",
-        env_name,
-        held.len(),
-        if held.len() == 1 { "" } else { "es" }
-    ));
-
-    for c in held {
-        out.push_str(&format!(
-            "  {} conflicts with {}\n",
-            c.branch, c.conflicts_with
-        ));
-        for f in &c.conflicted_files {
-            out.push_str(&format!("    {}\n", f));
-        }
-        out.push('\n');
-    }
-
-    out.push_str("Fix each, then rerun to bring it back in:\n");
-    for c in held {
-        out.push_str(&format!(
-            "  git checkout {} && git rebase {}\n",
-            c.branch, c.conflicts_with
-        ));
-    }
-
-    out
+    // Exit 2 for holds, and only for holds. `Ok(true)` here is the CI contract:
+    // the build succeeded with the rest, and a pipeline should be able to warn
+    // without failing. The typed form of the same fact is the receipt's
+    // `OperationOutcome::AppliedWithHolds`, and this reads it rather than
+    // re-deriving it from `detail.held` — two places computing one verdict is
+    // how the exit code and the rendered outcome drift apart.
+    Ok(run.receipt.outcome == OperationOutcome::AppliedWithHolds)
 }
 
 /// Validate that environment exists and is not locked (unless force flag is used)

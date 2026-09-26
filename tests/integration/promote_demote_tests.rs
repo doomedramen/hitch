@@ -34,7 +34,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully promoted 'feature-1' to environment 'dev'");
+                .assert_stdout_contains("promote feature-1 into 'dev' (now: feature-1)");
 
             // Verify branch was promoted in environment configuration
             let config = env.read_hitch_config()?;
@@ -81,7 +81,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully demoted 'feature-1' from environment 'dev'");
+                .assert_stdout_contains("demote feature-1 out of 'dev' (now: nothing)");
 
             // Verify branch was demoted from environment configuration
             let config = env.read_hitch_config()?;
@@ -273,9 +273,9 @@ mod tests {
                 .run()
                 .args(&["promote", "feature-success-after-rollback", "dev"])
                 .execute()?;
-            success_result.assert_success().assert_stdout_contains(
-                "Successfully promoted 'feature-success-after-rollback' to environment 'dev'",
-            );
+            success_result
+                .assert_success()
+                .assert_stdout_contains("promote feature-success-after-rollback into 'dev'");
 
             // Verify branch was promoted
             let config = env.read_hitch_config()?;
@@ -330,9 +330,9 @@ mod tests {
                 .run()
                 .args(&["demote", "feature-demote-success", "dev"])
                 .execute()?;
-            success_result.assert_success().assert_stdout_contains(
-                "Successfully demoted 'feature-demote-success' from environment 'dev'",
-            );
+            success_result
+                .assert_success()
+                .assert_stdout_contains("demote feature-demote-success out of 'dev'");
 
             // Verify branch was demoted
             let config = env.read_hitch_config()?;
@@ -406,9 +406,7 @@ mod tests {
             // Not a failure: the promote's own effect landed.
             result
                 .assert_success()
-                .assert_stdout_contains(
-                    "Successfully promoted 'feature-declared-not-built' to environment 'dev'",
-                )
+                .assert_stdout_contains("promote feature-declared-not-built into 'dev'")
                 // The unbuilt half is reported as owed work, with the command
                 // that settles it.
                 .assert_stdout_contains("hitch rebuild dev");
@@ -646,9 +644,7 @@ mod tests {
 
             result
                 .assert_success()
-                .assert_stdout_contains(
-                    "Successfully demoted 'feature-to-demote-functional' from environment 'dev'",
-                )
+                .assert_stdout_contains("demote feature-to-demote-functional out of 'dev'")
                 .assert_stdout_contains("hitch rebuild dev");
 
             // The declaration lost the branch, and the environment branch is
@@ -728,9 +724,7 @@ mod tests {
 
             result
                 .assert_success()
-                .assert_stdout_contains(
-                    "Successfully promoted 'feat-no-rebuild' to environment 'dev'",
-                )
+                .assert_stdout_contains("promote feat-no-rebuild into 'dev'")
                 .assert_stdout_contains("Skipping rebuild");
 
             // Branch must appear in metadata
@@ -846,9 +840,7 @@ mod tests {
 
             result
                 .assert_success()
-                .assert_stdout_contains(
-                    "Successfully demoted 'feat-demote-no-rebuild' from environment 'dev'",
-                )
+                .assert_stdout_contains("demote feat-demote-no-rebuild out of 'dev'")
                 .assert_stdout_contains("Skipping rebuild");
 
             // Branch must be removed from metadata
@@ -896,7 +888,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully promoted");
+                .assert_stdout_contains("promote feature-auto-stash into 'dev'");
 
             // After promotion, wip.txt should be restored
             let wip_content = env.fs.read_file("wip.txt")?;

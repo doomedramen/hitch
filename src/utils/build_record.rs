@@ -320,6 +320,63 @@ pub fn resolve_metadata_sha(git: &GitOperations) -> Result<String> {
 mod tests {
     use super::*;
     use crate::utils::prelude::CompatibilityConflict;
+
+    /// The on-disk key set of the build record, pinned.
+    ///
+    /// This is a *persisted* document at `refs/hitch/state/<env>`, read back by
+    /// whatever hitch version a user next runs — and P6 added `Serialize` to
+    /// several types in the neighbourhood for the `--json` wire format. A
+    /// `#[serde(rename)]` added to make some future CLI output prettier would
+    /// silently rewrite every record in every repository, and nothing else would
+    /// catch it: the write and the read would both be wrong in the same way. The
+    /// test makes the coupling between the two formats visible.
+    #[test]
+    fn the_build_records_on_disk_key_set_is_what_older_hitches_read() {
+        let record = EnvironmentBuildRecord {
+            schema_version: SCHEMA_VERSION,
+            environment: "dev".into(),
+            metadata_sha: "a".repeat(40),
+            base_name: "main".into(),
+            base_sha: "b".repeat(40),
+            desired_branches: Vec::new(),
+            included_branches: Vec::new(),
+            held: Vec::new(),
+            replayed_resolutions: Vec::new(),
+            result_sha: "c".repeat(40),
+            built_at: chrono::DateTime::from_timestamp(0, 0).expect("epoch"),
+            hitch_version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        let value = serde_json::to_value(&record).expect("serialises");
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "base_name",
+                "base_sha",
+                "built_at",
+                "desired_branches",
+                "environment",
+                "held",
+                "hitch_version",
+                "included_branches",
+                "metadata_sha",
+                "replayed_resolutions",
+                "result_sha",
+                "schema_version",
+            ]
+        );
+        // And it still round-trips, which is the property the key set implies.
+        let json = serde_json::to_string(&record).expect("serialises");
+        let parsed: EnvironmentBuildRecord = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(parsed, record);
+    }
+
     use std::fs;
     use std::path::Path;
     use std::process::Command;

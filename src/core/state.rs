@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, HashMap};
 // field that is not obviously a value is `captured_at`; it is a
 // `DateTime<Utc>`, so it is a value too, and a test comparing snapshots
 // should compare the environments rather than the capture time anyway.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryStateSnapshot {
     /// Tip of `hitch-metadata` as read locally, if it resolves.
     ///
@@ -73,7 +73,7 @@ pub struct RepositoryStateSnapshot {
 
 /// One environment's declared composition, its built composition, and the
 /// single verdict that relates them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentState {
     pub name: String,
     pub base: String,
@@ -124,7 +124,7 @@ impl EnvironmentState {
 /// Whether changes to this environment need sign-off. Carried as its own
 /// struct rather than three loose fields so "the approval policy" is something
 /// a caller can pass around intact.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPolicy {
     pub required: bool,
     pub min_approvals: usize,
@@ -136,7 +136,7 @@ pub struct ApprovalPolicy {
 /// A declared branch whose ref resolves nowhere is kept with `sha: None`
 /// rather than dropped: the *declaration* is a fact about `hitch.json` and does
 /// not become untrue because the branch is missing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct DesiredComposition {
     pub base: String,
     pub base_sha: Option<String>,
@@ -145,7 +145,7 @@ pub struct DesiredComposition {
     pub branches: Vec<DeclaredBranch>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredBranch {
     pub name: String,
     /// `None` when the ref resolves neither locally nor on the cached
@@ -154,7 +154,7 @@ pub struct DeclaredBranch {
 }
 
 /// What the last published build record says is in this environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum ActualComposition {
     /// A record was found and read.
     FromRecord(Box<RecordActual>),
@@ -178,7 +178,7 @@ impl ActualComposition {
 
 /// The contents of a read build record, kept whole so callers never re-read
 /// the ref to answer a second question about the same build.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct RecordActual {
     /// The environment branch's tip when the record was read. `None` means the
     /// record describes a branch that is now gone.
@@ -210,7 +210,7 @@ impl RecordActual {
 }
 
 /// Where one branch stands in one environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActualMembership {
     /// In the last build's composition.
     Included,
@@ -228,7 +228,7 @@ pub enum ActualMembership {
 }
 
 /// An input that moved since the build described by the current record.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChangedInput {
     pub branch: String,
     /// The SHA this build consumed.
@@ -266,7 +266,7 @@ impl ChangedInput {
 /// means that build is *superseded*. Answering "partially realised" for a
 /// build whose inputs have since moved would state something true about
 /// history while implying something false about now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum EnvironmentHealth {
     /// The build is current with the declaration and included everything.
     Realised,
@@ -317,7 +317,7 @@ impl EnvironmentHealth {
 }
 
 /// One feature branch, and everywhere it is declared.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct FeatureState {
     pub name: String,
     /// One entry per environment that declares this branch, in environment
@@ -327,7 +327,7 @@ pub struct FeatureState {
     pub memberships: Vec<FeatureMembership>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct FeatureMembership {
     pub environment: String,
     /// Whether the environment declares this branch.

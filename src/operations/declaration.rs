@@ -88,7 +88,7 @@ impl DeclarationChange {
 /// Per-operation options. Not a clap type, for the same reason as
 /// [`crate::operations::rebuild::RebuildPlanOptions`]: the planner must be
 /// callable from tests and from a non-CLI surface.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(serde::Serialize, Debug, Clone, Copy, Default)]
 pub struct DeclarationPlanOptions {
     /// `hitch promote --no-rebuild` / `hitch demote --no-rebuild`. Leaves the
     /// environment branch stale **on purpose**, so the plan has to say so
@@ -97,7 +97,7 @@ pub struct DeclarationPlanOptions {
 }
 
 /// The declaration-change payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct DeclarationPlanDetail {
     pub environment: String,
     /// **The positional argument the user typed**, not the resolved branch
@@ -549,10 +549,24 @@ fn plan_declaration_change(
         // confirmation cannot be answered with a plain yes: the answer is
         // "approve", which is a different command. The plan says so rather than
         // asking a question whose answer does not exist.
+        //
+        // Phrased as *what confirming will do* rather than as a restatement of
+        // the warning, because this text is printed above the prompt
+        // (`render::confirmation_question`) and the plan's own "Will change"
+        // section is empty in this case — the apply files an approval request
+        // instead of editing the declaration. Without this, the prompt asked the
+        // user to authorise a plan that visibly does nothing, which is the one
+        // thing a confirmation must never be.
         confirmation: if approval_gated {
             ConfirmationRequirement::required(format!(
-                "environment '{}' requires approval; approve with:\n  hitch approvals list",
-                environment
+                "'{}' requires approval, so confirming files an approval request \
+                 for this {} rather than changing the declaration.\n  \
+                 To review pending requests: hitch approvals list",
+                environment,
+                match kind {
+                    OperationKind::Promote => "promotion",
+                    _ => "demotion",
+                },
             ))
         } else {
             ConfirmationRequirement::not_required()

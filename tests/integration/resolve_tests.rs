@@ -912,14 +912,14 @@ mod tests {
                 .args(&["--no-push", "rebuild", "dev", "--dry-run"])
                 .execute()?
                 .assert_exit_code(2)
-                .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a");
 
             env.hitch
                 .run()
                 .args(&["--no-push", "rebuild", "dev"])
                 .execute()?
                 .assert_exit_code(2)
-                .assert_stdout_contains("held");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a");
 
             // Replay ON: the dry-run must now see the recording too. This is
             // the assertion that used to fail — it exited 2 and said "1 held".
@@ -940,9 +940,15 @@ mod tests {
                 ])
                 .execute()?
                 .assert_success()
-                .assert_stdout_contains("would rebuild cleanly")
-                .assert_stdout_contains("would be composed from a recorded resolution")
-                .assert_stdout_contains("branch-b");
+                // Composed from the recording, not held: that is the whole point of
+                // the preview seeing the resolution, and the plan names which
+                // branch and which resolution.
+                .assert_stdout_contains("from recorded resolution")
+                .assert_stdout_contains("branch-b")
+                // Paired with the assertion above, because either alone is a
+                // claim the other contradicts: a preview that reported the
+                // replay *and* a hold is not agreeing with the build.
+                .assert_stdout_not_contains("held");
 
             // A preview that agrees with the build is still not a build: it
             // must not have moved the environment branch.

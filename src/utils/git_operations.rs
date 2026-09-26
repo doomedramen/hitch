@@ -116,7 +116,7 @@ pub struct MergeTreeWriteTreeResult {
 // `PartialEq`/`Eq` so an `OperationPlan` — which carries its own `RefEdit` as
 // part of what it intends to write — can be compared whole. Every field is a
 // plain string, so this is a value comparison and costs nothing to maintain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum RefEdit {
     Update {
         refname: String,

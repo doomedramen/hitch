@@ -526,7 +526,7 @@ mod tests {
 #[cfg(test)]
 mod repair_checkout_tests {
     use super::*;
-    use crate::commands::global_context::GlobalContext;
+    use crate::commands::global_context::{GlobalContext, GlobalFlags};
     use crate::utils::logging::Logger;
     use std::sync::Arc;
 
@@ -624,7 +624,7 @@ mod repair_checkout_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let record = PublishRecord {
@@ -699,7 +699,7 @@ mod repair_checkout_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let record = PublishRecord {

@@ -18,7 +18,7 @@
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
-    use hitch::commands::global_context::GlobalContext;
+    use hitch::commands::global_context::{GlobalContext, GlobalFlags};
     use hitch::operations::declaration::{
         apply_declaration_plan, plan_demote, plan_promote, DeclarationPlanDetail,
         DeclarationPlanOptions,
@@ -32,8 +32,10 @@ mod tests {
         RebuildPlanDetail, RebuildPlanOptions,
     };
     use hitch::operations::release::{
-        apply_release_plan, plan_release, ReleasePlanDetail, ReleasePlanOptions,
+        apply_release_plan, discard_release_plan, plan_release, ReleasePlanDetail,
+        ReleasePlanOptions,
     };
+    use hitch::utils::confirm::AlwaysNoConfirm;
     use hitch::utils::git_operations::RefEdit;
     use hitch::utils::logging::Logger;
     use std::sync::Arc;
@@ -49,12 +51,34 @@ mod tests {
         let logger = Arc::new(Logger::new());
         GlobalContext::new_at_path(
             env.temp_dir.to_str().expect("utf-8 temp dir"),
-            false,
-            !push,
-            true,
+            GlobalFlags {
+                verbose: false,
+                no_push: !push,
+                assume_yes: true,
+                json: false,
+            },
             logger,
         )
         .map_err(|e| anyhow::anyhow!("building a test GlobalContext failed: {e}"))
+    }
+
+    /// A context whose gate will be consulted and will decline: interactive
+    /// (`assume_yes` false) and willing to push, so `plan_rebuild` marks the
+    /// plan as needing confirmation in the first place.
+    fn context_declining(env: &TestEnvironment) -> anyhow::Result<GlobalContext> {
+        let mut context = GlobalContext::new_at_path(
+            env.temp_dir.to_str().expect("utf-8 temp dir"),
+            GlobalFlags {
+                verbose: false,
+                no_push: false,
+                assume_yes: false,
+                json: false,
+            },
+            Arc::new(Logger::new()),
+        )
+        .map_err(|e| anyhow::anyhow!("building a test GlobalContext failed: {e}"))?;
+        context.confirm = Arc::new(AlwaysNoConfirm);
+        Ok(context)
     }
 
     fn plan(env: &TestEnvironment, purpose: PlanPurpose, push: bool) -> anyhow::Result<Plan> {
@@ -1686,5 +1710,675 @@ mod tests {
     /// `Cow`-returning counterpart to [`refnames`], for the applied side.
     fn refnames_applied(effects: &[AppliedEffect]) -> Vec<String> {
         effects.iter().map(|e| e.refname().into_owned()).collect()
+    }
+
+    // ---------------------------------------------------------------------
+    // P6. Everything above drives the library, because what it is about is a
+    // structured claim. What follows drives the *binary*, because the channel
+    // contract — `--json` owns stdout and nothing else does, prose owns
+    // everything else — and `PlanPurpose`'s safety property are only
+    // observable from outside the process.
+    // ---------------------------------------------------------------------
+
+    /// Two promoted branches that cannot compose: both rewrite `shared.txt`
+    /// from the same ancestor, incompatibly.
+    ///
+    /// Written straight into `hitch.json` rather than promoted, because
+    /// `promote` has its own conflict gate and would refuse the second branch —
+    /// and a fixture that needs the command under test's permission to exist is
+    /// not a fixture.
+    fn declare_conflicting_pair(env: &TestEnvironment) -> anyhow::Result<()> {
+        for (branch, body) in [("feat-left", "left"), ("feat-right", "right")] {
+            env.git.run(&["checkout", "-b", branch])?;
+            env.fs.write_file("shared.txt", body)?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", &format!("{branch}: rewrite shared.txt")])?;
+            env.git.run(&["checkout", "main"])?;
+        }
+        declare_branches(env, "dev", &["feat-left", "feat-right"])
+    }
+
+    fn json_document(stdout: &str) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::from_str(stdout)?)
+    }
+
+    /// The top-level key set of a `--json` document, sorted.
+    fn envelope_keys(value: &serde_json::Value) -> Vec<String> {
+        let mut keys: Vec<String> = value
+            .as_object()
+            .expect("a --json document is an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn the_json_document_is_a_versioned_envelope_over_a_plan_and_a_receipt() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "rebuild", "dev"])
+                .execute()?;
+            let document = json_document(&result.stdout())?;
+            result.assert_success();
+
+            // The three keys, and only those three. A document's shape is its
+            // contract with a consumer that has never read this source, so it
+            // is pinned exactly: an added top-level key is a silent
+            // compatibility change, and a removed one is a silent break, and
+            // neither would fail a test that only looked for what it wanted.
+            assert_eq!(
+                envelope_keys(&document),
+                vec!["plan", "receipt", "schema_version"]
+            );
+            assert_eq!(
+                document["schema_version"].as_u64(),
+                Some(1),
+                "the version is what lets a consumer tell a missing key from a new one"
+            );
+            assert!(
+                document["plan"].is_object(),
+                "the plan half of the envelope: {document}"
+            );
+            assert!(
+                document["receipt"].is_object(),
+                "an applied operation has a receipt, and saying `null` here would \
+                 be indistinguishable from a preview: {document}"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_preview_document_says_no_receipt_rather_than_omitting_the_key() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "rebuild", "dev", "--dry-run"])
+                .execute()?;
+            let document = json_document(&result.stdout())?;
+            result.assert_success();
+
+            // `receipt: null`, not an absent `receipt`. The two mean different
+            // things to a consumer: one is a command that decided and stopped,
+            // the other is a schema that forgot to say. `null` is the answer
+            // that cannot be confused with the second.
+            assert_eq!(
+                envelope_keys(&document),
+                vec!["plan", "receipt", "schema_version"]
+            );
+            assert!(
+                document["receipt"].is_null(),
+                "a preview has nothing to report about what happened: {document}"
+            );
+            assert!(document["plan"].is_object());
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn json_stdout_carries_no_escape_bytes_and_the_prose_path_carries_them() -> anyhow::Result<()> {
+        const ESC: char = '\u{1b}';
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let prose_run = env
+                .hitch
+                .run()
+                .args(&["rebuild", "dev", "--dry-run"])
+                .execute()?;
+            let prose = prose_run.stdout();
+            prose_run.assert_success();
+
+            let json_run = env
+                .hitch
+                .run()
+                .args(&["--json", "rebuild", "dev", "--dry-run"])
+                .execute()?;
+            let document = json_run.stdout();
+            json_run.assert_success();
+
+            // Asserted in the order that makes the second assertion mean
+            // something. "The document has no escape bytes" passes trivially
+            // on a build whose renderer emitted none either; the control
+            // assertion rules that out by requiring the *other* path to have
+            // them, which is what `colored`'s forced override guarantees even
+            // through a pipe.
+            assert!(
+                prose.contains(ESC),
+                "the control: the prose path must colour, or the next assertion \
+                 passes for the wrong reason:\n{prose}"
+            );
+            assert!(
+                !document.contains(ESC),
+                "a JSON consumer does not want SGR sequences inside its document:\n{document}"
+            );
+            // And it still parses, which is the point of the flag.
+            json_document(&document)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_json_document_survives_the_exit_two_that_it_exists_to_explain() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            declare_conflicting_pair(env)?;
+
+            // `process::exit` skips normal shutdown, so buffered stdout is lost
+            // in exactly the case the flag is for: a CI job that ran out of
+            // patience mid-rebuild, exited 2, and now has an error code and no
+            // way to find out why. This test only has value because the exit
+            // path really does call `exit` rather than returning.
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "rebuild", "dev"])
+                .execute()?;
+            let document = json_document(&result.stdout())?;
+            result.assert_exit_code(2);
+            assert_eq!(
+                envelope_keys(&document),
+                vec!["plan", "receipt", "schema_version"]
+            );
+            // The exit code is a claim the *document* has to back up, so the
+            // two are asserted together: this receipt has to be the one that
+            // says a branch was held, or the 2 is a number with no explanation
+            // behind it.
+            assert_eq!(
+                document["receipt"]["outcome"].as_str(),
+                Some("AppliedWithHolds"),
+                "the typed form of the exit-2 fact: {document}"
+            );
+            let warnings = document["receipt"]["warnings"]
+                .as_array()
+                .expect("warnings is an array")
+                .iter()
+                .map(|w| w["message"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>();
+            assert!(
+                warnings.iter().any(|m| m.contains("feat-right")),
+                "a receipt that exited 2 must name the hold that caused it: {warnings:?}"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_release_prints_a_diagnostic_and_no_document() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // The one `--json` path that emits no document, and deliberately so.
+            // A release of nothing has no plan and no receipt, and the envelope
+            // has no honest contents: the alternative — a document describing
+            // an operation that did not happen — is the failure mode this whole
+            // program exists to remove. The consumer's contract is therefore
+            // "exit 0 with an empty stdout means nothing was released", which
+            // is a contract, where a fabricated document would not be one.
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "release", "dev", "main"])
+                .execute()?
+                .assert_success();
+
+            result
+                .assert_stderr_contains("nothing to release")
+                .assert_stdout_is_empty();
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// The asymmetry `PlanPurpose` exists to encode, asserted where it is
+    /// actually made — the two calls differ in one argument.
+    ///
+    /// A preview and the plan it previews must name the *same* refs, or "dry
+    /// run" is a second opinion from a second decision point. The one thing
+    /// they may disagree about is the anchor, which is the property itself: a
+    /// plan that might be applied keeps its composed commit reachable, a plan
+    /// that will not leaves nothing behind. `cleanup`'s prunable set is
+    /// `["backup", "prev"]`, so a wrong answer here is a leaked ref, silently,
+    /// on every `--dry-run` a user ever ran.
+    #[test]
+    fn a_preview_and_the_plan_it_previews_name_the_same_refs_except_the_anchor(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            // Preview first, and the anchor check immediately after it: the
+            // `Confirm` plan below creates one on purpose, so checking afterwards
+            // would find that one and prove nothing about the preview.
+            let preview = plan(env, PlanPurpose::Preview, false)?;
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/build/")),
+                "planning a preview wrote an anchor, which is a write a dry run \
+                 promised it would not make"
+            );
+            let confirm = plan(env, PlanPurpose::Confirm, false)?;
+
+            let preview_refs: std::collections::BTreeSet<String> =
+                refnames(&preview.effects).into_iter().collect();
+            let confirm_refs: std::collections::BTreeSet<String> =
+                refnames(&confirm.effects).into_iter().collect();
+
+            let extra: Vec<&String> = confirm_refs.difference(&preview_refs).collect();
+            let missing: Vec<&String> = preview_refs.difference(&confirm_refs).collect();
+
+            assert!(
+                missing.is_empty(),
+                "a preview that predicts a ref the real plan will not touch is \
+                 describing a different operation: only the applied plan has \
+                 {missing:?}, missing from the preview of {preview_refs:?}"
+            );
+            assert_eq!(
+                extra.len(),
+                1,
+                "the applied plan should differ from its preview by exactly one \
+                 ref — the anchor — not by {extra:?}"
+            );
+            assert!(
+                extra[0].starts_with("refs/hitch/build/"),
+                "the one ref a preview does not predict must be the anchor, and \
+                 the anchor is what makes that safe: {extra:?}"
+            );
+            assert!(
+                preview.detail.anchor_ref.is_none(),
+                "a preview must not anchor at all, whatever it went on to predict"
+            );
+            assert_eq!(
+                confirm.detail.anchor_ref.as_deref(),
+                Some(extra[0].as_str())
+            );
+
+            discard_plan(&context_for(env, false)?, &confirm);
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A decline is a decision, and a decision that leaves a ref behind is not
+    /// one.
+    ///
+    /// The anchor exists only between planning and applying, and nothing prunes
+    /// it — `cleanup`'s prunable set is `["backup", "prev"]`. A refused plan
+    /// that skipped its discard would leak one ref per refusal, on a code path
+    /// that looks like it did nothing at all.
+    #[test]
+    fn a_declined_rebuild_writes_nothing_and_leaves_no_anchor() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let metadata_before = git_plain(&env.temp_dir, &["rev-parse", "hitch-metadata"])?;
+            let run = hitch::utils::prelude::rebuild_environment_gated(
+                &context_for(env, false)?,
+                "dev",
+                false,
+                None,
+                hitch::utils::prelude::StepNarration::Suppressed,
+                |_plan| Ok(false),
+            )?;
+            assert!(
+                run.is_none(),
+                "a declining gate returns None, distinct from a run that applied"
+            );
+
+            assert_eq!(
+                rev(env, "refs/heads/dev")?,
+                None,
+                "a refused rebuild must not have created the environment branch"
+            );
+            assert_eq!(
+                rev(env, "refs/hitch/state/dev")?,
+                None,
+                "a refused rebuild must not have written a build record — a \
+                 record is a claim that a build happened"
+            );
+            assert_eq!(
+                git_plain(&env.temp_dir, &["rev-parse", "hitch-metadata"])?,
+                metadata_before,
+                "the 'rebuilt_at' stamp is a metadata write, and a refusal wrote \
+                 nothing"
+            );
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/build/")),
+                "a refused rebuild leaked its anchor"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// The same claim for a release, whose anchor lives in its own ref family —
+    /// and whose preview is the one a user reaches for most often, because
+    /// releasing is the operation people most want to see before doing.
+    #[test]
+    fn a_release_preview_leaves_the_target_the_tag_space_and_the_anchor_untouched(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let main_before = rev(env, "refs/heads/main")?;
+            let tags_before = git_plain(&env.temp_dir, &["tag", "--list"])?;
+
+            let plan = release_plan(env, "dev", "main", ReleasePlanOptions::default(), false)?;
+            // Release's own cleanup, because a preview anchors nothing and this
+            // is the call that says so rather than merely being safe.
+            discard_release_plan(&context_for(env, false)?, &plan);
+
+            assert_eq!(
+                rev(env, "refs/heads/main")?,
+                main_before,
+                "a preview composed a release; it did not perform one"
+            );
+            assert_eq!(
+                git_plain(&env.temp_dir, &["tag", "--list"])?,
+                tags_before,
+                "a preview must not create the release tag"
+            );
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/release/")),
+                "a release preview left an anchor behind"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A decline is a decision the *command* has to honour, not just the gated
+    /// sequence: exit 0, nothing on stdout, and a repository that is exactly as
+    /// it was.
+    ///
+    /// Driven through `commands::rebuild::run` rather than
+    /// `rebuild_environment_gated`, because the claim under test is the
+    /// command's — declining is not a failure, and a command that reported a
+    /// refused confirmation as an error would train users to pass `--yes` to
+    /// every mutating command, which is the opposite of the point.
+    ///
+    /// Two things make a decline reachable here, and both are needed:
+    /// `GlobalContext.confirm` is a public field precisely so a test can answer
+    /// "no" (the harness injects `--yes`, which would otherwise make declines
+    /// unreachable from any test), *and* the context must not assume yes. A
+    /// rebuild only requires confirmation when it owes a push
+    /// (`plan_rebuild` reads `context.should_push()`), so `no_push` is false
+    /// here — the real case in which a human is asked about a rebuild at all.
+    ///
+    /// The return value cannot carry this claim: `rebuild::run` answers
+    /// `Ok(false)` both for a decline and for a clean apply with no holds, since
+    /// `Ok(true)` is the exit-2 signal. The repository is what tells them apart.
+    #[test]
+    fn a_declined_rebuild_exits_zero_and_writes_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let context = context_declining(env)?;
+            // Only reachable if the gate was actually consulted, so asserted
+            // rather than assumed.
+            assert!(
+                !context.assume_yes,
+                "a context that assumes yes never reaches the Confirm it is given"
+            );
+
+            let accepted = hitch::commands::rebuild::run(
+                hitch::commands::rebuild::RebuildCommand {
+                    env_name: "dev".to_string(),
+                    force: false,
+                    dry_run: false,
+                    on_conflict: None,
+                    pr_comments: false,
+                    replay_resolutions: false,
+                },
+                &context,
+            )?;
+            assert!(
+                !accepted,
+                "a declined rebuild must not report holds: {accepted}"
+            );
+
+            assert_eq!(
+                rev(env, "refs/heads/dev")?,
+                None,
+                "a declined rebuild must not have created the environment branch"
+            );
+            assert_eq!(
+                rev(env, "refs/hitch/state/dev")?,
+                None,
+                "a build record is a claim that a build happened; nothing was built"
+            );
+            // On the *content* of the metadata, not its tip: taking the
+            // environment lock and releasing it are two real commits, so the ref
+            // moves even when the declaration does not. `rebuilt_at` is the
+            // stamp a build writes, and it is the only thing a rebuild adds.
+            let config = env.read_hitch_config()?;
+            let dev = config
+                .environments
+                .get("dev")
+                .expect("the fixture declared 'dev'");
+            assert!(
+                dev.rebuilt_at.is_none(),
+                "a decline stamped 'rebuilt_at' on {:?}",
+                dev.rebuilt_at
+            );
+            assert!(
+                !dev.locked,
+                "the lock was taken and released, so the flag must be clear again"
+            );
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/build/")),
+                "the command's decline path leaked the anchor the plan had already \
+                 written. Nothing prunes refs/hitch/build/*, so this is one leaked \
+                 ref per refusal, on a path that looks like it did nothing."
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A `--json` run without `--yes` must **fail**, and this is a regression test
+    /// for a specific shape: `rebuild_environment_gated` used to match
+    /// `Ok(false) | Err(_)` together, so the gate's refusal was reported as a
+    /// decline — anchor discarded, `Ok(None)`, and the command exiting **0** with
+    /// an empty stdout and the "re-run with `--yes`" reason thrown away. A CI
+    /// consumer reads that as success. A unit test on `decide_gate` cannot catch
+    /// it, because the bug was in how the caller handled the `Err`, so this one
+    /// has to go through the binary.
+    ///
+    /// `with_no_push(false)` is load-bearing rather than incidental: a rebuild
+    /// only *requires* confirmation when it owes a push (`plan_rebuild` reads
+    /// `context.should_push()`), so with the harness's default `--no-push` this
+    /// command would apply silently and the test would pass for the wrong
+    /// reason.
+    #[test]
+    fn a_json_rebuild_without_yes_fails_loudly_and_leaves_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "rebuild", "dev"])
+                .with_no_push(false)
+                .with_yes(false)
+                .execute()?;
+
+            // `assert_*` take `self`, so read stderr before consuming the result.
+            let stderr = result.stderr();
+            result.assert_exit_code(1).assert_stdout_is_empty();
+            assert!(
+                stderr.contains("--yes"),
+                "a refusal that does not name the flag that would clear it is a dead \
+                 end:\n{stderr}"
+            );
+
+            assert_eq!(
+                rev(env, "refs/heads/dev")?,
+                None,
+                "refusing to prompt must not have composed anything"
+            );
+            assert_eq!(rev(env, "refs/hitch/state/dev")?, None);
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/build/")),
+                "the refusal path leaked the anchor. Nothing prunes \
+                 refs/hitch/build/*, so this is one leaked ref per refusal."
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// The release half of the same rule, and a regression test for the arm that
+    /// was actually written wrong: `perform_release_core` was
+    /// `if !confirm_plan(...)? { discard_release_plan(...) }`, which discards on
+    /// a *decline* and lets an `Err` propagate — so a `--json` release without
+    /// `--yes` leaked `refs/hitch/release/*`, a family nothing prunes, one
+    /// permanently leaked ref per refusal. Promote and demote escaped the same
+    /// bug only because `plan_declaration_change` anchors nothing, which is
+    /// exactly why the rule is about *arms* and not about commands: a new
+    /// planner that anchors inherits the bug without inheriting the history.
+    #[test]
+    fn a_refused_json_release_leaves_no_anchor_and_no_tag() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let main_before = git_plain(&env.temp_dir, &["rev-parse", "main"])?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "release", "dev", "main"])
+                .with_yes(false)
+                .execute()?;
+
+            let stderr = result.stderr();
+            result.assert_exit_code(1).assert_stdout_is_empty();
+            assert!(stderr.contains("--yes"), "{stderr}");
+
+            assert_eq!(
+                git_plain(&env.temp_dir, &["rev-parse", "main"])?,
+                main_before,
+                "refusing to prompt must not have merged anything into the target"
+            );
+            assert!(
+                git_plain(&env.temp_dir, &["tag", "--list"])
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty(),
+                "a refused release must not have created its tag"
+            );
+            assert!(
+                !all_refs(env)?
+                    .iter()
+                    .any(|r| r.starts_with("refs/hitch/release/")),
+                "the refusal path leaked refs/hitch/release/*. Nothing prunes that \
+                 family, so this is one leaked ref per refusal."
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A plan that lists its own temporary scaffolding as a change is describing
+    /// a post-state that will not exist.
+    ///
+    /// The anchor is created and removed by the same operation, so putting it
+    /// beside `main   a16a75c → 5bf671e` claims a ref a reader may go looking
+    /// for. It is *not* deleted from the model — a plan that hid a write would
+    /// be hiding a write — it is given its own labelled position, matched by ref
+    /// family and never by its description text.
+    #[test]
+    fn a_release_plan_separates_its_anchor_from_the_changes_that_survive() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let plan = release_plan(env, "dev", "main", ReleasePlanOptions::default(), false)?;
+            let rendered = hitch::core::render::render_plan(&plan);
+            discard_release_plan(&context_for(env, false)?, &plan);
+
+            let (before_anchor, after_anchor) = rendered
+                .split_once("Held only until the publish lands")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "a plan that anchors must say so somewhere:
+{rendered}"
+                    )
+                });
+            assert!(
+                !before_anchor.contains("release/main/"),
+                "the anchor must not appear among the surviving changes:
+{before_anchor}"
+            );
+            assert!(
+                after_anchor.contains("release/main/"),
+                "and the position it is given must still name it: {after_anchor}"
+            );
+            // The build record is a surviving, user-meaningful write, so the
+            // same separation must not swallow it. A predicate on
+            // `refs/hitch/` would have.
+            assert!(
+                !rendered.contains("state/dev"),
+                "a release writes no build record, so its absence here is the \
+                 control for the assertion above: {rendered}"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
     }
 }

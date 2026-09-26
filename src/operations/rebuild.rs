@@ -58,7 +58,7 @@ use crate::utils::prelude::{
 /// Encoding purpose rather than knobs is what makes "a preview that mutates"
 /// unrepresentable, and what makes it obvious in review that a new caller has
 /// to choose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanPurpose {
     /// Shown to a human, then applied if it is still current.
     Confirm,
@@ -91,7 +91,7 @@ impl PlanPurpose {
 /// decision point, and the build record in particular is a claim about *this*
 /// composition — a record rebuilt after the fact could describe a build that
 /// did not happen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct RebuildPlanDetail {
     pub environment: String,
     pub held: Vec<CompatibilityConflict>,

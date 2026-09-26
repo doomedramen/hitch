@@ -1,4 +1,6 @@
 use crate::commands::global_context::GlobalContext;
+#[cfg(test)]
+use crate::commands::global_context::GlobalFlags;
 use crate::utils::prelude::access_metadata_read_only;
 use anyhow::Result;
 
@@ -208,7 +210,8 @@ mod tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(repo.to_str().unwrap(), false, true, true, logger).unwrap();
+            GlobalContext::new_at_path(repo.to_str().unwrap(), GlobalFlags::for_tests(), logger)
+                .unwrap();
 
         let index = build_workspace_index_model(&context).expect("index");
 

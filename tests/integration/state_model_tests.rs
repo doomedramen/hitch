@@ -14,7 +14,7 @@
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
-    use hitch::commands::global_context::GlobalContext;
+    use hitch::commands::global_context::{GlobalContext, GlobalFlags};
     use hitch::core::state::{
         build_state_snapshot, ActualComposition, ActualMembership, ChangedInput, EnvironmentHealth,
         RepositoryStateSnapshot,
@@ -32,9 +32,12 @@ mod tests {
         let logger = Arc::new(Logger::new());
         GlobalContext::new_at_path(
             env.temp_dir.to_str().expect("utf-8 temp dir"),
-            false,
-            true,
-            true,
+            GlobalFlags {
+                verbose: false,
+                no_push: true,
+                assume_yes: true,
+                json: false,
+            },
             logger,
         )
         .map_err(|e| anyhow::anyhow!("building a test GlobalContext failed: {e}"))

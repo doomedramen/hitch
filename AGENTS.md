@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P5 are authored and complete; P6 is
+independently of this program. P0–P6 are authored and complete; P7 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
@@ -120,10 +120,21 @@ covered.
   command means touching all three: `src/commands/mod.rs` (register the
   module), `src/cli.rs` (add the `Commands` variant), `src/main.rs` (add to
   both the `command_name` match and the dispatch match, and to
-  `command_is_mutating` if it's read-only).
+  `command_is_mutating` if it's read-only). The global flags live here too:
+  `--json` is `global = true` and its doc comment **names the four commands that
+  honour it** (`rebuild`, `promote`, `demote`, `release`) and says that a
+  command without support says so rather than printing prose. That list is
+  asserted in prose deliberately — it is the difference between a documented
+  partial and a silent one. `status --json` is P7's.
 - `src/commands/*.rs` — one file per CLI command/subcommand, thin: arg
   parsing (`clap::Args` struct) + orchestration. Business logic belongs in
   `src/utils/prelude.rs` or a dedicated `src/utils/*.rs` module, not here.
+  The four mutating commands share one shape and it is worth copying rather
+  than reinventing: pre-checks, then `with_auto_stash` → `with_locked_env` →
+  plan → `confirm_plan` → apply → `emit_receipt` (or `emit_plan` alone for a
+  `--dry-run`, which plans *outside* the lock and never applies). `emit_plan`
+  and `emit_receipt` are separate because the gate already printed the plan;
+  a combined emitter prints it twice.
 - `src/utils/prelude.rs` — the domain-logic hub: rebuild orchestration,
   metadata read/write transactions (`access_metadata_read_only`,
   `modify_metadata`), locking (`with_locked_env`), the conflict-preflight
@@ -219,6 +230,17 @@ covered.
     have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
     Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
     `details.rs` and `status.rs` are the other two view builders.
+  - `render.rs` is **the only place in the codebase allowed to choose words**
+    for a plan or a receipt. `render_plan<I>` / `render_receipt` are pure and
+    total — a value in, a `String` out, no `GlobalContext`, no `Result`, no git,
+    no clock — which is the same rule `build_status_model` follows and for the
+    same reason: a renderer that can open a repository can disagree with the
+    thing it renders. One function serves all four operations because the
+    *model* is the vocabulary; `detail` is the one field a shared renderer
+    ignores. The impure half is `emit_json` / `emit_plan` / `emit_receipt` /
+    `confirm_plan`, and all four take the already-rendered `String`. A new
+    display path renders through here or through a sibling taking the same
+    inputs; do not grow a second set of words.
 - `src/operations/` — the plan → apply → receipt architecture, one operation
   at a time. `model.rs` is operation-agnostic (`OperationPlan<I>` generic over
   its per-operation detail, `PlanFingerprint`, `PlannedEffect`/`AppliedEffect`,
@@ -229,7 +251,14 @@ covered.
   release's. A new operation adds a `*PlanDetail` and a `plan_*`/`apply_*` pair,
   and reuses the fingerprint, validation, and receipt assembly as shared
   machinery rather than re-deriving them. One planner per operation, on purpose
-  — see the "one planner per operation" gotcha.
+  — see the "one planner per operation" gotcha. `rebuild_environment_gated` in
+  `src/utils/prelude.rs` is the one plan-then-apply *sequence*: it plans, hands
+  the finished plan to a caller-supplied `FnOnce(&plan) -> Result<bool>` gate,
+  and applies, returning `RebuildRun { plan, receipt }` with `Ok(None)` meaning
+  declined. A fifth operation should reach for it rather than write its own —
+  the ordering it gets right (the `finally` that discards the anchor, and the
+  discard on *both* non-applying arms) is exactly the kind of thing a
+  hand-rolled copy gets wrong.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
@@ -498,12 +527,35 @@ the only command in the CLI with a non-0/1 exit code: `rebuild::run` returns
 `Ok(true)` when it succeeded *but held conflicting branches*, and `main.rs:122-129`
 turns that into `exit(2)` so a pipeline can warn on holds without failing the
 build. `Ok(false)` falls through to 0; any `Err` — including a halt-policy
-refusal — takes main's normal error path to 1. `--dry-run` uses the same
-signal: `Ok(true)` means "would hold", so a dry-run preview exits 2 as well.
-Collapsing `AppliedWithHolds` into a plain success would silently break every
-consumer relying on that distinction. The `stdout().flush()` immediately
-before the `process::exit` is load-bearing too — `process::exit` skips normal
-shutdown, so buffered output is lost when stdout isn't a TTY, i.e. in CI.
+refusal — takes main's normal error path to 1. Note what that makes the return
+value useless for: `Ok(false)` is *both* a clean apply with no holds *and* a
+declined confirmation, so a test of "declining changes nothing" has to assert on
+the repository (no `refs/heads/<env>`, no `refs/hitch/state/<env>`, no anchor,
+`rebuilt_at` still `None`), never on the bool. `a_declined_rebuild_exits_zero_
+and_writes_nothing` is the shape, and note that it has to build its own context
+with `assume_yes: false` and `no_push: false`: a rebuild only *requires*
+confirmation when it owes a push, so a `--yes`-assuming context never reaches
+the `Confirm` it was handed and the test would pass vacuously.
+
+**`--json` without `--yes` exits 1, and it used to exit 0 — do not restore the
+0.** The gate's refusal under `--json` is an `Err`, not a decline, because a
+JSON consumer is a program and "asked nothing, wrote nothing, exited
+successfully" is indistinguishable from success to one. `decide_gate` returns a
+three-way `GateDecision` (`Proceed` / `Ask` / `Refuse(reason)`) rather than a
+bool precisely so that refusal and decline stay separate arms: the first
+version of `rebuild_environment_gated` matched `Ok(false) | Err(_)` together,
+discarded the anchor, and returned "declined", so `--json` without `--yes`
+exited 0 with an empty stdout and the "re-run with `--yes`" reason thrown away.
+
+`--dry-run` uses the same exit-2 signal: `Ok(true)` means "would hold", so a
+dry-run preview exits 2 as well. Collapsing `AppliedWithHolds` into a plain
+success would silently break every consumer relying on that distinction. The
+`stdout().flush()` immediately before the `process::exit` is load-bearing too —
+`process::exit` skips normal shutdown, so buffered output is lost when stdout
+isn't a TTY, i.e. in CI. Under `--json` that same flush is what keeps a held
+rebuild's *document* on stdout across the exit, which is the whole reason the
+flag and the exit code can coexist; `a_json_document_survives_the_exit_two_
+that_it_exists_to_explain` holds it.
 
 `OperationOutcome::AppliedWithHolds` is the *typed* expression of the same
 fact — `apply_rebuild_plan` returns it, and `rebuild::run` still returns
@@ -547,7 +599,41 @@ caller cannot opt into safety by omission, and P1's deliberate
 than by a comment. `--dry-run` in `commands/rebuild.rs` is now a *renderer*
 over `plan_rebuild(…, PlanPurpose::Preview, …)`, so it reads
 `plan.detail.held` / `plan.detail.replayed` and never calls
-`compose_environment` itself.
+`compose_environment` itself. A preview's only *real* asymmetry with a real run
+is the lock: `with_auto_stash` turns out to be a no-op difference for all four
+mutating commands, measured — none of them moves the user's `HEAD` — and it is
+skipped in a preview anyway. A preview's missing `synchronize` is ordinary
+staleness (a stale local branch makes the preview describe older content),
+categorically weaker than the two-merge-engines bug P1 removed. If a dry run
+ever needs to be *exactly* predictive the fix is to make sync a shared,
+user-visible step, not to re-add a second merge path.
+
+**Every arm that does not apply the plan owes a discard of its anchor —
+decline *and* error.** This is the rule that `rebuild_environment_gated`
+(`Ok(false) => { discard; None }` / `Err(e) => { discard; return Err(e) }`, with
+the discard first on both so `?` cannot skip it) exists to make hard, because
+the two failure modes look alike at the call site and only one of them was
+written: `release` discarded on a decline and not on an `Err`, so a `--json`
+release without `--yes` leaked `refs/hitch/release/*`, a family **nothing
+prunes** — one permanently leaked ref per refusal, on a path that looks like it
+did nothing. `promote`/`demote` escaped the same bug only because
+`plan_declaration_change` composes nothing and therefore anchors nothing, which
+is exactly why the rule is about *arms* and not about commands: a new planner
+that anchors inherits the bug without inheriting the history.
+
+**A `ConfirmationRequirement.reason` that no code path prints is a prompt that
+says nothing.** All three planners carry the reason, and a unit test asserted
+`render_plan` does *not* show it — which was right, and hid the gap, because the
+field had no other reader. Every prompt in the CLI read `Apply this plan?`. The
+worst case is promote into an approval-gated environment, where the plan's "Will
+change" section is *empty*: confirming files an approval request instead of
+editing the declaration, so the user was asked to authorise a plan that visibly
+does nothing, with no statement of what the answer would do.
+`confirmation_question(&ConfirmationRequirement) -> String` is now pure and
+tested, and the approval reason is phrased as *what confirming will do* rather
+than as a restatement of the warning. Generalise: a reason carried on a model
+type is not documentation, it is a field someone has to print, and a field
+nobody prints is a lie about what the code does.
 
 **A halt is decided inside composition, so a *rebuild* plan can never report
 one.** `OnConflict::Halt` returns `Err` from inside `compose_environment`, which
@@ -664,6 +750,22 @@ metadata write itself — and `test_rollback_...` in
 `approval_workflow_tests.rs` exercises that. The typed form is
 `ExecutionWarning { owes_effect: true }`, which is *not* the same as a plain
 warning; P6 renders the difference.
+
+**…and the same whole-config snapshot can *undo* the lock release that ran
+after it was taken. This one is still open.** `capture_config_state` is called
+*inside* `with_locked_env` — deliberately, so the snapshot is not pre-lock and a
+rollback does not also revert the lock's own commit — and
+`rollback_metadata_changes` is called *outside* it, in the command's `Err` arm,
+by which time the lock has been released. So restoring the snapshot restores
+`locked: true`, and the environment stays locked until someone runs
+`hitch unlock`. Any apply that fails after the lock reaches it: a pending
+approval request that already exists, an approver threshold that cannot be met.
+Found during P6's manual check and deliberately **not** fixed there — it is a
+`rollback`/lock-ordering question, not a rendering one, and it needs a decision
+about the snapshot's shape (re-clear the lock after restoring, versus capture
+before the lock and keep the current ordering). Reproduce with
+`hitch promote` into an approval-gated environment as the sole approver, then
+promote the same branch again.
 
 **A decision the plan can make at plan time belongs in the plan, and a
 decision about the release's own result must be evaluated against the planned

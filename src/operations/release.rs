@@ -56,7 +56,7 @@ use crate::utils::prelude::{
 
 /// The per-operation options a caller chose. Not a clap type, for the same
 /// reason as [`crate::operations::rebuild::RebuildPlanOptions`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(serde::Serialize, Debug, Clone, Copy, Default)]
 pub struct ReleasePlanOptions {
     /// `hitch release --squash`. Part of the plan, not a display flag: it
     /// changes the parent count of the commit that is about to exist, so a plan
@@ -77,7 +77,7 @@ pub struct ReleasePlanOptions {
 /// in that environment's base yet" predicate is evaluated by the planner (see
 /// the module header on `result_sha`) so that the executor applies a list
 /// rather than re-deriving one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ReleasePrune {
     pub environment: String,
     pub branches: Vec<String>,
@@ -102,7 +102,7 @@ pub struct ReleasePrune {
 ///   plan-time read at all: it depends on the outcome of an operation that has
 ///   not run yet. [`base_environment`] carries the fact the executor needs to
 ///   decide it, without the plan having to predict the answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct DependentRebuild {
     pub environment: String,
     /// The plan-time reason this environment is in the set, in one clause. The
@@ -124,7 +124,7 @@ pub struct DependentRebuild {
 }
 
 /// The release-specific payload a plan carries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ReleasePlanDetail {
     pub environment: String,
     pub target: String,
@@ -367,12 +367,29 @@ pub fn plan_release(
     // performs. The environment branch does move too — but through the
     // *dependent* rebuild below, whose result no plan can predict, so it is
     // declared as an effect rather than predicted as a value.
-    let projection = |branch_sha: Option<String>| EnvironmentProjection {
-        environment: target.to_string(),
-        base: target.to_string(),
-        branches: released_pins.clone(),
-        branch_sha,
-    };
+    // Two projections, and they differ. `proposed` is the target as the release
+    // will leave it — base plus the branches this plan merges. `current` is the
+    // target as it is *now*, which contains none of them: the branches are being
+    // merged, so they are not in it yet. Both arms once took the same branch
+    // list, and the plan then rendered
+    //
+    //     Current    main = main + feature-1
+    //     Proposed   main = main + feature-1
+    //
+    // — a plan stating, as fact, that the release it is about to perform has
+    // already happened. `EnvironmentProjection::branches` is documented as
+    // "the declaration, in declaration order", which is exactly right for a
+    // promote (the declaration is the thing being edited) and exactly wrong for
+    // a release (the target's history is not a declaration at all). The
+    // distinction only became visible once a renderer printed the two side by
+    // side; before P6 both were computed and neither was read.
+    let projection =
+        |branch_sha: Option<String>, branches: Vec<PinnedBranch>| EnvironmentProjection {
+            environment: target.to_string(),
+            base: target.to_string(),
+            branches,
+            branch_sha,
+        };
 
     let mut effects = vec![
         PlannedEffect::LocalRefUpdate {
@@ -465,8 +482,8 @@ pub fn plan_release(
             target: target.to_string(),
         },
         fingerprint,
-        current: projection(Some(target_sha_before)),
-        proposed: projection(Some(result_sha)),
+        current: projection(Some(target_sha_before), Vec::new()),
+        proposed: projection(Some(result_sha), released_pins.clone()),
         compositions: vec![composition],
         effects,
         unaffected,

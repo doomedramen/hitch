@@ -1,5 +1,7 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
 use crate::operations::declaration::{apply_declaration_plan, plan_demote, DeclarationPlanOptions};
+use crate::operations::model::OperationOutcome;
 use crate::types::{RollbackInfo, RollbackOperation};
 use anyhow::Result;
 use clap::Args;
@@ -18,14 +20,15 @@ pub struct DemoteCommand {
     /// Use this to batch multiple demotes and then run 'hitch rebuild <env>' once.
     #[arg(long)]
     pub no_rebuild: bool,
+
+    /// Show the plan — what would be un-declared, what would be rebuilt, which
+    /// environments would follow — and stop. Changes nothing: no stash, no
+    /// lock, no writes.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!(
-        "Demoting branch '{}' from environment '{}'...",
-        args.branch, args.env_name
-    ));
-
     // Step 1: Ensure we are in a Git repository
     crate::utils::prelude::pre_check_repo_only(context)?;
 
@@ -53,6 +56,19 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
         );
     }
 
+    let options = DeclarationPlanOptions {
+        no_rebuild: args.no_rebuild,
+    };
+
+    if args.dry_run {
+        // Preview, planned outside the lock — see `promote::run` for why that
+        // inversion is safe, and why it would stop being safe if the planner
+        // ever consulted `is_locked()`.
+        let plan = plan_demote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+        emit_plan(context, &plan)?;
+        return Ok(());
+    }
+
     // Create rollback info for this operation
     let mut rollback_info = RollbackInfo::new(
         RollbackOperation::Demote,
@@ -66,68 +82,31 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
             rollback_info.previous_config = crate::utils::rollback::capture_config_state(context)?;
-            let plan = plan_demote(
-                context,
-                &args.branch,
-                &args.env_name,
-                DeclarationPlanOptions {
-                    no_rebuild: args.no_rebuild,
-                },
-                &mut |_| {},
-            )?;
+            let plan = plan_demote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
 
-            let branches = match &plan.intent {
-                crate::operations::model::OperationIntent::DemoteBranches { branches, .. } => {
-                    branches.clone()
-                }
-                // Unreachable: `plan_demote` is the only constructor of this
-                // intent. An error rather than an empty list, which would read
-                // as "demoted 0 branches" and exit 0.
-                _ => anyhow::bail!("internal error: demote produced a non-demote plan"),
-            };
-            if branches.len() != 1 || branches.first().map(|b| b.as_str()) != Some(&args.branch) {
-                context.log_info(&format!(
-                    "Resolved '{}' → {} branch(es): {}",
-                    args.branch,
-                    branches.len(),
-                    branches.join(", ")
-                ));
+            if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+                return Ok((plan, None));
             }
-
-            // What will really be removed, for the success message. A demote
-            // no-ops branches that are not present, and resolving a source
-            // environment can name some of those — so the count the user is told
-            // about is the planner's narrowed list, not the argument's.
-            let demoted = plan.detail.removed.clone();
             let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
-            Ok((demoted, receipt))
+            Ok((plan, Some(receipt)))
         })
     });
 
     // Step 4: Handle result with automatic rollback on failure
     match result {
-        Ok((demoted, receipt)) => {
-            match receipt.outcome {
-                // An approval gate is not a demotion and not a failure:
-                // nothing was declared, and `hitch approve` is the next command.
-                crate::operations::model::OperationOutcome::ApprovalRequested => Ok(()),
-                _ if demoted.len() == 1 => {
-                    context.log_success(&format!(
-                        "Successfully demoted '{}' from environment '{}'!",
-                        demoted[0], args.env_name
-                    ));
-                    Ok(())
-                }
-                _ => {
-                    context.log_success(&format!(
-                        "Successfully demoted {} branches from environment '{}'!",
-                        demoted.len(),
-                        args.env_name
-                    ));
-                    Ok(())
-                }
+        Ok((plan, Some(receipt))) => {
+            emit_receipt(context, &plan, &receipt)?;
+            if receipt.outcome == OperationOutcome::ApprovalRequested {
+                // Printed by the command, not the planner — see `promote::run`.
+                context.log_info(
+                    "Run 'hitch approvals list' to see the request, then 'hitch approvals approve <id>' to grant it.",
+                );
             }
+            Ok(())
         }
+        // Declined: nothing was written, so nothing to roll back. See
+        // `promote::run`.
+        Ok((_plan, None)) => Ok(()),
         Err(e) => {
             // Show the actual error FIRST so user knows why it failed
             context.log_error(&format!("Error: {}", e));

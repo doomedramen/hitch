@@ -24,7 +24,7 @@ use crate::utils::prelude::CompatibilityConflict;
 /// name an operation that actually went through a planner — which is the
 /// point. An unmigrated operation is *absent* from the model, never
 /// mislabelled as something it was not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OperationKind {
     Rebuild,
     Promote,
@@ -73,7 +73,7 @@ impl fmt::Display for OperationKind {
 /// That sentence is *derived* from this enum, and deriving it in one place is
 /// the whole reason this type exists: if the plan carried prose instead, every
 /// renderer would re-derive it, and they would eventually disagree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum OperationIntent {
     /// Regenerate `<environment>` from its declared base plus promoted
     /// branches.
@@ -140,7 +140,7 @@ fn named(branches: &[String]) -> String {
 /// environment branch points. This is a narrow projection rather than a
 /// general state model on purpose — [`crate::core::state::RepositoryStateSnapshot`]
 /// is the authority on state, and a plan does not get a second one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentProjection {
     pub environment: String,
     pub base: String,
@@ -155,7 +155,7 @@ pub struct EnvironmentProjection {
 }
 
 /// What the composition did with one declared branch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum PlannedBranchState {
     /// Folded into the composition.
     Included,
@@ -189,7 +189,7 @@ pub enum PlannedBranchState {
 }
 
 /// One declared branch, and what the plan does with it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct PlannedBranch {
     pub branch: String,
     /// The SHA this plan consumed. The plan is a decision about *these*
@@ -203,7 +203,7 @@ pub struct PlannedBranch {
 /// Generic in spirit (the spec anticipates approvals and dependent rebuilds),
 /// narrowed here to the one shape rebuild produces, because a model with
 /// variants no planner fills in is a model that lies.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct CompositionPlan {
     pub environment: String,
     pub base: PinnedBranch,
@@ -259,7 +259,7 @@ impl CompositionPlan {
 /// applied effect back to its prediction is therefore the executor's business,
 /// not something a lookup by refname can do: only the executor knows that the
 /// prune's branches are the declaration edit that the same plan also declared.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum PlannedEffect {
     /// A ref under `refs/hitch/` or on `hitch-metadata`: the build record, the
     /// `rebuilt_at` stamp, an anchor.
@@ -355,7 +355,7 @@ impl PlannedEffect {
 }
 
 /// What kind of resource the plan read and will not write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceKind {
     Branch,
     Environment,
@@ -377,14 +377,14 @@ impl fmt::Display for ResourceKind {
 /// Filled from the *same* pinned inputs the composition consumed, so "will not
 /// change" cannot name a branch the plan never actually read — a promise about
 /// a branch the plan did not look at is not a promise, it is a guess.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct UnaffectedResource {
     pub kind: ResourceKind,
     pub name: String,
 }
 
 /// A fact the user should see about the plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct PlanWarning {
     pub message: String,
     /// What this warning *means for the apply*. Three kinds, not a boolean,
@@ -429,7 +429,7 @@ impl PlanWarning {
 }
 
 /// What a [`PlanWarning`] means for the apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanWarningKind {
     /// A human must approve this operation before it can apply. The apply
     /// creates the approval requests and stops with
@@ -461,7 +461,7 @@ impl PlanWarningKind {
 }
 
 /// Whether and why a human must confirm before this plan is applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmationRequirement {
     pub required: bool,
     pub reason: Option<String>,
@@ -490,7 +490,7 @@ impl ConfirmationRequirement {
 /// change, and comparing the two is exactly backwards: treating an unrelated
 /// ref as a dependency would refuse the apply every time anyone else pushed
 /// anything.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanFingerprint {
     /// Tip of `hitch-metadata` the declaration was read from. The
     /// declaration is the *intent*; without this a plan could outlive a
@@ -586,7 +586,7 @@ impl PlanFingerprint {
 /// Generic over the per-operation detail (`RebuildPlanDetail` for rebuild) so
 /// shared code can carry any operation's plan without knowing its shape, and
 /// so a list of plans stays homogeneous.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct OperationPlan<I> {
     /// Identity, for logs and for correlating a plan with its receipt.
     ///
@@ -637,7 +637,7 @@ impl<I> OperationPlan<I> {
 }
 
 /// How an operation ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationOutcome {
     /// Everything the plan predicted was applied.
     Applied,
@@ -672,7 +672,7 @@ impl OperationOutcome {
 /// transaction, never copied from the plan. The `new` value here is an
 /// observation; the `new` value in the plan was a prediction, and the entire
 /// value of a receipt is the difference between the two.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum AppliedEffect {
     MetadataChange {
         refname: String,
@@ -716,7 +716,7 @@ pub enum AppliedEffect {
 /// collapsing it into [`DependentRebuildOutcome::Rebuilt`] reports an
 /// environment that was left alone as one that was rebuilt. Both are worse
 /// than saying which happened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum DependentRebuildOutcome {
     /// Rebuilt. Holds are not folded in here: a rebuild that landed with
     /// branches held still rebuilt, and the holds are in its own receipt.
@@ -732,6 +732,32 @@ impl DependentRebuildOutcome {
     /// Whether this outcome means the operation still owes the user work.
     pub fn owes_effect(&self) -> bool {
         matches!(self, DependentRebuildOutcome::Failed(_))
+    }
+
+    /// The verdict, in one word.
+    ///
+    /// Lives here rather than in `core::render` for the reason
+    /// `EnvironmentHealth::label` does: the model owns the vocabulary, and a
+    /// renderer that had its own copy of these three words would be a second
+    /// place to forget that a `Failed` is not a `Skipped` — they differ only in
+    /// whether the user is still owed work.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DependentRebuildOutcome::Rebuilt => "rebuilt",
+            DependentRebuildOutcome::Skipped(_) => "skipped",
+            DependentRebuildOutcome::Failed(_) => "failed",
+        }
+    }
+
+    /// The reason, when the outcome carries one. `None` for a plain rebuild,
+    /// which is the only variant that has nothing to explain.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            DependentRebuildOutcome::Rebuilt => None,
+            DependentRebuildOutcome::Skipped(reason) | DependentRebuildOutcome::Failed(reason) => {
+                Some(reason)
+            }
+        }
     }
 }
 
@@ -751,7 +777,7 @@ impl AppliedEffect {
 }
 
 /// A fact learned *while* applying, which the plan could not have known.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionWarning {
     pub message: String,
     /// True when the operation is complete but something is still owed — a
@@ -761,7 +787,7 @@ pub struct ExecutionWarning {
 }
 
 /// What actually happened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionReceipt {
     /// The [`OperationPlan::id`] this receipt answers.
     pub plan_id: String,

@@ -60,7 +60,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+                .assert_stdout_contains("tag hitch-release-dev-to-main-");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -78,9 +78,21 @@ mod tests {
                 .args(&["add", "dev"])
                 .execute()?
                 .assert_success();
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("feature.txt", "new feature")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
 
             // No TTY and no --yes: the command must fail fast instead of
-            // blocking forever on stdin.
+            // blocking forever on stdin. There has to be something to release,
+            // because the empty case returns before the gate — a release of
+            // nothing must not ask a human to authorise nothing.
             let result = env
                 .hitch
                 .run()
@@ -519,15 +531,18 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Release empty environment
+            // Release empty environment. Nothing is released, so the output
+            // says *that* — and says it before the confirmation gate, because
+            // asking a human to confirm a release of nothing is a question with
+            // no content.
             let result = env
                 .hitch
                 .run()
                 .args(&["release", "dev", "main", "--force"])
                 .execute()?;
-            result
-                .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+            result.assert_success().assert_stdout_contains(
+                "No branches promoted to environment 'dev', nothing to release",
+            );
 
             Ok::<(), anyhow::Error>(())
         });
@@ -570,7 +585,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+                .assert_stdout_contains("tag hitch-release-dev-to-main-");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -667,7 +682,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+                .assert_stdout_contains("tag hitch-release-dev-to-main-");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -718,7 +733,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+                .assert_stdout_contains("tag hitch-release-dev-to-main-");
 
             // Create release branch for qa target
             env.git.run(&["checkout", "-b", "release"])?;
@@ -734,7 +749,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'qa' released successfully to 'release'");
+                .assert_stdout_contains("tag hitch-release-qa-to-release-");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -785,7 +800,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'staging' released successfully to 'develop'");
+                .assert_stdout_contains("tag hitch-release-staging-to-develop-");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -837,7 +852,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' released successfully to 'main'");
+                .assert_stdout_contains("tag hitch-release-dev-to-main-");
 
             Ok::<(), anyhow::Error>(())
         });

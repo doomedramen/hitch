@@ -25,10 +25,18 @@ Seven commits, so far:
 - `01d19c8` — P4: `src/operations/`, and `hitch rebuild` rewired to plan → validate → apply → receipt.
 - `313189d` — the P4 plan's "As executed" / "What P5 inherits" sections.
 - `335517c` — P5: `src/operations/{declaration,release}.rs`, `promote`/`demote`/`release` rewired, the approve path's pre-edit-rebuild fix, and the failure contract change (a failed dependent rebuild is an owed effect, not a rollback).
+- `9247a46` — the P5 plan's "As executed" / "What P6 inherits" sections, and the master plan's P5 status.
+- `P6_SHA` — P6: `src/core/render.rs`, the shared plan and receipt renderers; a global `--json`; `--dry-run` on all four mutating commands; `GlobalFlags` and `DiagnosticOutputSink`; and the one gated plan-then-apply sequence (`rebuild_environment_gated`).
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
-**P0–P5 are complete. P6 is next.** Four of the six mutating commands now plan → validate → apply → receipt: `rebuild`, `promote`, `demote`, and `release`. `rebuild_environment_opts` survives as a thin plan-then-apply wrapper, but no longer as a *top-level* entry point — promote/demote/release reach it only as the nested rebuild for a dependent environment, and `approvals/approve.rs` calls its no-argument wrapper. **`hitch approve` is the one mutating command with no plan**, and `src/commands/resolve.rs` is the one mutating path still choosing a mode from a second merge opinion (`preflight_compatibility_report`); see P5's "What P6 inherits" for why the first is deliberate and the second is not.
+**P0–P6 are complete. P7 is next.** All four of the plan-having mutating commands now *show* their plan before applying and their receipt after, in one vocabulary, and each has a `--dry-run` that is the same planner with `PlanPurpose::Preview` — so a preview and the build it previews are the same composition by construction rather than by agreement between two implementations. Three things are now true of the architecture that were not before P6, and all three are things the *next* phase has to respect:
+
+- **One renderer, `src/core/render.rs`, is the only place in the codebase allowed to choose words.** It is pure and total: a plan or a receipt in, a `String` out, no context and no repository. P7's status matrix and `hitch why` must render through it (or through a sibling that takes the same inputs) rather than growing a second set of words.
+- **`--json` serialises the model directly, with `schema_version: 1`, and the document is `{schema_version, plan, receipt}`** where `receipt` is `null` for a preview rather than omitted. The four commands that honour it are named in the flag's own doc comment; `status` is P7's.
+- **`rebuild_environment_gated` is the one plan-then-apply sequence**, and it takes a caller-supplied gate over the finished plan. A fifth operation should reach for it rather than write its own.
+
+Still true from P5 and still owned: **`hitch approve` is the one mutating command with no plan** (deliberate for now — see P5's "What P6 inherits"), and `src/commands/resolve.rs` is the one mutating path still choosing a mode from a second merge opinion (`preflight_compatibility_report`). `rollback_metadata_changes` can also restore a `locked: true` it captured inside `with_locked_env` and thereby undo the unlock that ran after it; found during P6's manual check, recorded, deliberately unfixed there.
 
 ---
 
@@ -288,6 +296,14 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 
 **Exit criteria:** A user who has not read the README can read a plan and describe what will happen. `--dry-run` and a real run agree. `--json` is stable and non-interactive JSON without `--yes` fails clearly. All four gates green.
 
+**Status: COMPLETE** (2026-09-26). `src/core/render.rs` is new (~35 unit tests), the four commands are rewired, and `just test` is 132 lib + 430 integration + 1 `no_args_help` with zero ignored; all four gates green. The P6 plan's "Execution notes" section is the authoritative record of what changed shape during execution. Five findings worth carrying forward, each a shape rather than a bug:
+
+- **A gate error and a gate refusal are different exits, and conflating them is a silent-success bug.** `Ok(false) | Err(_) => discard` made `--json` without `--yes` exit **0** with an empty stdout and the "re-run with `--yes`" reason discarded — a CI consumer would have read that as success. **`--json` without `--yes` is now exit 1**, and the table of exit codes in the P6 plan is the one to read before changing any of them.
+- **Every *non-applying* arm owes a discard of the plan's anchor — decline and error both.** Release discarded on decline and not on `Err`, leaking `refs/hitch/release/*`; nothing prunes `refs/hitch/build/*` or `refs/hitch/release/*`, so each refusal was a permanently leaked ref on a path that looks like it did nothing. `plan_declaration_change` anchors nothing, which is why promote/demote did not have the same bug and why the rule is about *arms*, not about commands.
+- **A `ConfirmationRequirement.reason` that nothing prints is a prompt that says nothing.** Promote into an approval-gated environment renders an *empty* "Will change" section — confirming files an approval request instead of editing the declaration — and the user was asked to authorise it with no statement of what the answer would do. `confirmation_question` is now pure and tested. Related: an approval gate **asks** and a policy refusal **refuses**; P5's rule that a refusal outranks the gate still holds.
+- **The anchor is a fact about hitch's ref layout, so the renderer partitions on the refname** (`refs/hitch/build/`, `refs/hitch/release/`) and never on an effect's description string. Anchors get their own heading — "Held only until the publish lands" — and stay in the JSON. `state/`, `prev/`, `backup/` and `publish/` are durable and must never be matched.
+- **A dry run's only real asymmetry is the lock.** `with_auto_stash` is a no-op difference for all four commands (measured: none of them moves the user's `HEAD`), and a preview's missing `synchronize` is ordinary staleness rather than the two-merge-engines bug P1 removed. The honest fix if a preview ever needs to be exactly predictive is to make sync a shared, user-visible step — not to re-add a second merge path.
+
 ---
 
 ### P7 — status matrix and `hitch why`
@@ -297,6 +313,8 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 **Interfaces:**
 - Consumes: `RepositoryStateSnapshot` (P3). No bespoke conflict logic in either command (source §14.4).
 - Produces: a feature×environment matrix as `hitch status`'s default view, with per-environment detail retained; the shared environment-equation renderer used by `status`, `tree`, plans, detail, release preview, and conflict explanations; `hitch why <branch>`, `hitch why <branch> <env>`, `hitch why <env>`.
+
+**What P6 hands P7:** `src/core/render.rs` exists and is the only place allowed to choose words, so P7's matrix and `why` render through it or through a sibling taking the same inputs. Two things P7 adds: `status --json` (deliberately deferred out of P6 — it is the one command with a pure projection and no plan, so the document shape has to be decided alongside what the matrix *is*), and the first renderer consumer that has no `OperationPlan` behind it, which is the case P6's four commands could not exercise.
 
 **Exit criteria:** Golden-output tests for a clean repo, held branch, stale feature, changed base, missing feature, legacy no-build-record repo, released feature, and multiple environments — colour disabled, narrow terminal, long branch names, zero environments, many environments, many features. Every major matrix cell state has a useful `why`. All four gates green.
 

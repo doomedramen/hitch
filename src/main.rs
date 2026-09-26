@@ -3,13 +3,10 @@ use std::sync::Arc;
 
 use hitch::cli::{Cli, Commands};
 use hitch::commands;
-use hitch::commands::global_context::GlobalContext;
+use hitch::commands::global_context::{GlobalContext, GlobalFlags};
 use hitch::utils::logging::Logger;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize colored output
-    colored::control::set_override(true);
-
     // True no-args invocation should behave like `--help` and exit 0.
     if std::env::args_os().len() == 1 {
         use clap::CommandFactory;
@@ -19,6 +16,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cli = Cli::parse();
+
+    // Colours on, except under `--json` — where stdout is a document and an
+    // escape sequence inside a string is a parse hazard in some consumers and a
+    // display artefact in all of them. Set after the parse because `--json` is
+    // what decides it, and clap's own help text is uncoloured either way.
+    colored::control::set_override(!cli.json);
 
     // No subcommand => print help (even if global flags are present).
     if cli.command.is_none() {
@@ -75,7 +78,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logger = Arc::new(Logger::for_command(command_name, cli.verbose));
 
     // Create global context with flags
-    let context = GlobalContext::new(cli.verbose, cli.no_push, cli.yes, logger)?;
+    let context = GlobalContext::new(
+        GlobalFlags {
+            verbose: cli.verbose,
+            no_push: cli.no_push,
+            assume_yes: cli.yes,
+            json: cli.json,
+        },
+        logger,
+    )?;
 
     // Acquire a repository-wide lock for mutating commands so two concurrent
     // Hitch operations on the same repo can't clobber each other's branch

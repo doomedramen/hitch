@@ -1,6 +1,10 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::operations::model::{ExecutionReceipt, OperationPlan};
 use crate::operations::rebuild::PlanPurpose;
-use crate::operations::release::{apply_release_plan, plan_release, ReleasePlanOptions};
+use crate::operations::release::{
+    apply_release_plan, plan_release, ReleasePlanDetail, ReleasePlanOptions,
+};
 use crate::utils::command_helpers::{
     ensure_branch_exists, ensure_environment_exists, environment::get_locked_by_user,
     logging::validation_success,
@@ -37,71 +41,80 @@ pub struct ReleaseCommand {
     /// GitHub will NOT auto-detect merged PRs in squash mode — use --no-ff (default) for GitHub PR workflows)
     #[arg(long)]
     pub squash: bool,
+
+    /// Show the plan — which branches would merge, into what, what would be
+    /// tagged, pruned, and rebuilt — and stop. Changes nothing: no composition
+    /// is anchored, no lock is taken, no writes.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!("Releasing environment '{}'...", args.env_name));
-
     // Step 1: Precondition checks
     validate_preconditions(context, &args.env_name, args.force)?;
 
     // Step 2: Resolve target branch
     let target_branch = resolve_target_branch(context, &args.env_name, args.target_branch)?;
 
-    // Step 3: User confirmation (skip with the global --yes)
-    //
-    // Deliberately *before* planning. The prompt has to name the branches, and
-    // naming them by reading the declaration is the only way it can be right
-    // without the plan existing first — which would put a composition (real
-    // merges, an anchor ref, a fetch) behind a prompt the user is still
-    // deciding whether to see. The plan is built after, inside the lock, where
-    // it is fresh.
-    if !confirm_release(context, &args.env_name, &target_branch)? {
-        context.log_info("Release cancelled by user.");
+    let options = ReleasePlanOptions {
+        squash: args.squash,
+        no_prune: args.no_prune,
+        no_rebuild_dependents: args.no_rebuild_dependents,
+    };
+
+    if args.dry_run {
+        // Preview, planned outside the environment lock — see `promote::run`
+        // for why that inversion of the real path's rule is safe, and what would
+        // have to change for it to stop being safe.
+        //
+        // The old prompt asked the user to confirm *before* the plan existed,
+        // and spelled the branch list out by hand from the declaration. That
+        // list is what the plan's Composition section now says, with the SHAs
+        // it will actually merge and the target it will merge them into — so the
+        // prompt no longer has to be right about a fact it read separately, and
+        // cannot be wrong about it in a second vocabulary.
+        if nothing_to_release(context, &args.env_name)? {
+            return Ok(());
+        }
+        let plan = plan_release(
+            context,
+            &args.env_name,
+            &target_branch,
+            options,
+            PlanPurpose::Preview,
+            &mut |step| context.log_verbose(step),
+        )?;
+        emit_plan(context, &plan)?;
         return Ok(());
     }
 
-    // Step 4-7: Execute release. In force mode the environment may already be
+    // Step 3-4: Execute release. In force mode the environment may already be
     // locked, so we don't take the environment lock; otherwise we lock it for the
     // duration of the release. The core logic is identical either way — and
     // identical to the point of *where* the plan is built, which is inside the
     // lock on both arms. `with_locked_env` commits the lock to `hitch-metadata`
     // before its closure runs, so a plan built outside the closure would be
     // stale on arrival by construction.
-    if args.force {
+    let run = if args.force {
         context.log_info(&format!(
             "Force releasing locked environment '{}' to '{}'...",
             args.env_name, target_branch
         ));
-        perform_release_core(
-            context,
-            &args.env_name,
-            &target_branch,
-            ReleasePlanOptions {
-                squash: args.squash,
-                no_prune: args.no_prune,
-                no_rebuild_dependents: args.no_rebuild_dependents,
-            },
-        )?;
+        perform_release_core(context, &args.env_name, &target_branch, options)?
     } else {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            perform_release_core(
-                context,
-                &args.env_name,
-                &target_branch,
-                ReleasePlanOptions {
-                    squash: args.squash,
-                    no_prune: args.no_prune,
-                    no_rebuild_dependents: args.no_rebuild_dependents,
-                },
-            )
-        })?;
-    }
+            perform_release_core(context, &args.env_name, &target_branch, options)
+        })?
+    };
 
-    context.log_success(&format!(
-        "Environment '{}' released successfully to '{}'!",
-        args.env_name, target_branch
-    ));
+    let Some(run) = run else {
+        // Declined at the gate. Nothing was written — including no tag, since
+        // the tag rides the plan's own transaction — so there is nothing to
+        // report and nothing to undo. Exit 0.
+        return Ok(());
+    };
+
+    emit_receipt(context, &run.plan, &run.receipt)?;
     Ok(())
 }
 
@@ -179,6 +192,38 @@ fn resolve_target_branch(
     Ok(target)
 }
 
+/// A release that planned and applied, with both halves handed back.
+struct ReleaseRun {
+    plan: OperationPlan<ReleasePlanDetail>,
+    receipt: ExecutionReceipt,
+}
+
+/// Whether there is nothing to release, said once so both paths say it once.
+///
+/// A release of nothing is not a release. Kept as an early return rather than a
+/// plan-time refusal so the exit code stays 0, and shared between the preview and
+/// the real path so a dry run of an empty environment cannot describe something
+/// the real run would refuse. The cost is that a `--json` dry run of an empty
+/// release prints a diagnostic and no document — stdout is empty, which is a
+/// valid "nothing to do", and the alternative was a plan whose every list is
+/// empty, which says strictly less.
+fn nothing_to_release(context: &GlobalContext, env_name: &str) -> Result<bool> {
+    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
+    let promoted = config
+        .environments
+        .get(env_name)
+        .map(|e| e.branches.len())
+        .unwrap_or(0);
+    if promoted == 0 {
+        context.log_info(&format!(
+            "No branches promoted to environment '{}', nothing to release",
+            env_name
+        ));
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Plan the release, then land it.
 ///
 /// Everything this used to do inline — synchronise, pin, compose, anchor, tag,
@@ -193,31 +238,20 @@ fn resolve_target_branch(
 /// `with_locked_env` committed it before this closure. The human-lock refusal
 /// stays in `validate_preconditions`, before the lock, where it can still
 /// produce "locked by <user>" rather than the planner's "locked by hitch".
+///
+/// `Ok(None)` is a declined gate. The release's composed commit was anchored
+/// under `refs/hitch/release/*` by the `Confirm`-purpose plan, and nothing
+/// prunes that family, so the decline path discards the anchor itself; that is
+/// the one exit from the plan's lifetime that `apply_release_plan` does not own.
 fn perform_release_core(
     context: &GlobalContext,
     env_name: &str,
     target_branch: &str,
     options: ReleasePlanOptions,
-) -> Result<()> {
-    // A release of nothing is not a release. Kept here as an early `Ok(())`
-    // rather than a plan-time refusal so the exit code stays 0 — the planner
-    // refuses the same shape, and this guard is what means the degenerate case
-    // is never reached from a user-facing path.
-    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let promoted = config
-        .environments
-        .get(env_name)
-        .map(|e| e.branches.len())
-        .unwrap_or(0);
-    if promoted == 0 {
-        context.log_info(&format!(
-            "No branches promoted to environment '{}', nothing to release",
-            env_name
-        ));
-        return Ok(());
+) -> Result<Option<ReleaseRun>> {
+    if nothing_to_release(context, env_name)? {
+        return Ok(None);
     }
-
-    let mut report = |step: &str| context.log_info(step);
 
     let plan = plan_release(
         context,
@@ -225,58 +259,26 @@ fn perform_release_core(
         target_branch,
         options,
         PlanPurpose::Confirm,
-        &mut report,
+        &mut |step| context.log_info(step),
     )?;
-    let _receipt = apply_release_plan(context, &plan, &mut report)?;
 
-    Ok(())
-}
-
-/// Confirm release operation with user.
-///
-/// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
-fn confirm_release(context: &GlobalContext, env_name: &str, target_branch: &str) -> Result<bool> {
-    // Get environment details to show user what will be released
-    let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = config.environments.get(env_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Environment '{}' does not exist. Available environments: {}",
-            env_name,
-            config.get_environment_names().join(", ")
-        )
-    })?;
-
-    context.log_info("🚨 DANGEROUS OPERATION DETECTED!");
-    context.log_info(&format!(
-        "About to release environment '{}' to '{}'",
-        env_name, target_branch
-    ));
-    context.log_info(&format!(
-        "  • {} promoted branches will be merged",
-        environment.branches.len()
-    ));
-
-    if environment.branches.is_empty() {
-        context.log_info("  • No branches currently promoted (empty release)");
-    } else {
-        context.log_info("  • Branches to be merged:");
-        for branch in &environment.branches {
-            context.log_info(&format!("    - {}", branch));
+    // The discard precedes the return on *both* non-applying arms. Writing it as
+    // `if !confirm_plan(...)?` discarded on a decline and not on an error, so
+    // `--json` without `--yes` — where `decide_gate` refuses instead of
+    // prompting — propagated the refusal and left the anchor behind. Nothing
+    // prunes `refs/hitch/release/*`, so that is one leaked ref per refusal.
+    let approved = match confirm_plan(context, &render_plan(&plan), &plan.confirmation) {
+        Ok(approved) => approved,
+        Err(error) => {
+            crate::operations::release::discard_release_plan(context, &plan);
+            return Err(error);
         }
+    };
+    if !approved {
+        crate::operations::release::discard_release_plan(context, &plan);
+        return Ok(None);
     }
 
-    context.log_info(&format!("  • Target branch: {}", target_branch));
-    context.log_info("  • This will merge changes permanently");
-
-    if environment.is_locked() {
-        context.log_warning("  • Environment is currently locked");
-    }
-
-    // Prompt for confirmation
-    if !context.confirm("Do you want to continue?")? {
-        return Ok(false);
-    }
-
-    context.log_info("User confirmed release - proceeding...");
-    Ok(true)
+    let receipt = apply_release_plan(context, &plan, &mut |step| context.log_info(step))?;
+    Ok(Some(ReleaseRun { plan, receipt }))
 }

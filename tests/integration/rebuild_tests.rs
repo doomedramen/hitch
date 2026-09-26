@@ -109,7 +109,7 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             // Verify rebuild timestamp is updated
             let config = env.read_hitch_config()?;
@@ -180,7 +180,7 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             // Verify rebuild timestamp is updated
             let config = env.read_hitch_config()?;
@@ -280,7 +280,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             // Verify rebuild timestamp is updated
             let config = env.read_hitch_config()?;
@@ -335,10 +335,9 @@ mod tests {
             // Rebuild each environment
             for env_name in ["dev", "qa", "staging"] {
                 let result = env.hitch.run().args(&["rebuild", env_name]).execute()?;
-                result.assert_success().assert_stdout_contains(&format!(
-                    "Environment '{}' rebuilt successfully",
-                    env_name
-                ));
+                result
+                    .assert_success()
+                    .assert_stdout_has_line(&format!("✓ {env_name}   realised"));
             }
 
             // Verify all environments have rebuild timestamps
@@ -410,12 +409,15 @@ mod tests {
             // plain 0 success, and not a failure either.
             result
                 .assert_exit_code(2)
-                .assert_stdout_contains("held")
                 // branch-a composes cleanly first, so branch-b's conflict is
                 // attributed to branch-a (the branch it actually collides
                 // with), not to main.
-                .assert_stdout_contains("branch-b conflicts with branch-a")
-                .assert_stdout_contains("shared.txt");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a")
+                .assert_stdout_contains("shared.txt")
+                // The remedy is the part that has to survive a reword of the
+                // prose around it: a held branch with no way to fix it is a dead
+                // end the user has to go find `git rebase` documentation for.
+                .assert_stdout_contains("fix: git checkout branch-b && git rebase branch-a");
 
             // dev was built from branch-a alone
             let dev_content = env.git.run(&["show", "dev:shared.txt"])?;
@@ -509,7 +511,7 @@ mod tests {
             let dry_stdout = dry.stdout();
             // Exit 2 = "would hold", per the CI contract.
             dry.assert_exit_code(2)
-                .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a");
 
             let real = env
                 .hitch
@@ -518,7 +520,7 @@ mod tests {
                 .execute()?;
             let real_stdout = real.stdout();
             real.assert_exit_code(2)
-                .assert_stdout_contains("1 branch held");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a");
 
             let dry_verdict = held_verdict(&dry_stdout);
             let real_verdict = held_verdict(&real_stdout);
@@ -553,8 +555,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_exit_code(2)
-                .assert_stdout_contains("branch-b conflicts with branch-a")
-                .assert_stdout_contains("would rebuild with 1 of 2 branches (1 held)");
+                .assert_stdout_contains("branch-b held — conflicts with branch-a");
 
             // Dry run must not build or publish anything
             let dev_exists = env
@@ -660,7 +661,7 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Environment 'dev' rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             // Verify timestamp was updated
             let config = env.read_hitch_config()?;
@@ -758,7 +759,7 @@ mod tests {
                 .args(&["rebuild", "dev"])
                 .execute()?
                 .assert_success()
-                .assert_stdout_contains("rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             // With advisory locks the marker file is intentionally left in place
             // (its existence does not hold the lock), so we do not assert removal.
@@ -801,7 +802,7 @@ mod tests {
                 .args(&["--no-push", "rebuild", "dev"])
                 .execute()?
                 .assert_success()
-                .assert_stdout_contains("rebuilt successfully");
+                .assert_stdout_has_line("✓ dev   realised");
 
             let branch = env.git.run(&["branch", "--show-current"])?;
             assert_eq!(

@@ -1,7 +1,9 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
 use crate::operations::declaration::{
     apply_declaration_plan, plan_promote, DeclarationPlanOptions,
 };
+use crate::operations::model::OperationOutcome;
 use crate::types::{RollbackInfo, RollbackOperation};
 use anyhow::Result;
 use clap::Args;
@@ -20,14 +22,15 @@ pub struct PromoteCommand {
     /// Use this to batch multiple promotes and then run 'hitch rebuild <env>' once.
     #[arg(long)]
     pub no_rebuild: bool,
+
+    /// Show the plan — what would be declared, what would be rebuilt, which
+    /// environments would follow — and stop. Changes nothing: no stash, no
+    /// lock, no writes.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!(
-        "Promoting branch '{}' to environment '{}'...",
-        args.branch, args.env_name
-    ));
-
     // Step 1: Ensure we are in a Git repository
     crate::utils::prelude::pre_check_repo_only(context)?;
 
@@ -56,6 +59,26 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
         );
     }
 
+    let options = DeclarationPlanOptions {
+        no_rebuild: args.no_rebuild,
+    };
+
+    if args.dry_run {
+        // Preview. Planned *outside* the environment lock, which inverts the
+        // rule the real path below follows, and is safe for exactly one reason:
+        // a preview plan is never applied, so nothing can go stale between
+        // planning and applying it. The rule the real path follows is safe
+        // because the planner does not consult `is_locked()` — which is why the
+        // human-lock refusal above, and not the planner, enforces it.
+        //
+        // No `with_auto_stash` either. It stashes the working tree, so a
+        // "changes nothing" flag that rearranged the user's uncommitted work
+        // would not be describing itself honestly.
+        let plan = plan_promote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+        emit_plan(context, &plan)?;
+        return Ok(());
+    }
+
     // Create rollback info for this operation
     let mut rollback_info = RollbackInfo::new(
         RollbackOperation::Promote,
@@ -78,46 +101,36 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
             rollback_info.previous_config = crate::utils::rollback::capture_config_state(context)?;
-            let plan = plan_promote(
-                context,
-                &args.branch,
-                &args.env_name,
-                DeclarationPlanOptions {
-                    no_rebuild: args.no_rebuild,
-                },
-                &mut |_| {},
-            )?;
-            let branches = resolved_branches(context, &plan, &args.branch)?;
+            let plan = plan_promote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+            if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+                return Ok((plan, None));
+            }
             let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
-            Ok((branches, receipt))
+            Ok((plan, Some(receipt)))
         })
     });
 
     // Step 4: Handle result with automatic rollback on failure
     match result {
-        Ok((branches, receipt)) => {
-            match receipt.outcome {
-                // An approval gate is not a failure and not a promotion
-                // either: nothing was declared, and the user's next command is
-                // `hitch approve`. Exit 0, and say what is now waiting.
-                crate::operations::model::OperationOutcome::ApprovalRequested => Ok(()),
-                _ if branches.len() == 1 => {
-                    context.log_success(&format!(
-                        "Successfully promoted '{}' to environment '{}'!",
-                        branches[0], args.env_name
-                    ));
-                    Ok(())
-                }
-                _ => {
-                    context.log_success(&format!(
-                        "Successfully promoted {} branches to environment '{}'!",
-                        branches.len(),
-                        args.env_name
-                    ));
-                    Ok(())
-                }
+        Ok((plan, Some(receipt))) => {
+            emit_receipt(context, &plan, &receipt)?;
+            if receipt.outcome == OperationOutcome::ApprovalRequested {
+                // The remedy is printed *here* and not by the plan, because the
+                // plan cannot know it: the request is created by the apply, and a
+                // planner that named a request id would be naming one that does
+                // not exist yet. A refusal to promote with no next step is the
+                // same dead end the held-branch remedy exists to avoid.
+                context.log_info(
+                    "Run 'hitch approvals list' to see the request, then 'hitch approvals approve <id>' to grant it.",
+                );
             }
+            Ok(())
         }
+        // Declined. The gate already showed the plan and the answer, and nothing
+        // was written, so there is nothing to report and nothing to roll back —
+        // a "rolled back" line for a no-op is a scare, not an account. Exit 0:
+        // declining is not a failure.
+        Ok((_plan, None)) => Ok(()),
         Err(e) => {
             // Show the actual error FIRST so user knows why it failed
             context.log_error(&format!("Error: {}", e));
@@ -141,35 +154,4 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
             Err(e)
         }
     }
-}
-
-/// The branches the plan actually resolved, plus the "Resolved '<env>' → N
-/// branch(es)" line when the argument named an environment rather than a
-/// branch. Both are read off the plan rather than recomputed, so the message
-/// cannot describe a different promotion than the one that ran.
-fn resolved_branches(
-    context: &GlobalContext,
-    plan: &crate::operations::model::OperationPlan<
-        crate::operations::declaration::DeclarationPlanDetail,
-    >,
-    argument: &str,
-) -> Result<Vec<String>> {
-    let branches = match &plan.intent {
-        crate::operations::model::OperationIntent::PromoteBranches { branches, .. } => {
-            branches.clone()
-        }
-        // Unreachable: `plan_promote` is the only constructor of this intent.
-        // An error rather than an empty list, which would read as "promoted 0
-        // branches" and exit 0.
-        _ => anyhow::bail!("internal error: promote produced a non-promote plan"),
-    };
-    if branches.len() != 1 || branches.first().map(|b| b.as_str()) != Some(argument) {
-        context.log_info(&format!(
-            "Resolved '{}' → {} branch(es): {}",
-            argument,
-            branches.len(),
-            branches.join(", ")
-        ));
-    }
-    Ok(branches)
 }

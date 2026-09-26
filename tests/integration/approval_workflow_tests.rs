@@ -403,9 +403,9 @@ mod tests {
                 .run()
                 .args(&["promote", "feature/legacy", "development"])
                 .execute()?;
-            promote_result.assert_success().assert_stdout_contains(
-                "Successfully promoted 'feature/legacy' to environment 'development'",
-            );
+            promote_result
+                .assert_success()
+                .assert_stdout_contains("promote feature/legacy into 'development'");
 
             // Verify no approval requests were created
             let list_result = env.hitch.run().args(&["approvals", "list"]).execute()?;

@@ -260,6 +260,61 @@ impl HitchCommandResult {
         self
     }
 
+    /// Assert stdout is empty.
+    ///
+    /// For a `--json` command, "printed nothing" is a claim in its own right: a
+    /// document a consumer did not expect is a parse error, and a diagnostic
+    /// that leaked onto stdout instead of stderr is worse than neither. Pinned
+    /// for the paths that deliberately emit no document at all, so that they
+    /// are a decision rather than a hole.
+    pub fn assert_stdout_is_empty(self) -> Self {
+        if !self.stdout().is_empty() {
+            panic!(
+                "Expected stdout to be empty, but it wasn't:\nstdout: {}",
+                self.stdout()
+            );
+        }
+        self
+    }
+
+    /// Assert stdout does **not** contain `text`.
+    ///
+    /// The counterpart that makes "the plan shows the good outcome" a real
+    /// claim: `assert_stdout_contains("from recorded resolution")` passes just
+    /// as happily against output that *also* says a branch was held, and the
+    /// two together are the verdict this test is actually about.
+    pub fn assert_stdout_not_contains(self, text: &str) -> Self {
+        if self.stdout().contains(text) {
+            panic!(
+                "Expected stdout NOT to contain '{}', but it did:\nstdout: {}",
+                text,
+                self.stdout()
+            );
+        }
+        self
+    }
+
+    /// Assert some *whole line* of stdout, with surrounding indentation
+    /// ignored, is exactly `line`.
+    ///
+    /// Where `assert_stdout_contains` answers "does this output mention X at
+    /// all", this pins a rendered row — glyph, name, and label together — so a
+    /// test that means "this environment came out realised" cannot pass on an
+    /// environment that came out `needs rebuild` one column further along the
+    /// same line. Both halves trim, because the renderer indents and the test
+    /// should not have to care.
+    pub fn assert_stdout_has_line(self, line: &str) -> Self {
+        let wanted = line.trim();
+        if !self.stdout().lines().any(|c| c.trim() == wanted) {
+            panic!(
+                "Expected a line exactly '{}', but there wasn't one:\nstdout: {}",
+                wanted,
+                self.stdout()
+            );
+        }
+        self
+    }
+
     /// Assert stderr contains specific text
     pub fn assert_stderr_contains(self, text: &str) -> Self {
         if !self.stderr().contains(text) {

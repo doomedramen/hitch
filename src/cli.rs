@@ -25,8 +25,29 @@ pub struct Cli {
 
     /// Answer "yes" to every confirmation prompt (required for non-interactive
     /// sessions such as CI or an AI agent; also settable via HITCH_YES=1)
+    ///
+    /// This skips the *prompt*, never the plan. A run with `--yes` still prints
+    /// what it is about to do and what it did, so a CI log answers "what
+    /// changed" without anyone reading it twice. Use `--json` for a
+    /// machine-readable form of the same thing.
     #[arg(long, short = 'y', global = true, env = "HITCH_YES")]
     pub yes: bool,
+
+    /// Print a machine-readable document on stdout and nothing else; send all
+    /// progress, warnings, and errors to stderr
+    ///
+    /// Honours this today: `rebuild`, `promote`, `demote`, `release`. A
+    /// command that does not support it says so rather than printing prose into
+    /// a stream the caller is about to parse. `status` gains it alongside the
+    /// status matrix; the mutating commands are the ones an agent drives.
+    ///
+    /// For a mutating command the document is `{"schema_version", "plan",
+    /// "receipt"}`, and `receipt` is `null` for a `--dry-run`. A mutating
+    /// command that needs confirmation but was not given `--yes` fails rather
+    /// than prompting: a program that blocks on a terminal read is the failure
+    /// this flag exists to remove.
+    #[arg(long, global = true)]
+    pub json: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,

@@ -944,6 +944,110 @@ pub fn rebuild_environment_opts(
     replay: bool,
     on_conflict_override: Option<OnConflict>,
 ) -> Result<RebuildOutcome> {
+    let run = rebuild_environment_gated(
+        context,
+        env_name,
+        replay,
+        on_conflict_override,
+        StepNarration::Log(context.output.clone()),
+        |_plan| Ok(true),
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!("internal error: the ungated rebuild path declined to apply its own plan")
+    })?;
+
+    let held = run.plan.detail.held.clone();
+    let replayed = run.plan.detail.replayed.clone();
+    let receipt = run.receipt;
+
+    context.log_verbose(&format!(
+        "✓ Rebuild process completed for environment '{}'",
+        env_name
+    ));
+    // The receipt is the richer account of what happened; `RebuildOutcome` is
+    // the narrow one four other commands already consume, and it is derived
+    // from the same `plan.detail` the receipt was, so the two cannot disagree.
+    debug_assert_eq!(
+        receipt.outcome,
+        if held.is_empty() {
+            crate::operations::model::OperationOutcome::Applied
+        } else {
+            crate::operations::model::OperationOutcome::AppliedWithHolds
+        }
+    );
+    Ok(RebuildOutcome { held, replayed })
+}
+
+/// Where a rebuild's step narration goes.
+///
+/// A named enum rather than a `bool`, because the two arms differ in *kind* and
+/// the reason matters at the call site: one narrates because nothing better will
+/// be shown, the other goes quiet because something better already is.
+///
+/// The `Suppressed` arm is the `hitch rebuild` path. `StepLogger` narrates
+/// "Synchronizing branches / Merging auth / …", and the plan's Composition
+/// section says the same thing in one place, in declaration order, with the
+/// result — which is held, which is included, at which SHA. Printing both means
+/// every rebuild describes its merge twice, in two vocabularies, and the reader
+/// has to work out which one is the plan.
+pub enum StepNarration {
+    /// Narrate the steps to this sink.
+    Log(std::sync::Arc<dyn crate::utils::output::OutputSink>),
+    /// Say nothing; the caller is about to render a plan instead.
+    Suppressed,
+}
+
+/// A rebuild that planned and applied, with both halves handed back.
+///
+/// `hitch rebuild` needs the plan to show before it applies and the receipt to
+/// show after; the nested callers need neither and only want the derived
+/// `RebuildOutcome`. Returning both from one sequence is what stops the two
+/// shapes from drifting — a second "plan then apply" written for the command
+/// would be a second place to forget the fingerprint validation, the anchor's
+/// `discard_plan`, or the rebuild lock.
+pub struct RebuildRun {
+    pub plan:
+        crate::operations::model::OperationPlan<crate::operations::rebuild::RebuildPlanDetail>,
+    pub receipt: crate::operations::model::ExecutionReceipt,
+}
+
+/// The plan-then-apply sequence every rebuild goes through, with the caller's
+/// gate between the two halves.
+///
+/// `gate` receives the finished plan and returns whether to apply it. It is a
+/// parameter rather than a separate entry point because the plan is a
+/// *decision*, and a caller that cannot see it cannot make a decision about it:
+/// `hitch rebuild` shows it and asks, a nested rebuild (`promote`'s dependent
+/// environment) does not ask, because the user already answered the question
+/// that produced it.
+///
+/// `Ok(None)` means the gate declined, and **the plan's anchor is discarded on
+/// that path**. A `Confirm`-purpose plan anchors its composed commit under
+/// `refs/hitch/build/<env>/<sha>` so a concurrent `git gc --prune=now` cannot
+/// collect it before the publish CAS lands; nothing prunes that family, so a
+/// declined gate that skipped the discard would leak a ref per refusal.
+/// `apply_rebuild_plan` discards it on every exit, including the `?` on
+/// `validate_plan`; this is the one exit it does not own.
+///
+/// Two things happen before the gate runs and are *not* described by the plan:
+/// the per-environment `RebuildLock`, and — for the `hitch rebuild` path — the
+/// environment lock `with_locked_env` takes around this whole call. Both are
+/// serialization, not durable state: the lock is released on every exit path
+/// including this one, so a declined gate leaves no more behind than a
+/// `hitch status` read.
+pub fn rebuild_environment_gated<G>(
+    context: &GlobalContext,
+    env_name: &str,
+    replay: bool,
+    on_conflict_override: Option<OnConflict>,
+    narration: StepNarration,
+    gate: G,
+) -> Result<Option<RebuildRun>>
+where
+    G: FnOnce(
+        &crate::operations::model::OperationPlan<crate::operations::rebuild::RebuildPlanDetail>,
+    ) -> Result<bool>,
+{
     context.log_verbose(&format!(
         "Starting rebuild process for environment '{}'",
         env_name
@@ -967,11 +1071,19 @@ pub fn rebuild_environment_opts(
     })?;
     let merge_steps = environment.branches.len().max(1);
     let total_steps = 2 + merge_steps;
-    let mut logger = StepLogger::new_with_output(
-        format!("Rebuilding environment '{}'", env_name),
-        total_steps,
-        context.output.clone(),
-    );
+    let mut logger = match narration {
+        StepNarration::Log(output) => Some(StepLogger::new_with_output(
+            format!("Rebuilding environment '{}'", env_name),
+            total_steps,
+            output,
+        )),
+        StepNarration::Suppressed => None,
+    };
+    let mut step = |message: &str| {
+        if let Some(logger) = logger.as_mut() {
+            logger.step(message.to_string());
+        }
+    };
 
     let options = crate::operations::rebuild::RebuildPlanOptions {
         replay,
@@ -987,32 +1099,42 @@ pub fn rebuild_environment_opts(
         env_name,
         options,
         crate::operations::rebuild::PlanPurpose::Confirm,
-        &mut |step| logger.step(step.to_string()),
+        &mut |message| step(message),
     )?;
-    let held = plan.detail.held.clone();
-    let replayed = plan.detail.replayed.clone();
-    let receipt = crate::operations::rebuild::apply_rebuild_plan(context, &plan, &mut |step| {
-        logger.step(step.to_string())
-    })?;
-
-    logger.complete();
-
-    context.log_verbose(&format!(
-        "✓ Rebuild process completed for environment '{}'",
-        env_name
-    ));
-    // The receipt is the richer account of what happened; `RebuildOutcome` is
-    // the narrow one four other commands already consume, and it is derived
-    // from the same `plan.detail` the receipt was, so the two cannot disagree.
-    debug_assert_eq!(
-        receipt.outcome,
-        if held.is_empty() {
-            crate::operations::model::OperationOutcome::Applied
-        } else {
-            crate::operations::model::OperationOutcome::AppliedWithHolds
+    let applied = match gate(&plan) {
+        Ok(true) => {
+            let receipt =
+                crate::operations::rebuild::apply_rebuild_plan(context, &plan, &mut |message| {
+                    step(message)
+                })?;
+            Some(receipt)
         }
-    );
-    Ok(RebuildOutcome { held, replayed })
+        // A declined gate is not a failure: nothing was applied, so the caller
+        // reports success and the repository is exactly as it was.
+        Ok(false) => {
+            crate::operations::rebuild::discard_plan(context, &plan);
+            None
+        }
+        // A gate that *errored* is a different event and used to be swallowed
+        // into the same arm, which turned `--json` without `--yes` — where
+        // `decide_gate` refuses rather than prompts — into a silent exit 0:
+        // nothing applied, no document on stdout, and the reason
+        // ("re-run with --yes") discarded along with the error. A command that
+        // exits 0 having done nothing, for a reason the user cannot see, is
+        // precisely the failure this program exists to remove.
+        //
+        // The discard still comes first. `?` on the gate would skip it, and
+        // nothing prunes `refs/hitch/build/*`.
+        Err(error) => {
+            crate::operations::rebuild::discard_plan(context, &plan);
+            return Err(error);
+        }
+    };
+    if let Some(logger) = logger.as_mut() {
+        logger.complete();
+    }
+
+    Ok(applied.map(|receipt| RebuildRun { plan, receipt }))
 }
 
 /// If `hitch setup` has been run for this repository, use the deploy key to
@@ -1806,7 +1928,7 @@ fn try_replay_resolution(
 #[cfg(test)]
 mod try_replay_resolution_tests {
     use super::*;
-    use crate::commands::global_context::GlobalContext;
+    use crate::commands::global_context::{GlobalContext, GlobalFlags};
     use crate::utils::git_operations::{MergeStages, MergeTreeCompose};
     use crate::utils::logging::Logger;
     use crate::utils::resolutions::{self, PendingConflict};
@@ -1910,7 +2032,7 @@ mod try_replay_resolution_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         // A recorded (unsigned) resolution matching a fabricated conflict on
@@ -2028,7 +2150,7 @@ mod try_replay_resolution_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let stages: Vec<MergeStages> = vec![(
@@ -2115,7 +2237,7 @@ mod try_replay_resolution_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let stages: Vec<MergeStages> = vec![(
@@ -2585,7 +2707,7 @@ pub fn pre_promote_conflict_reason(
 #[cfg(test)]
 mod publish_environment_build_tests {
     use super::*;
-    use crate::commands::global_context::GlobalContext;
+    use crate::commands::global_context::{GlobalContext, GlobalFlags};
     use crate::types::{Environment, HitchConfig};
     use crate::utils::logging::Logger;
     use std::sync::Arc;
@@ -2674,7 +2796,7 @@ mod publish_environment_build_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let same_timestamp = "20260101120000";
@@ -2797,7 +2919,7 @@ mod publish_environment_build_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let timestamp = "20260101130000";
@@ -2819,7 +2941,7 @@ mod publish_environment_build_tests {
 #[cfg(test)]
 mod compose_environment_tests {
     use super::*;
-    use crate::commands::global_context::GlobalContext;
+    use crate::commands::global_context::{GlobalContext, GlobalFlags};
     use crate::utils::logging::Logger;
     use std::sync::Arc;
 
@@ -2895,7 +3017,7 @@ mod compose_environment_tests {
 
         let logger = Arc::new(Logger::for_command("test", false));
         let context =
-            GlobalContext::new_at_path(&repo.to_string_lossy(), false, true, true, logger)
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
                 .expect("failed to build test GlobalContext");
 
         let inputs = PinnedInputs {
