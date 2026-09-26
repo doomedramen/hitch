@@ -16,7 +16,7 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Six commits, so far:
+Seven commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
@@ -24,6 +24,7 @@ Six commits, so far:
 - `05f7126` — P3: the new `src/core/state.rs`, the timestamp→SHA staleness fix, and the pure `core/status.rs` projection.
 - `01d19c8` — P4: `src/operations/`, and `hitch rebuild` rewired to plan → validate → apply → receipt.
 - `313189d` — the P4 plan's "As executed" / "What P5 inherits" sections.
+- `335517c` — P5: `src/operations/{declaration,release}.rs`, `promote`/`demote`/`release` rewired, the approve path's pre-edit-rebuild fix, and the failure contract change (a failed dependent rebuild is an owed effect, not a rollback).
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
