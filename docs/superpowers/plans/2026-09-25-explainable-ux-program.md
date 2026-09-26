@@ -26,7 +26,7 @@ Seven commits, so far:
 - `313189d` — the P4 plan's "As executed" / "What P5 inherits" sections.
 - `335517c` — P5: `src/operations/{declaration,release}.rs`, `promote`/`demote`/`release` rewired, the approve path's pre-edit-rebuild fix, and the failure contract change (a failed dependent rebuild is an owed effect, not a rollback).
 - `9247a46` — the P5 plan's "As executed" / "What P6 inherits" sections, and the master plan's P5 status.
-- `P6_SHA` — P6: `src/core/render.rs`, the shared plan and receipt renderers; a global `--json`; `--dry-run` on all four mutating commands; `GlobalFlags` and `DiagnosticOutputSink`; and the one gated plan-then-apply sequence (`rebuild_environment_gated`).
+- `1b6ad19` — P6: `src/core/render.rs`, the shared plan and receipt renderers; a global `--json`; `--dry-run` on all four mutating commands; `GlobalFlags` and `DiagnosticOutputSink`; and the one gated plan-then-apply sequence (`rebuild_environment_gated`).
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
