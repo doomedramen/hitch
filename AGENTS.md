@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P4 are authored and complete; P5 is
+independently of this program. P0–P5 are authored and complete; P6 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
@@ -193,7 +193,9 @@ covered.
   *actually* contained, written as JSON at `refs/hitch/state/<env>` and
   written by `rebuild_environment_opts` (not by `commands/rebuild.rs`, so
   `promote`/`demote`/`approve`/post-release-rebuild get a current record
-  free). Since P4 the `hitch rebuild` path writes it from a *plan* —
+  free — since P5 each of those reaches it as the *nested* rebuild its own
+  planner performs, which is the same set of callers by a longer path). Since
+  P4 the `hitch rebuild` path writes it from a *plan* —
   `plan_rebuild` computes the `RefEdit` once at plan time and
   `apply_rebuild_plan` passes that same value through verbatim, because the
   record is a claim about *that* composition and recomputing it at apply time
@@ -220,11 +222,14 @@ covered.
 - `src/operations/` — the plan → apply → receipt architecture, one operation
   at a time. `model.rs` is operation-agnostic (`OperationPlan<I>` generic over
   its per-operation detail, `PlanFingerprint`, `PlannedEffect`/`AppliedEffect`,
-  `ExecutionReceipt`, `OperationOutcome`, `PlanApplyError`); `rebuild.rs` is
-  the only implemented operation. A new operation adds a `*PlanDetail` and a
-  `plan_*`/`apply_*` pair, and reuses the fingerprint, validation, and receipt
-  assembly as shared machinery rather than re-deriving them. One planner per
-  operation, on purpose — see the "one planner per operation" gotcha.
+  `ExecutionWarning`, `ExecutionReceipt`, `OperationOutcome`, `PlanApplyError`,
+  plus the shared `changed_inputs` diff helper every validator calls);
+  `rebuild.rs` holds `plan_rebuild`/`apply_rebuild_plan` and `PlanPurpose`;
+  `declaration.rs` holds the promote/demote planner+executor; `release.rs` holds
+  release's. A new operation adds a `*PlanDetail` and a `plan_*`/`apply_*` pair,
+  and reuses the fingerprint, validation, and receipt assembly as shared
+  machinery rather than re-deriving them. One planner per operation, on purpose
+  — see the "one planner per operation" gotcha.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
@@ -544,16 +549,27 @@ over `plan_rebuild(…, PlanPurpose::Preview, …)`, so it reads
 `plan.detail.held` / `plan.detail.replayed` and never calls
 `compose_environment` itself.
 
-**A halt is decided inside composition, so a plan can never report one.**
-`OnConflict::Halt` returns `Err` from inside `compose_environment`, which means
-the plan is never built at all. That is the right behaviour — the operation
-refused rather than partially applying — but it makes `PlanWarning.blocking`
-unreachable from `rebuild` and `PlanApplyError::PolicyBlocked` unconstructed
-there. Both are kept deliberately: approvals (P5) are the intended first
-producers. Do not "fix" the halt by moving it after planning; that would
-introduce a plan for an operation that never happens. A manual check confirms
-`--on-conflict halt` still exits 1 with the single `format_compatibility_report_for_rebuild`
-report and its `git checkout … && git rebase …` next step.
+**A halt is decided inside composition, so a *rebuild* plan can never report
+one.** `OnConflict::Halt` returns `Err` from inside `compose_environment`, which
+means the plan is never built at all. That is the right behaviour — the
+operation refused rather than partially applying — but it makes
+`PlanWarning.blocking` unreachable from `rebuild` and
+`PlanApplyError::PolicyBlocked` unconstructed *there*. Do not "fix" the halt by
+moving it after planning; that would introduce a plan for an operation that
+never happens. A manual check confirms `--on-conflict halt` still exits 1 with
+the single `format_compatibility_report_for_rebuild` report and its
+`git checkout … && git rebase …` next step.
+
+Both members became reachable in P5, from the *declaration* planner, which
+refuses before composing rather than during: `PlanWarningKind::PolicyRefusal`
+and `PlanWarningKind::ApprovalRequired` are both `is_blocking()`, and
+`apply_declaration_plan` raises `PolicyBlocked` from `plan.blocked_by()`. So
+the distinction is now drawn along a real line: a halt is decided by the merge,
+and a policy/approval refusal by the plan. If you add a third kind of
+pre-composition refusal, it belongs in the planner for the same reason — and
+note that `approval_gated = refused.is_none() && declared.requires_approval_check()`,
+because a policy refusal *outranks* the approval gate: asking for approval of
+an operation that will be refused asks for nothing.
 
 **`publish_branch` returns `PublishOutcome { push, journal_cleared }`, and
 that is not optional detail.** A receipt cannot be assembled from `Ok(())`:
@@ -582,7 +598,7 @@ canonical encoding (via `hash_object_bytes`, the same mechanism as
 not stable enough for "same inputs → same digest" to be a testable property, and
 deliberately not a new `sha2` dependency.
 
-**One planner per operation, and a typed error that survives `anyhow`.**
+**One planner per *operation*, and promote/demote are one operation.**
 `PlanApplyError` derives `std::error::Error` and crosses the boundary via
 `into_anyhow` rather than being stringified, so
 `err.downcast_ref::<PlanApplyError>()` still yields a `StalePlan` with its
@@ -590,7 +606,90 @@ deliberately not a new `sha2` dependency.
 claim, not "something failed" — that distinction is the entire value of the
 error type. `validate_plan` is `pub` so tests can assert a refusal with the
 repository unmoved, which is what distinguishes "the validator said no" from
-"the validator said no and the apply then stopped".
+"the validator said no and the apply then stopped". The "one planner" side
+means one *plan* per unit of intent, not one per command: `promote` and
+`demote` are the same edit to a declaration in opposite directions, so they
+share `plan_declaration_change`/`apply_declaration_plan` in
+`src/operations/declaration.rs` and differ only in `OperationKind`,
+`OperationIntent`, and which pure helper computes the proposed list
+(`proposed_declaration`). Two planners for those would be two places to keep
+the same three steps (edit, snapshot, rebuild) in agreement, and the agreement
+is not checked by any compiler.
+
+**A plan must be built after every metadata write that precedes it — including
+the ones hitch makes on its own behalf.** `PlanFingerprint` includes
+`metadata_sha`, and `with_locked_env` commits the environment's lock to
+`hitch-metadata` *before* running its closure, so a plan built outside the lock
+is stale the moment it is validated. This was measured, not reasoned: 13 of 17
+promote tests failed with `The plan for 'dev' is no longer current:
+hitch-metadata: d3da09e → 82658aa`. So `promote`/`demote`/`release` build
+their plan *inside* `with_locked_env`, which has a knock-on the planner must
+absorb: by then the environment is locked by the command's own hand, so
+`plan_declaration_change` must **not** call `is_locked()`, and the human-lock
+refusal lives in the command instead (the same place `commands/rebuild.rs` puts
+it). `ensure_environment_exists` moved into the command for the same reason —
+from inside the lock, a missing environment is indistinguishable from a lock
+conflict, and two tests were getting the wrong message.
+
+**`modify_metadata`'s closure runs *before* its commit — so nothing inside it
+may read the config back off the ref.** The closure is handed a
+`&mut HitchConfig` and the file is written afterwards, while
+`read_file_from_branch` is `git show hitch-metadata:hitch.json` and
+`begin_branch_write` only sets up a scratch index. So a closure that calls
+`rebuild_environment` composes from the *pre-edit* declaration while the
+declaration is being changed under it. This was live in
+`approvals/approve.rs`: an approved branch landed in `hitch.json` and never in
+the environment branch, and the two disagreed until something unrelated
+triggered another build. Same bug class as the wrong-merge-base one above — a
+shape that reads correctly and is not. Fixed by splitting
+`apply_declaration_change` (metadata only) from `rebuild_after_approval`
+(called after `modify_metadata` returns, still inside `with_locked_env`);
+pinned by the `cat-file` assertion in
+`test_automatic_application_on_threshold`. Generalise: if a new command wants to
+"update the declaration and rebuild" as one step, that rebuild goes *after* the
+transaction returns, not inside the closure.
+
+**A failed dependent rebuild is an owed effect, not an error, and
+`rollback_metadata_changes` cannot repair it.** Promote, demote, and release
+all used to roll the declaration back when a nested rebuild failed. That was
+never safe: `rollback_metadata_changes` restores a *whole-config snapshot*,
+while a nested rebuild can fail *after* moving the environment branch — at which
+point the snapshot describes a state that is not in the repository. (The
+rollback's own new test fixture does this deliberately: a push error, which
+lands the env branch first.) The contract now, identically in all three: exit
+0, the durable effect persists (the declaration edit, or the merge-and-tag),
+the environment is left unbuilt, and the message names `hitch rebuild <env>`.
+Rollback stays reachable for the one failure it can actually repair — the
+metadata write itself — and `test_rollback_...` in
+`approval_workflow_tests.rs` exercises that. The typed form is
+`ExecutionWarning { owes_effect: true }`, which is *not* the same as a plain
+warning; P6 renders the difference.
+
+**A decision the plan can make at plan time belongs in the plan, and a
+decision about the release's own result must be evaluated against the planned
+result, not the live ref.** Two instances. (1) `plan_dependents` runs
+`preflight_compatibility_merge_tree` and leaves a provably-unrebuildable
+environment out of `dependents` entirely, as an `Advisory` warning —
+`DependentRebuildOutcome::Skipped` is then for *runtime* skips only (a base
+that failed its own rebuild, `--no-rebuild-dependents`). A plan that declares a
+rebuild it knows cannot happen is a lie; a receipt with nowhere to put a
+genuine skip is the lie of the other kind. (2) The prune predicate is "is this
+promoted branch now contained in this environment's base", and for every
+environment based on the released target the answer changes *because of this
+release* — so it is evaluated against the composed `result_sha`, not the live
+target ref. Evaluated against the live ref it answers "no" for exactly the
+branches the release just integrated, and prunes nothing, silently. Same
+reason `target_sha_before` reads `rev_parse_opt("refs/heads/<target>")` and not
+`get_branch_commit_sha`, whose remote fallback would hand the CAS an
+`expected_old` belonging to a different ref.
+
+**`prunes` and `dependents` are computed in environment *name* order, not map
+order.** `HitchConfig::environments` is a `HashMap`, so iteration order is
+arbitrary. Two releases of identical input must produce identical plans, and a
+plan whose effect list reorders between runs is not a plan;
+`plan_dependents` iterates `topological_environment_order` and `plan_prunes`
+sorts by name. `a_release_plan_names_the_tag_the_target_move_the_prunes_and_the_dependents`
+asserts the exact order.
 
 **Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
 <X>` needs the *true common ancestor* of the two trees being compared —
@@ -611,10 +710,11 @@ criss-cross histories, exactly as a real merge does. Don't "helpfully" add an
 explicit `--merge-base` there. The gotcha applies to the preflight callers
 (`merge_tree_write_tree_name_only`) that do pass one.
 
-**One composition, two callers — don't add a third.** `compose_environment`
-(`src/utils/prelude.rs`) is the *only* place a conflict verdict is reached.
-Since P4 that is `plan_rebuild` (`src/operations/rebuild.rs`) alone: a real
-rebuild reaches it by way of a `Confirm` plan, and `--dry-run` by way of a
+**One composition per *kind* of composition — and release's is a different
+kind, not a third caller.** `compose_environment` (`src/utils/prelude.rs`) is
+the *only* place an **environment build's** conflict verdict is reached. Since
+P4 that is `plan_rebuild` (`src/operations/rebuild.rs`) alone: a real rebuild
+reaches it by way of a `Confirm` plan, and `--dry-run` by way of a
 `Preview` one, both over the same `pin_environment_inputs` result. That is the
 invariant, and it was
 expensive to establish: `--dry-run` used to short-circuit into
@@ -625,8 +725,26 @@ merge-base). Two doors into the merge engine, so two verdicts were possible,
 and the live symptom was `rebuild <env> --dry-run --replay-resolutions`
 reporting branches as **held** that the real build **composed** from the
 recording — exit 2, "would hold", for a build that was going to succeed.
+
+P5 removed release's version of that bug, which is worth naming because it
+looked nothing like the rebuild one: `rebuild_dependent_environments` ran
+`preflight_compatibility_merge_tree` at apply time and *skipped* a dependent
+environment whose composition would conflict. Release's own merge — the chain of
+promoted branches into the target — was never a preflight, and could not be: it
+is a different operation from an environment build. It merges N branches into a
+branch that already has content, where `compose_environment` builds a fresh
+environment from `base + branches` and resolves conflicts by *holding* a branch
+rather than aborting. So `compose_release` (`src/operations/release.rs`) is a
+second composition, deliberately, and the rule to carry is not "one composition"
+but "**one composition per kind, and no kind reached by two doors**". A release's
+merge chain is all-or-nothing (a conflict returns `Err` and nothing is written);
+an environment build ejects and continues. Collapsing them would take the
+eject-and-continue policy away from builds or the all-or-nothing property away
+from releases.
+
 `preflight_compatibility_report` is **not yet** a display-only function, and
-the remaining mutation that depends on it is `hitch resolve`, not `rebuild`.
+the remaining mutation that depends on it is `hitch resolve`, not `rebuild`
+and not `release`.
 `commands/resolve.rs:131` and `:180` use it to decide Mode A (rebase the branch
 onto the base) versus Mode B (peer conflict), and to refuse outright when it
 reports no conflict at all — so a preflight/composition disagreement would
@@ -634,11 +752,10 @@ there pick the wrong resolution mode, not merely print a stale preview. The
 read-only callers are `conflicts.rs:44` and, via the offline
 `preflight_compatibility_report_local`, `status.rs:238` and `tree.rs:138`; those
 are legitimate, since a display preflight is allowed to approximate. Routing
-`resolve`'s mode selection through the shared primitive is **still not done**.
-P1 scoped itself to `rebuild`'s dry-run, and P4 built the planner `resolve`
-would need to choose a mode from — but deliberately did not re-plumb `resolve`
-itself, so its two decision points are untouched. Do not add further dependants
-in the meantime.
+`resolve`'s mode selection through the shared primitive is **still not done**,
+and it is now the *only* one left: P1 scoped itself to `rebuild`'s dry-run, P4
+built the planner `resolve` would need to choose a mode from, and P5 closed
+release's. Do not add further dependants in the meantime.
 Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_replayed_resolutions`
 (resolve_tests) and `test_dry_run_and_real_build_agree_on_held_branches`
 (rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose

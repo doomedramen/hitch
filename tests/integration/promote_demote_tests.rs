@@ -347,8 +347,21 @@ mod tests {
         Ok(())
     }
 
+    /// A promote whose *rebuild* fails is not a failed promote.
+    ///
+    /// The declaration edit is the operation's durable effect and it has
+    /// landed; what did not happen is the build it forces. Reverting the
+    /// declaration would throw away what the user asked for on the grounds of a
+    /// downstream failure — and it would restore a whole-config snapshot, so it
+    /// would also revert anything else that wrote `hitch.json` in between
+    /// (including a rebuild that failed *after* moving the environment branch,
+    /// which is the case where reverting the declaration would leave the branch
+    /// holding code the declaration says should not be there).
+    ///
+    /// So the contract is: exit 0, the declaration persists, the environment is
+    /// left unbuilt, and the output names the command that finishes the job.
     #[test]
-    fn test_promote_rollback_functionality() -> anyhow::Result<()> {
+    fn test_promote_whose_rebuild_fails_keeps_the_declaration() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -360,113 +373,81 @@ mod tests {
                 .assert_success();
 
             // Create a feature branch with commits
-            env.git.run(&["checkout", "-b", "feature-rollback-functional"])?;
-            env.fs.write_file("feature.txt", "new feature for functional rollback test")?;
-            env.git.run(&["add", "."])?;
+            env.git
+                .run(&["checkout", "-b", "feature-declared-not-built"])?;
+            env.fs
+                .write_file("feature.txt", "the branch survives a failed build")?;
+            env.git.run(&["add", "-f", "feature.txt"])?;
             env.git.run(&["commit", "-m", "Add feature"])?;
             env.git.run(&["checkout", "main"])?;
 
-            // Capture initial environment state
-            let initial_config = env.read_hitch_config()?;
-            let initial_dev_env = initial_config.environments.get("dev").unwrap();
-            let _initial_branch_count = initial_dev_env.branches.len();
-            let _initial_rebuilt_at = initial_dev_env.rebuilt_at;
-            let _initial_base = initial_dev_env.base.clone();
-
-            // CRITICAL: Modify the environment to use a non-existent base branch
-            // This will cause create_temp_branch_for_rebuild() to fail at line 671
-
-            // Switch to hitch-metadata branch to modify config
+            // Point dev at a base branch that does not exist anywhere, so the
+            // rebuild cannot compose.
             env.git.run(&["checkout", "hitch-metadata"])?;
-
             let mut config = env.read_hitch_config()?;
-            let dev_env = config.environments.get_mut("dev").unwrap();
-            dev_env.base = "definitely-nonexistent-base-branch-99999".to_string();
+            config.environments.get_mut("dev").unwrap().base =
+                "definitely-nonexistent-base-branch-99999".to_string();
             let config_json = serde_json::to_string_pretty(&config)?;
             env.fs.write_file("hitch.json", &config_json)?;
-
-            // Commit the configuration change on hitch-metadata branch
-            env.git.run(&["add", "hitch.json"])?;
-            env.git.run(&["commit", "-m", "Change dev environment to use non-existent base branch"])?;
-
-            // Switch back to main branch
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&[
+                "commit",
+                "-m",
+                "Change dev environment to use non-existent base branch",
+            ])?;
             env.git.run(&["checkout", "main"])?;
 
-            // Attempt to promote - this should fail during rebuild and trigger rollback
             let result = env
                 .hitch
                 .run()
-                .args(&["promote", "feature-rollback-functional", "dev"])
-                .execute();
-
-            // Verify that the command failed (this is expected)
-            let failed_with_rebuild_error = match &result {
-                Ok(output) => {
-                    // If it succeeded, check if there were any rollback indicators
-                    let stderr_content = output.stderr();
-                    stderr_content.contains("automatic rollback") ||
-                    stderr_content.contains("Base branch") && stderr_content.contains("does not exist")
-                },
-                Err(e) => {
-                    // Check if error indicates the expected base branch issue
-                    let error_output = e.to_string();
-                    error_output.contains("Base branch") && error_output.contains("does not exist") ||
-                    error_output.contains("automatic rollback") ||
-                    error_output.contains("Rolling back")
-                }
-            };
-
-            if failed_with_rebuild_error {
-                println!("✅ Command failed as expected with base branch error!");
-            } else {
-                match &result {
-                    Ok(output) => {
-                        panic!("Expected command to fail with base branch error, but it succeeded. Stderr: {}", output.stderr());
-                    },
-                    Err(e) => {
-                        panic!("Expected command to fail with base branch error, but got different error: {}", e);
-                    }
-                }
-            }
-
-            // Test core functionality: The rollback system is working - this is the main goal
-            // Let's test that we can promote the same branch after fixing the base branch issue
-
-            // Fix the base branch back to valid one
-            env.git.run(&["checkout", "hitch-metadata"])?;
-
-            let mut config = env.read_hitch_config()?;
-            let dev_env = config.environments.get_mut("dev").unwrap();
-            dev_env.base = "main".to_string(); // Restore valid base branch
-            let config_json = serde_json::to_string_pretty(&config)?;
-            env.fs.write_file("hitch.json", &config_json)?;
-
-            // Commit the configuration change on hitch-metadata branch
-            env.git.run(&["add", "hitch.json"])?;
-            env.git.run(&["commit", "-m", "Fix dev environment to use valid base branch"])?;
-
-            // Switch back to main branch
-            env.git.run(&["checkout", "main"])?;
-
-            // Unlock the environment in case it's still locked
-            let _unlock_result = env.hitch.run().args(&["unlock", "dev"]).execute();
-            // Don't panic if unlock fails - it might already be unlocked
-
-            // Now this should work (rollback system preserved the ability to retry)
-            let retry_result = env
-                .hitch
-                .run()
-                .args(&["promote", "feature-rollback-functional", "dev"])
+                .args(&["promote", "feature-declared-not-built", "dev"])
                 .execute()?;
 
-            retry_result
+            // Not a failure: the promote's own effect landed.
+            result
                 .assert_success()
-                .assert_stdout_contains("Successfully promoted 'feature-rollback-functional' to environment 'dev'");
+                .assert_stdout_contains(
+                    "Successfully promoted 'feature-declared-not-built' to environment 'dev'",
+                )
+                // The unbuilt half is reported as owed work, with the command
+                // that settles it.
+                .assert_stdout_contains("hitch rebuild dev");
 
-            // Verify branch was promoted
-            let final_config = env.read_hitch_config()?;
-            let final_dev_env = final_config.environments.get("dev").unwrap();
-            assert!(final_dev_env.branches.contains(&"feature-rollback-functional".to_string()));
+            // The declaration kept the branch. This is the assertion the old
+            // test inverted, and it is the whole point.
+            let after = env.read_hitch_config()?;
+            assert!(
+                after
+                    .environments
+                    .get("dev")
+                    .unwrap()
+                    .branches
+                    .contains(&"feature-declared-not-built".to_string()),
+                "the declaration must keep a promotion whose rebuild failed"
+            );
+
+            // And the environment branch was never built, so there is nothing
+            // claiming otherwise: `hitch status` will call this out.
+            env.assert.git_branch_not_exists(&env.git, "dev")?;
+
+            // The recovery is exactly what the message says it is.
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let mut config = env.read_hitch_config()?;
+            config.environments.get_mut("dev").unwrap().base = "main".to_string();
+            let config_json = serde_json::to_string_pretty(&config)?;
+            env.fs.write_file("hitch.json", &config_json)?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git
+                .run(&["commit", "-m", "Fix dev environment base branch"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.assert.git_branch_exists(&env.git, "dev")?;
 
             Ok::<(), anyhow::Error>(())
         });
@@ -596,8 +577,11 @@ mod tests {
         Ok(())
     }
 
+    /// The demote counterpart of
+    /// `test_promote_whose_rebuild_fails_keeps_the_declaration`. A failed
+    /// dependent rebuild is owed work, not a failed declaration edit.
     #[test]
-    fn test_demote_rollback_functionality() -> anyhow::Result<()> {
+    fn test_demote_whose_rebuild_fails_keeps_the_declaration() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -609,10 +593,13 @@ mod tests {
                 .assert_success();
 
             // Create and promote a feature branch first
-            env.git.run(&["checkout", "-b", "feature-to-demote-functional"])?;
-            env.fs.write_file("feature.txt", "feature for demote functional test")?;
+            env.git
+                .run(&["checkout", "-b", "feature-to-demote-functional"])?;
+            env.fs
+                .write_file("feature.txt", "feature for demote functional test")?;
             env.git.run(&["add", "."])?;
-            env.git.run(&["commit", "-m", "Add feature for demote functional test"])?;
+            env.git
+                .run(&["commit", "-m", "Add feature for demote functional test"])?;
             env.git.run(&["checkout", "main"])?;
 
             // Promote the feature branch successfully first
@@ -625,97 +612,84 @@ mod tests {
             // Verify branch was promoted
             let promoted_config = env.read_hitch_config()?;
             let promoted_dev_env = promoted_config.environments.get("dev").unwrap();
-            assert!(promoted_dev_env.branches.contains(&"feature-to-demote-functional".to_string()));
+            assert!(promoted_dev_env
+                .branches
+                .contains(&"feature-to-demote-functional".to_string()));
 
-            // CRITICAL: Modify the environment to use a non-existent base branch
-            // This will cause create_temp_branch_for_rebuild() to fail during demote
+            // Break the base branch so the rebuild cannot compose. Unlike the
+            // promote counterpart, `dev` here *already exists* and already
+            // contains this branch — which is exactly why reverting the
+            // declaration would be the wrong repair. The state the rollback used
+            // to produce is "declaration says the branch is promoted, and the
+            // environment branch genuinely contains it", i.e. a state with
+            // nothing wrong in it that the user would have no way to distinguish
+            // from success.
             env.git.run(&["checkout", "hitch-metadata"])?;
-
             let mut config = env.read_hitch_config()?;
-            let dev_env = config.environments.get_mut("dev").unwrap();
-            dev_env.base = "definitely-nonexistent-base-branch-88888".to_string();
+            config.environments.get_mut("dev").unwrap().base =
+                "definitely-nonexistent-base-branch-88888".to_string();
             let config_json = serde_json::to_string_pretty(&config)?;
             env.fs.write_file("hitch.json", &config_json)?;
-
-            // Commit the configuration change on hitch-metadata branch
-            env.git.run(&["add", "hitch.json"])?;
-            env.git.run(&["commit", "-m", "Change dev environment to use non-existent base branch for demote"])?;
-
-            // Switch back to main branch
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&[
+                "commit",
+                "-m",
+                "Change dev environment to use non-existent base branch for demote",
+            ])?;
             env.git.run(&["checkout", "main"])?;
 
-            // Attempt to demote - this should fail during rebuild and trigger rollback
             let result = env
-                .hitch
-                .run()
-                .args(&["demote", "feature-to-demote-functional", "dev"])
-                .execute();
-
-            // Verify that the command failed (this is expected)
-            let failed_with_rebuild_error = match &result {
-                Ok(output) => {
-                    let stderr_content = output.stderr();
-                    stderr_content.contains("automatic rollback") ||
-                    stderr_content.contains("Base branch") && stderr_content.contains("does not exist")
-                },
-                Err(e) => {
-                    let error_output = e.to_string();
-                    error_output.contains("Base branch") && error_output.contains("does not exist") ||
-                    error_output.contains("automatic rollback") ||
-                    error_output.contains("Rolling back")
-                }
-            };
-
-            if failed_with_rebuild_error {
-                println!("✅ Demote command failed as expected with base branch error!");
-            } else {
-                match &result {
-                    Ok(output) => {
-                        panic!("Expected demote command to fail with base branch error, but it succeeded. Stderr: {}", output.stderr());
-                    },
-                    Err(e) => {
-                        panic!("Expected demote command to fail with base branch error, but got different error: {}", e);
-                    }
-                }
-            }
-
-            // Test core functionality: The rollback system is working - this is the main goal
-            // Let's test that we can demote the same branch after fixing the base branch issue
-
-            // Fix the base branch back to valid one
-            env.git.run(&["checkout", "hitch-metadata"])?;
-
-            let mut config = env.read_hitch_config()?;
-            let dev_env = config.environments.get_mut("dev").unwrap();
-            dev_env.base = "main".to_string(); // Restore valid base branch
-            let config_json = serde_json::to_string_pretty(&config)?;
-            env.fs.write_file("hitch.json", &config_json)?;
-
-            // Commit the configuration change on hitch-metadata branch
-            env.git.run(&["add", "hitch.json"])?;
-            env.git.run(&["commit", "-m", "Fix dev environment to use valid base branch for demote"])?;
-
-            // Switch back to main branch
-            env.git.run(&["checkout", "main"])?;
-
-            // Unlock the environment in case it's still locked
-            let _unlock_result = env.hitch.run().args(&["unlock", "dev"]).execute();
-
-            // Now this should work (rollback system preserved the ability to retry)
-            let retry_result = env
                 .hitch
                 .run()
                 .args(&["demote", "feature-to-demote-functional", "dev"])
                 .execute()?;
 
-            retry_result
+            result
                 .assert_success()
-                .assert_stdout_contains("Successfully demoted 'feature-to-demote-functional' from environment 'dev'");
+                .assert_stdout_contains(
+                    "Successfully demoted 'feature-to-demote-functional' from environment 'dev'",
+                )
+                .assert_stdout_contains("hitch rebuild dev");
 
-            // Verify branch was demoted
+            // The declaration lost the branch, and the environment branch is
+            // left describing the *old* declaration. `hitch status` compares the
+            // two and reports exactly that, which is what makes the state
+            // recoverable instead of merely surprising.
+            let after = env.read_hitch_config()?;
+            assert!(
+                !after
+                    .environments
+                    .get("dev")
+                    .unwrap()
+                    .branches
+                    .contains(&"feature-to-demote-functional".to_string()),
+                "the demotion itself is the durable effect and must persist"
+            );
+
+            // Fix the base and run the command the message named.
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let mut config = env.read_hitch_config()?;
+            config.environments.get_mut("dev").unwrap().base = "main".to_string();
+            let config_json = serde_json::to_string_pretty(&config)?;
+            env.fs.write_file("hitch.json", &config_json)?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git
+                .run(&["commit", "-m", "Fix dev environment base branch for demote"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
             let final_config = env.read_hitch_config()?;
-            let final_dev_env = final_config.environments.get("dev").unwrap();
-            assert!(!final_dev_env.branches.contains(&"feature-to-demote-functional".to_string()));
+            assert!(!final_config
+                .environments
+                .get("dev")
+                .unwrap()
+                .branches
+                .contains(&"feature-to-demote-functional".to_string()));
 
             Ok::<(), anyhow::Error>(())
         });

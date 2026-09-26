@@ -19,12 +19,20 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::commands::global_context::GlobalContext;
+    use hitch::operations::declaration::{
+        apply_declaration_plan, plan_demote, plan_promote, DeclarationPlanDetail,
+        DeclarationPlanOptions,
+    };
     use hitch::operations::model::{
-        AppliedEffect, OperationOutcome, OperationPlan, PlanApplyError, PlannedEffect,
+        AppliedEffect, DependentRebuildOutcome, OperationOutcome, OperationPlan, PlanApplyError,
+        PlanWarningKind, PlannedEffect,
     };
     use hitch::operations::rebuild::{
         apply_rebuild_plan, discard_plan, plan_rebuild, validate_plan, PlanPurpose,
         RebuildPlanDetail, RebuildPlanOptions,
+    };
+    use hitch::operations::release::{
+        apply_release_plan, plan_release, ReleasePlanDetail, ReleasePlanOptions,
     };
     use hitch::utils::git_operations::RefEdit;
     use hitch::utils::logging::Logger;
@@ -262,8 +270,12 @@ mod tests {
             .is_some_and(|e| matches!(e, PlanApplyError::StalePlan { .. }))
     }
 
-    fn refnames(effects: &[PlannedEffect]) -> Vec<&str> {
-        effects.iter().map(|e| e.refname()).collect()
+    /// `Cow` because one variant's ref is derived from one of its own fields
+    /// (`refs/tags/<name>`), so the model does not store it twice. Collecting
+    /// into `String` here rather than `&str` is the cost of that, and the
+    /// assertions below only ever compare or print.
+    fn refnames(effects: &[PlannedEffect]) -> Vec<String> {
+        effects.iter().map(|e| e.refname().into_owned()).collect()
     }
 
     // ── the plan describes what it will do ───────────────────────────
@@ -303,9 +315,15 @@ mod tests {
 
             let plan = plan(env, PlanPurpose::Confirm, false)?;
             let names = refnames(&plan.effects);
-            assert!(names.contains(&"refs/heads/dev"), "{names:?}");
-            assert!(names.contains(&"refs/hitch/state/dev"), "{names:?}");
-            assert!(names.contains(&"refs/heads/hitch-metadata"), "{names:?}");
+            assert!(names.iter().any(|r| r == "refs/heads/dev"), "{names:?}");
+            assert!(
+                names.iter().any(|r| r == "refs/hitch/state/dev"),
+                "{names:?}"
+            );
+            assert!(
+                names.iter().any(|r| r == "refs/heads/hitch-metadata"),
+                "{names:?}"
+            );
             // The anchor is a real ref hitch writes; hiding it would be hiding
             // a write from the reader.
             assert!(
@@ -932,5 +950,741 @@ mod tests {
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(())
+    }
+    // ── promote: the declaration and the build it forces ─────────────
+
+    type DeclarationPlan = OperationPlan<DeclarationPlanDetail>;
+    type ReleasePlan = OperationPlan<ReleasePlanDetail>;
+
+    fn promote_plan(
+        env: &TestEnvironment,
+        argument: &str,
+        environment: &str,
+        no_rebuild: bool,
+        push: bool,
+    ) -> anyhow::Result<DeclarationPlan> {
+        plan_promote(
+            &context_for(env, push)?,
+            argument,
+            environment,
+            DeclarationPlanOptions { no_rebuild },
+            &mut |_| {},
+        )
+    }
+
+    fn demote_plan(
+        env: &TestEnvironment,
+        argument: &str,
+        environment: &str,
+        no_rebuild: bool,
+        push: bool,
+    ) -> anyhow::Result<DeclarationPlan> {
+        plan_demote(
+            &context_for(env, push)?,
+            argument,
+            environment,
+            DeclarationPlanOptions { no_rebuild },
+            &mut |_| {},
+        )
+    }
+
+    fn apply_declaration(
+        env: &TestEnvironment,
+        plan: &DeclarationPlan,
+        push: bool,
+    ) -> anyhow::Result<Receipt> {
+        apply_declaration_plan(&context_for(env, push)?, plan, &mut |_| {})
+    }
+
+    fn release_plan(
+        env: &TestEnvironment,
+        environment: &str,
+        target: &str,
+        options: ReleasePlanOptions,
+        push: bool,
+    ) -> anyhow::Result<ReleasePlan> {
+        plan_release(
+            &context_for(env, push)?,
+            environment,
+            target,
+            options,
+            PlanPurpose::Confirm,
+            &mut |_| {},
+        )
+    }
+
+    fn apply_release(
+        env: &TestEnvironment,
+        plan: &ReleasePlan,
+        push: bool,
+    ) -> anyhow::Result<Receipt> {
+        apply_release_plan(&context_for(env, push)?, plan, &mut |_| {})
+    }
+
+    fn declared(env: &TestEnvironment, environment: &str) -> anyhow::Result<Vec<String>> {
+        let config = env.read_hitch_config()?;
+        Ok(config
+            .environments
+            .get(environment)
+            .map(|e| e.branches.clone())
+            .unwrap_or_default())
+    }
+
+    /// The `AppliedEffect` for a dependent environment, so a test can assert on
+    /// *how it went* rather than merely that something was recorded.
+    fn dependent_outcome(
+        effects: &[AppliedEffect],
+        environment: &str,
+    ) -> Option<DependentRebuildOutcome> {
+        effects.iter().find_map(|e| match e {
+            AppliedEffect::DependentEnvironmentRebuild {
+                environment: e2,
+                outcome,
+                ..
+            } if e2 == environment => Some(outcome.clone()),
+            _ => None,
+        })
+    }
+
+    /// Anchors are the one thing every planner writes that nothing prunes —
+    /// `cleanup`'s prunable set is `["backup", "prev"]` — so "the anchor is
+    /// gone" is asserted after every release path, not just the happy one.
+    fn assert_no_release_anchors(env: &TestEnvironment) -> anyhow::Result<()> {
+        let refs = all_refs(env)?;
+        let leaked: Vec<&String> = refs
+            .iter()
+            .filter(|r| r.contains("refs/hitch/release/"))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "release must not leave a live anchor behind, and nothing prunes one for it: {leaked:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_promote_plan_proposes_the_declaration_and_the_build_it_forces() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+
+            let plan = promote_plan(env, "feat-a", "dev", false, false)?;
+
+            // The proposal is the declaration *and* the build, because the
+            // second is a consequence of the first that a reader has to be told
+            // about — a promote that silently rebuilt nothing would look
+            // identical to one that did the right thing.
+            assert!(
+                plan.current.branches.is_empty(),
+                "current declaration should be empty: {:?}",
+                plan.current.branches
+            );
+            let proposed: Vec<&str> = plan
+                .proposed
+                .branches
+                .iter()
+                .map(|p| p.branch.as_str())
+                .collect();
+            assert_eq!(proposed, vec!["feat-a"]);
+
+            let names = refnames(&plan.effects);
+            assert!(
+                names.iter().any(|r| r == "refs/heads/hitch-metadata"),
+                "the declaration edit is an effect: {names:?}"
+            );
+            assert!(
+                names.iter().any(|r| r == "refs/heads/dev"),
+                "the build is an effect, not a side effect: {names:?}"
+            );
+            match planned_for(&plan.effects, "refs/heads/dev") {
+                PlannedEffect::DependentEnvironmentRebuild {
+                    environment,
+                    because,
+                    ..
+                } => {
+                    assert_eq!(environment, "dev");
+                    assert!(
+                        !because.is_empty(),
+                        "an effect that cannot say why is a list of side effects"
+                    );
+                }
+                other => panic!("expected a DependentEnvironmentRebuild, got {other:?}"),
+            }
+
+            let receipt = apply_declaration(env, &plan, false)?;
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            assert_eq!(
+                dependent_outcome(&receipt.effects, "dev"),
+                Some(DependentRebuildOutcome::Rebuilt)
+            );
+            assert_eq!(declared(env, "dev")?, vec!["feat-a".to_string()]);
+            assert!(
+                rev(env, "refs/heads/dev")?.is_some(),
+                "the environment branch exists"
+            );
+            assert!(
+                rev(env, "dev:feat-a.txt")?.is_some(),
+                "and it was built from the declaration that was just written"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_promote_receipt_describes_the_declaration_by_reading_it_back() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+
+            let plan = promote_plan(env, "feat-a", "dev", false, false)?;
+            let receipt = apply_declaration(env, &plan, false)?;
+
+            // The description is computed from a fresh read of `hitch-metadata`,
+            // not from `plan.detail.added`. A description built from the plan
+            // would report success for an edit a later `hitch set` had already
+            // undone — the receipt's whole job is saying what is there.
+            let description = match applied_for(&receipt.effects, "refs/heads/hitch-metadata") {
+                AppliedEffect::MetadataChange { description, .. } => description.clone(),
+                other => panic!("expected a MetadataChange, got {other:?}"),
+            };
+            assert_eq!(
+                description, "promote feat-a into 'dev' (now: feat-a)",
+                "the description is built from the declaration as it now stands"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_promote_plan_refuses_and_names_what_changed() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            make_feature(env, "feat-b")?;
+            declare_branches(env, "dev", &[])?;
+
+            let stale = promote_plan(env, "feat-a", "dev", false, false)?;
+
+            // A second, unrelated declaration change is exactly the drift a
+            // fingerprint exists to catch. It moves `hitch-metadata`, which the
+            // first plan read.
+            let other = promote_plan(env, "feat-b", "dev", false, false)?;
+            apply_declaration(env, &other, false)?;
+
+            let error = apply_declaration(env, &stale, false)
+                .expect_err("a plan that predates another declaration edit must not apply");
+            assert!(as_stale(&error), "expected a StalePlan, got: {error:#}");
+            let detail = error
+                .downcast_ref::<PlanApplyError>()
+                .expect("typed error survives the anyhow boundary");
+            let PlanApplyError::StalePlan { changed, .. } = detail else {
+                panic!("expected StalePlan, got {detail:?}");
+            };
+            assert!(
+                changed.contains("hitch-metadata"),
+                "the refusal must name the ref that moved, not just say it is \
+                 stale: {changed:?}"
+            );
+
+            // And the refusal changed nothing: feat-a is not in the declaration.
+            let branches = declared(env, "dev")?;
+            assert_eq!(
+                branches,
+                vec!["feat-b".to_string()],
+                "a refused plan must not have applied its own edit"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_same_declaration_gives_the_same_plan_id_and_a_moved_tip_gives_a_different_one(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+
+            let first = promote_plan(env, "feat-a", "dev", false, false)?;
+            let second = promote_plan(env, "feat-a", "dev", false, false)?;
+            assert_eq!(
+                first.id, second.id,
+                "the id is a digest of what the plan depends on, so identical inputs \
+                 must give an identical id — otherwise it identifies nothing"
+            );
+
+            add_commit(env, "feat-a", "feat-a.txt", "v2")?;
+            let third = promote_plan(env, "feat-a", "dev", false, false)?;
+            assert_ne!(
+                first.id, third.id,
+                "a moved promoted-branch tip is a different plan, and the id has to say so"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_no_rebuild_promote_leaves_the_environment_absent_and_says_which_command_fixes_it(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+
+            let plan = promote_plan(env, "feat-a", "dev", true, false)?;
+            // The plan says the consequence out loud, before the apply, so a
+            // preview is not a lie.
+            assert!(
+                plan.warnings
+                    .iter()
+                    .any(|w| w.message.contains("hitch rebuild dev")),
+                "the plan must name the command that settles the skipped build: {:?}",
+                plan.warnings
+            );
+            assert!(
+                !refnames(&plan.effects)
+                    .iter()
+                    .any(|r| r == "refs/heads/dev"),
+                "a plan that will not rebuild must not predict a build: {:?}",
+                refnames(&plan.effects)
+            );
+
+            let receipt = apply_declaration(env, &plan, false)?;
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            assert_eq!(declared(env, "dev")?, vec!["feat-a".to_string()]);
+            assert!(
+                rev(env, "dev")?.is_none(),
+                "--no-rebuild means the environment branch is not created"
+            );
+            assert!(
+                dependent_outcome(&receipt.effects, "dev").is_none(),
+                "a build that was not attempted is not reported as one"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_gated_promote_asks_and_writes_no_declaration_and_no_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &[])?;
+            // An approver is mandatory, not decoration: hitch refuses a gated
+            // environment nobody could ever approve.
+            env.hitch
+                .run()
+                .args(&[
+                    "set",
+                    "dev",
+                    "--requires-approval",
+                    "true",
+                    "--add-approver",
+                    "alice@example.com",
+                ])
+                .execute()?
+                .assert_success();
+
+            let plan = promote_plan(env, "feat-a", "dev", false, false)?;
+            let blocking = plan
+                .blocked_by()
+                .expect("an approval-gated environment must block its own plan");
+            assert_eq!(blocking.kind, PlanWarningKind::ApprovalRequired);
+            assert_eq!(
+                plan.current.branches, plan.proposed.branches,
+                "a plan that will not apply must not claim a different end state"
+            );
+            assert_eq!(plan.current.branch_sha, plan.proposed.branch_sha);
+
+            let receipt = apply_declaration(env, &plan, false)?;
+            assert_eq!(
+                receipt.outcome,
+                OperationOutcome::ApprovalRequested,
+                "an approval gate asks; it does not refuse and it does not apply"
+            );
+            assert!(
+                declared(env, "dev")?.is_empty(),
+                "asking for approval must not promote the branch"
+            );
+            assert!(rev(env, "dev")?.is_none(), "and must not build it either");
+            let config = env.read_hitch_config()?;
+            assert_eq!(
+                config
+                    .approval_requests
+                    .iter()
+                    .filter(|r| r.branch == "feat-a")
+                    .count(),
+                1,
+                "the apply's job here is to create the request"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_conflicting_sibling_refuses_the_promote_and_writes_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            conflicting_pair(env)?;
+            declare_branches(env, "dev", &["feat-a"])?;
+
+            let before = all_refs(env)?;
+            let plan = promote_plan(env, "feat-b", "dev", false, false)?;
+            let blocking = plan
+                .blocked_by()
+                .expect("promoting a branch that conflicts with a promoted sibling must refuse");
+            assert_eq!(blocking.kind, PlanWarningKind::PolicyRefusal);
+            assert_eq!(plan.current.branches, plan.proposed.branches);
+
+            let error =
+                apply_declaration(env, &plan, false).expect_err("a refused plan must not apply");
+            let detail = error
+                .downcast_ref::<PlanApplyError>()
+                .expect("typed error survives the anyhow boundary");
+            assert!(
+                matches!(detail, PlanApplyError::PolicyBlocked { .. }),
+                "expected PolicyBlocked, got {detail:?}"
+            );
+            assert!(
+                detail.to_string().contains("hitch promote"),
+                "a refusal must end with the command to run next: {detail}"
+            );
+
+            assert_eq!(
+                all_refs(env)?,
+                before,
+                "a refusal must move no ref — not even a build record or an anchor"
+            );
+            assert_eq!(
+                declared(env, "dev")?,
+                vec!["feat-a".to_string()],
+                "and must not have edited the declaration"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    // ── demote ─────────────────────────────────────────────────────
+
+    #[test]
+    fn a_demote_shrinks_the_declaration_and_rebuilds_from_the_shorter_list() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            make_feature(env, "feat-b")?;
+            declare_branches(env, "dev", &["feat-a", "feat-b"])?;
+
+            let plan = demote_plan(env, "feat-a", "dev", false, false)?;
+            let current: Vec<&str> = plan
+                .current
+                .branches
+                .iter()
+                .map(|p| p.branch.as_str())
+                .collect();
+            let proposed: Vec<&str> = plan
+                .proposed
+                .branches
+                .iter()
+                .map(|p| p.branch.as_str())
+                .collect();
+            assert_eq!(current, vec!["feat-a", "feat-b"]);
+            assert_eq!(proposed, vec!["feat-b"], "the survivor keeps its order");
+
+            let receipt = apply_declaration(env, &plan, false)?;
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            assert_eq!(declared(env, "dev")?, vec!["feat-b".to_string()]);
+
+            // The build has to match the *new* declaration, not the old one.
+            // A rebuild that composed from the pre-demote list would leave
+            // feat-a's content in the environment branch forever.
+            assert!(
+                rev(env, "dev:feat-a.txt")?.is_none(),
+                "the demoted branch's content must be gone from the build"
+            );
+            assert!(
+                rev(env, "dev:feat-b.txt")?.is_some(),
+                "and the survivor's must still be there"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_demote_plan_refuses_after_a_second_demote() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            make_feature(env, "feat-b")?;
+            make_feature(env, "feat-c")?;
+            declare_branches(env, "dev", &["feat-a", "feat-b", "feat-c"])?;
+
+            let stale = demote_plan(env, "feat-c", "dev", false, false)?;
+            let other = demote_plan(env, "feat-b", "dev", false, false)?;
+            apply_declaration(env, &other, false)?;
+
+            let error = apply_declaration(env, &stale, false)
+                .expect_err("a plan that predates another declaration edit must not apply");
+            assert!(as_stale(&error), "expected a StalePlan, got: {error:#}");
+            assert_eq!(
+                declared(env, "dev")?,
+                vec!["feat-a".to_string(), "feat-c".to_string()],
+                "the stale demote must not have removed feat-c — the only edit \
+                 that landed is the one its plan actually made"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    // ── release ────────────────────────────────────────────────────
+
+    #[test]
+    fn a_release_plan_names_the_tag_the_target_move_the_prunes_and_the_dependents(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            make_feature(env, "feat-b")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+            declare_branches(env, "qa", &["feat-a", "feat-b"])?;
+
+            let plan = release_plan(env, "dev", "main", ReleasePlanOptions::default(), false)?;
+
+            // The tag is a name, not a value: the executor may land a
+            // disambiguated variant of it, so the plan predicts and the
+            // receipt reports. Both halves are tested.
+            let tag_ref = format!("refs/tags/{}", plan.detail.tag_name);
+            assert!(
+                refnames(&plan.effects).contains(&tag_ref),
+                "the tag is a write, so the plan says so: {:?}",
+                refnames(&plan.effects)
+            );
+            let names = refnames(&plan.effects);
+            assert!(names.iter().any(|r| r == "refs/heads/main"), "{names:?}");
+            assert!(
+                names.iter().any(|r| r == "refs/heads/qa"),
+                "qa is rebuilt because its base is the released target: {names:?}"
+            );
+            assert!(
+                !names.iter().any(|r| r.starts_with("refs/remotes/")),
+                "with pushing off the plan predicts no remote effect: {names:?}"
+            );
+
+            // The prune predicate is evaluated against the commit about to be
+            // published, so `dev` (whose base *is* the target) is pruned even
+            // though the live `main` does not contain feat-a yet.
+            let pruned: Vec<(&str, Vec<&str>)> = plan
+                .detail
+                .prunes
+                .iter()
+                .map(|p| {
+                    (
+                        p.environment.as_str(),
+                        p.branches.iter().map(|b| b.as_str()).collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                pruned,
+                vec![("dev", vec!["feat-a"]), ("qa", vec!["feat-a"])],
+                "prunes are in environment name order and name the branch each time"
+            );
+            let dependent_names: Vec<&str> = plan
+                .detail
+                .dependents
+                .iter()
+                .map(|d| d.environment.as_str())
+                .collect();
+            assert_eq!(dependent_names, vec!["dev", "qa"]);
+
+            let receipt = apply_release(env, &plan, false)?;
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            match applied_for(&receipt.effects, &tag_ref) {
+                // The receipt names the tag that exists, which here is the one
+                // predicted. The disambiguation arm is covered by the unit tests
+                // on `create_release_tag`.
+                AppliedEffect::TagCreation { name, target_sha } => {
+                    assert_eq!(name, &plan.detail.tag_name);
+                    assert_eq!(target_sha, &plan.detail.result_sha);
+                }
+                other => panic!("expected a TagCreation, got {other:?}"),
+            }
+            assert_eq!(declared(env, "qa")?, vec!["feat-b".to_string()]);
+            assert_no_release_anchors(env)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_conflicting_release_writes_nothing_at_all() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            conflicting_pair(env)?;
+            declare_branches(env, "dev", &["feat-a", "feat-b"])?;
+            let target_before = rev(env, "refs/heads/main")?;
+            let metadata_before = rev(env, "refs/heads/hitch-metadata")?;
+            let before = all_refs(env)?;
+
+            let error = release_plan(env, "dev", "main", ReleasePlanOptions::default(), false)
+                .expect_err("a conflicting release must not produce a plan");
+            assert!(
+                error.to_string().contains("Merge conflict"),
+                "expected the conflict report, got: {error:#}"
+            );
+
+            // Each of these asserted separately. "Nothing happened" is three
+            // different claims — no ref moved, no tag exists, no metadata was
+            // written — and the reason a release is all-or-nothing is that the
+            // composition runs before anything is written.
+            assert_eq!(rev(env, "refs/heads/main")?, target_before);
+            assert_eq!(rev(env, "refs/heads/hitch-metadata")?, metadata_before);
+            assert_eq!(
+                all_refs(env)?,
+                before,
+                "a refused release must not have created a tag or an anchor"
+            );
+            let tags = git_plain(&env.temp_dir, &["tag", "--list"])?;
+            assert!(
+                tags.trim().is_empty(),
+                "a refused release must not leave a tag: {tags:?}"
+            );
+            assert_no_release_anchors(env)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_release_that_owes_a_dependent_rebuild_still_releases() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            make_feature(env, "feat-b")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+            declare_branches(env, "staging", &["feat-b"])?;
+
+            let plan = release_plan(env, "dev", "main", ReleasePlanOptions::default(), false)?;
+            assert!(
+                plan.detail
+                    .dependents
+                    .iter()
+                    .any(|d| d.environment == "staging"),
+                "staging bases on the released target, so it is a dependent: {:?}",
+                plan.detail.dependents
+            );
+
+            // Break the dependent *after* planning. This is the documented
+            // shape of the fingerprint: it names the release's own inputs and
+            // the target, not every branch a dependent rebuild will read — that
+            // rebuild fingerprints itself. So the plan is still current, and the
+            // apply finds out the hard way.
+            env.git.run(&["branch", "-D", "feat-b"])?;
+
+            let receipt = apply_release(env, &plan, false)?;
+
+            // The release itself is untouched by the dependent's failure: the
+            // merge and the tag landed before the rebuild was even attempted,
+            // and failing the whole operation would send the user to re-run a
+            // release that succeeded — into a target that has already moved.
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            assert_eq!(
+                rev(env, "refs/heads/main")?,
+                Some(plan.detail.result_sha.clone())
+            );
+            let tag_ref = format!("refs/tags/{}", plan.detail.tag_name);
+            assert!(
+                rev(env, &tag_ref)?.is_some(),
+                "the tag the plan named is the tag that exists: {tag_ref}"
+            );
+            match dependent_outcome(&receipt.effects, "staging") {
+                Some(DependentRebuildOutcome::Failed(_)) => {}
+                other => panic!("expected staging's rebuild to be Failed, got {other:?}"),
+            }
+            assert!(
+                receipt.has_owed_effects(),
+                "a failed dependent is owed work, not a silent omission: {:?}",
+                receipt.warnings
+            );
+            assert!(
+                receipt
+                    .warnings
+                    .iter()
+                    .any(|w| w.owes_effect && w.message.contains("hitch rebuild staging")),
+                "and the warning must name the command that settles it: {:?}",
+                receipt.warnings
+            );
+            assert_no_release_anchors(env)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_release_whose_push_is_denied_is_owed_a_plain_fast_forward() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-a")?;
+            declare_branches(env, "dev", &["feat-a"])?;
+            init_bare_origin(env, "origin-denied", true)?;
+
+            let plan = release_plan(env, "dev", "main", ReleasePlanOptions::default(), true)?;
+            assert!(
+                refnames(&plan.effects)
+                    .iter()
+                    .any(|r| r == "refs/remotes/origin/main"),
+                "a plan that will push predicts the remote effect: {:?}",
+                refnames(&plan.effects)
+            );
+
+            let receipt = apply_release(env, &plan, true)?;
+            assert_eq!(receipt.outcome, OperationOutcome::Applied);
+            assert!(receipt.has_owed_effects());
+            let owed: Vec<&str> = receipt
+                .warnings
+                .iter()
+                .filter(|w| w.owes_effect)
+                .map(|w| w.message.as_str())
+                .collect();
+            assert!(
+                owed.iter().any(|m| m.contains("hitch push main")),
+                "the remedy must be named: {owed:?}"
+            );
+            assert!(
+                !owed.iter().any(|m| m.contains("hitch push main -f")),
+                "release's push is a fast-forward, so `-f` is advice the remote \
+                 will reject on a protected branch: {owed:?}"
+            );
+            // The local publish is real, and the receipt must not claim the
+            // remote moved.
+            assert_eq!(
+                rev(env, "refs/heads/main")?,
+                Some(plan.detail.result_sha.clone())
+            );
+            assert!(
+                !refnames_applied(&receipt.effects)
+                    .iter()
+                    .any(|r| r == "refs/remotes/origin/main"),
+                "a denied push must not appear in the receipt's effects"
+            );
+            assert_no_release_anchors(env)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// `Cow`-returning counterpart to [`refnames`], for the applied side.
+    fn refnames_applied(effects: &[AppliedEffect]) -> Vec<String> {
+        effects.iter().map(|e| e.refname().into_owned()).collect()
     }
 }

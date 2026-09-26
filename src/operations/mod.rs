@@ -43,6 +43,23 @@
 //! mutating commands, so the fingerprint is defence in depth against the
 //! things the lock cannot cover (remote refs, and another user's push), not
 //! the primary mechanism.
+//!
+//! ## One planner per operation, and promote/demote are one operation
+//!
+//! [`declaration`] plans both `hitch promote` and `hitch demote`, because on
+//! the declaration they are the same edit with opposite sign: they share the
+//! approval gate, the environment lock, the rollback, the sibling-conflict
+//! simulation, and the rebuild that follows. Two planners would be two copies
+//! of that machinery that have to agree forever, and the day they disagreed
+//! the bug would be a promote that refuses what a demote allows. The
+//! direction is [`declaration::DeclarationChange`], and
+//! `plan_promote`/`plan_demote` are named entry points over one implementation
+//! so a reader looking for "the promote planner" finds exactly one.
+//!
+//! [`rebuild`] and [`release`] each have their own planner for the same
+//! reason: one per *operation*, not one per command name.
 
+pub mod declaration;
 pub mod model;
 pub mod rebuild;
+pub mod release;

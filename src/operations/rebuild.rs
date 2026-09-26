@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use crate::commands::global_context::GlobalContext;
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
-    AppliedEffect, CompositionPlan, ConfirmationRequirement, EnvironmentProjection,
+    changed_inputs, AppliedEffect, CompositionPlan, ConfirmationRequirement, EnvironmentProjection,
     ExecutionReceipt, ExecutionWarning, OperationIntent, OperationKind, OperationOutcome,
     OperationPlan, PlanApplyError, PlanFingerprint, PlanWarning, PlannedBranch, PlannedBranchState,
     PlannedEffect, ResourceKind, UnaffectedResource,
@@ -68,14 +68,18 @@ pub enum PlanPurpose {
 }
 
 impl PlanPurpose {
-    fn synchronizes(self) -> bool {
+    /// Public because `release::plan_release` consumes the same enum: a release
+    /// synchronises and anchors too, and the safety property that makes a
+    /// preview a preview is the *same* three-way property, not a per-planner
+    /// re-derivation of it.
+    pub fn synchronizes(self) -> bool {
         matches!(self, PlanPurpose::Confirm)
     }
 
     /// Only a plan that might be applied may leave a ref behind. A preview's
     /// composed commit is unreferenced, which is fine: it is the same
     /// situation `--dry-run` has always been in, and `git gc` collects it.
-    fn anchors(self) -> bool {
+    pub fn anchors(self) -> bool {
         matches!(self, PlanPurpose::Confirm)
     }
 }
@@ -450,14 +454,13 @@ fn assemble_plan(
     let warnings: Vec<PlanWarning> = detail
         .held
         .iter()
-        .map(|conflict| PlanWarning {
-            message: format!(
+        .map(|conflict| {
+            PlanWarning::advisory(format!(
                 "'{}' conflicts with '{}' and will be held out of this build ({} file(s))",
                 conflict.branch,
                 conflict.conflicts_with,
                 conflict.conflicted_files.len()
-            ),
-            blocking: false,
+            ))
         })
         .collect();
 
@@ -555,43 +558,7 @@ pub fn validate_plan(
 ) -> std::result::Result<(), PlanApplyError> {
     let git = context.git();
     let env = plan.detail.environment.as_str();
-    let mut changed: Vec<ChangedInput> = Vec::new();
-
-    if plan.fingerprint.metadata_sha
-        != git
-            .rev_parse_opt("refs/heads/hitch-metadata")
-            .unwrap_or(None)
-    {
-        changed.push(ChangedInput {
-            branch: "hitch-metadata".to_string(),
-            previous_sha: plan.fingerprint.metadata_sha.clone(),
-            current_sha: git
-                .rev_parse_opt("refs/heads/hitch-metadata")
-                .unwrap_or(None),
-        });
-    }
-
-    for (refname, planned) in &plan.fingerprint.refs {
-        let live = git.rev_parse_opt(refname).unwrap_or(None);
-        if live.as_deref() != Some(planned.as_str()) {
-            changed.push(ChangedInput {
-                branch: refname.clone(),
-                previous_sha: Some(planned.clone()),
-                current_sha: live,
-            });
-        }
-    }
-
-    for (refname, planned) in &plan.fingerprint.remote_refs {
-        let live = git.rev_parse_opt(refname).unwrap_or(None);
-        if &live != planned {
-            changed.push(ChangedInput {
-                branch: refname.clone(),
-                previous_sha: planned.clone(),
-                current_sha: live,
-            });
-        }
-    }
+    let mut changed = changed_inputs(&plan.fingerprint, git);
 
     // A resolution that has disappeared since the plan was built means the
     // replay would now miss and the branch would be *held* instead of
@@ -610,7 +577,10 @@ pub fn validate_plan(
     if changed.is_empty() {
         Ok(())
     } else {
-        Err(PlanApplyError::stale_plan(env, &changed))
+        // The environment is also `hitch rebuild`'s positional argument, so
+        // passing it for both parameters is not a fudge: it is what the user
+        // typed.
+        Err(PlanApplyError::stale_plan(plan.kind, env, env, &changed))
     }
 }
 
@@ -744,7 +714,7 @@ fn assemble_receipt(
     let mut warnings: Vec<ExecutionWarning> = plan
         .warnings
         .iter()
-        .filter(|w| !w.blocking)
+        .filter(|w| !w.is_blocking())
         .map(|w| ExecutionWarning {
             message: w.message.clone(),
             owes_effect: false,

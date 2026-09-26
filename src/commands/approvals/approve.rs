@@ -246,6 +246,8 @@ fn execute_approved_operation(
         context.log_info("");
         context.log_info("  ⏳ Updating environment metadata...");
 
+        // The declaration edit and the request's own status change are one
+        // transaction, and they are the operation's durable effect.
         modify_metadata(context, |config| {
             // Store current environment state for rollback
             if let Some(env) = config.get_environment(environment_name) {
@@ -260,14 +262,19 @@ fn execute_approved_operation(
                 &request_for_validation.rebuild_snapshot,
             )?;
 
-            // Execute the approved operation
-            execute_operation_based_on_request(context, config, request_id)?;
+            // Apply the approved declaration change
+            apply_declaration_change(context, config, request_id)?;
 
             // Mark request as applied
             crate::utils::approvals::mark_request_applied(config, request_id)?;
 
             Ok(())
-        })
+        })?;
+
+        // And only then, against the declaration that change actually
+        // committed. See `rebuild_after_approval` for why this cannot be
+        // inside the closure above.
+        rebuild_after_approval(context, environment_name)
     });
 
     match result {
@@ -289,7 +296,13 @@ fn execute_approved_operation(
     }
 }
 
-fn execute_operation_based_on_request(
+/// The declaration change the request describes, applied to an in-flight
+/// `hitch.json`.
+///
+/// Purely a metadata edit. The rebuild that follows it is
+/// [`rebuild_after_approval`]'s job, and keeping the two apart is what makes the
+/// rebuild possible to run at the right time — see that function's doc comment.
+fn apply_declaration_change(
     context: &GlobalContext,
     config: &mut crate::types::HitchConfig,
     request_id: &str,
@@ -334,10 +347,62 @@ fn execute_operation_based_on_request(
         }
     }
 
-    // Rebuild the environment
-    crate::utils::prelude::rebuild_environment(context, &request.environment)?;
-
     Ok(())
+}
+
+/// Build the environment the approval just changed, and report a failure as an
+/// owed effect rather than undoing the approval.
+///
+/// **Why this is outside the `modify_metadata` closure.** That closure runs
+/// *before* its transaction commits — it is handed a `&mut HitchConfig` and
+/// writes the file afterwards — and the rebuild reads the declaration back off
+/// `refs/heads/hitch-metadata`. A rebuild called from inside the closure
+/// therefore composes the *pre-approval* declaration: the branch is added to
+/// `hitch.json`, the environment is rebuilt without it, and the two disagree
+/// until something unrelated triggers another build. That was a live bug, not a
+/// hypothetical; the regression test is
+/// `test_automatic_application_on_threshold`'s `cat-file` assertion.
+///
+/// **Why a failure here does not roll the declaration back.** The declaration
+/// edit and the request's move to `Applied` have already committed by this
+/// point, and a rebuild can fail *after* it has already moved the environment
+/// branch — at which point `rollback_metadata_changes` would restore a
+/// declaration describing a branch that is in the branch. So the same contract
+/// `apply_declaration_plan` uses for promote and demote applies here: the
+/// declaration persists, the environment is left unbuilt, the message names the
+/// command that settles it, and the exit code stays 0. Rollback remains
+/// reachable for the one failure it can actually repair — the metadata write
+/// itself.
+fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Result<()> {
+    context.log_info("");
+    context.log_info("  ⏳ Rebuilding environment...");
+    match crate::utils::prelude::rebuild_environment(context, environment_name) {
+        Ok(outcome) => {
+            if !outcome.held.is_empty() {
+                context.log_warning(&format!(
+                    "  ⚠ Rebuilt '{}' with {} branch(es) held: {}",
+                    environment_name,
+                    outcome.held.len(),
+                    outcome
+                        .held
+                        .iter()
+                        .map(|c| c.branch.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            context.log_warning(&format!(
+                "  ⚠ The approval was applied to '{}' but rebuilding it failed:\n    {}\n    \
+                 The declaration is saved; the environment is not built. To build it:\n      \
+                 hitch rebuild {}",
+                environment_name, e, environment_name
+            ));
+            Ok(())
+        }
+    }
 }
 
 fn attempt_approval_rollback(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {

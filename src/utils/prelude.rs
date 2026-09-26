@@ -868,30 +868,39 @@ pub(crate) fn format_compatibility_report_for_rebuild(
 }
 
 /// Rebuild an environment by composing its promoted branches into a new
-/// environment branch, in an isolated worktree.
+/// environment branch.
 ///
-/// This is the core reusable rebuild function that can be called by promote,
-/// demote, or rebuild commands.
+/// The zero-argument sibling of [`rebuild_environment_opts`], and the entry
+/// point for callers that want a rebuild with no replay and no policy override:
+/// `hitch rebuild` (via the `_opts` form), the dependent rebuilds inside
+/// `operations::declaration` and `operations::release`, and
+/// `approvals/approve.rs`.
 ///
-/// Design (see docs/merge-conflict-handling-plan.md, phase 1):
-/// - Composition happens in a disposable linked worktree, never in the
-///   user's own checkout — the user's working tree is not touched.
+/// The `isolated worktree` this used to mention is gone. Composition happens in
+/// the object database via `merge_tree_compose` + `commit_tree` — no worktree,
+/// no index, no checkout — so the user's working tree cannot be touched at all,
+/// and "the worktree is torn down on failure" has nothing left to describe. The
+/// rest of the design still holds:
+///
 /// - Base and every promoted branch are resolved to concrete SHAs once, right
-///   after synchronizing; the worktree is built from, and every merge
-///   consumes, those pinned SHAs. This closes the old TOCTOU window where a
-///   passing preflight could still conflict during the real merge because
-///   refs moved in between.
-/// - Publishing the rebuilt branch is a single compare-and-swap `update-ref`,
-///   preceded by writing a timestamped backup ref. There is no
+///   after synchronizing, and every merge consumes those pinned SHAs. This
+///   closes the old TOCTOU window where a passing preflight could still
+///   conflict during the real merge because refs moved in between.
+/// - Publishing the rebuilt branch is a single compare-and-swap ref
+///   transaction, preceded by writing timestamped archival refs. There is no
 ///   rename-to-backup-then-recreate window; a crash either leaves the old
 ///   branch untouched or the new one fully published, never in between.
-/// - Automatic rollback on any failure (the worktree is torn down; the real
-///   environment branch is never mutated unless the whole build succeeded).
 /// - A branch that conflicts is handled per the environment's `on_conflict`
-///   policy (phase 3): `Eject` (the default) excludes it from the
-///   composition and keeps going — matching the eject-and-continue policy
-///   every merge queue surveyed converges on — while `Halt` aborts the whole
-///   rebuild on the first conflict, as phase 1 always did.
+///   policy: `Eject` (the default) excludes it from the composition and keeps
+///   going — matching the eject-and-continue policy every merge queue surveyed
+///   converges on — while `Halt` aborts the whole rebuild on the first
+///   conflict.
+///
+/// Note that a *successful* return is not "the whole build succeeded" in the
+/// sense this doc comment used to imply: a build that ejected conflicting
+/// branches still returns `Ok`, with the held branches named in
+/// [`RebuildOutcome::held`]. That is a deliberate contract, and it is why
+/// `hitch rebuild` maps it to exit code 2 rather than treating it as a failure.
 pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
     rebuild_environment_opts(context, env_name, false, None)
 }
@@ -901,8 +910,8 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
 /// conflicting branch first try a recorded, content-addressed resolution
 /// (see `crate::utils::resolutions`) before being held — turning a
 /// previously hand-resolved peer conflict back into a clean compose without
-/// re-resolving it. Every other caller (promote, demote, release, approve)
-/// passes `false`, so a plain rebuild never consults resolutions.
+/// re-resolving it. Every other caller passes `false`, so a plain rebuild never
+/// consults resolutions.
 ///
 /// `on_conflict_override` is `hitch rebuild --on-conflict`. `None` means "use
 /// the environment's configured policy", which is every caller's intent
@@ -916,6 +925,19 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
 /// code that actually merged. That pre-check is gone (see the note at its old
 /// site), which is what surfaced the gap: the override now has to be threaded
 /// here explicitly, where it is finally load-bearing.
+///
+/// **This is not the "rebuild without rendering a plan" path, and after P5 it
+/// is almost the only one left.** It *does* plan — `plan_rebuild` +
+/// `apply_rebuild_plan` are called below — but it throws the plan and the
+/// receipt away, printing the `StepLogger` transcript instead. What survives it
+/// is one specific capability the other callers do not have: it accepts a
+/// replay opt-in and a conflict-policy override, so it can be the *nested*
+/// rebuild inside another operation. `apply_declaration_plan` (promote, demote)
+/// and `apply_release_plan` both call it for their dependent environments, and
+/// `approvals/approve.rs` calls the no-argument wrapper. Do not delete it
+/// thinking promote/demote/release/approve no longer route through it — they
+/// route through it *by way of* their own planners, and this is where the
+/// nesting terminates.
 pub fn rebuild_environment_opts(
     context: &GlobalContext,
     env_name: &str,
@@ -2483,8 +2505,35 @@ pub fn check_pre_promote_conflicts(
     base_branch: &str,
     env_name: &str,
 ) -> Result<()> {
+    match pre_promote_conflict_reason(
+        context,
+        new_branch,
+        existing_branches,
+        base_branch,
+        env_name,
+    )? {
+        Some(reason) => Err(anyhow::anyhow!("{}", reason)),
+        None => Ok(()),
+    }
+}
+
+/// The reason `new_branch` cannot be promoted, or `None` when it can.
+///
+/// Split out from [`check_pre_promote_conflicts`] so a *planner* can run the
+/// same simulation and record the refusal on the plan, rather than a
+/// pre-check intercepting before the plan exists. That is the AGENTS.md
+/// gotcha about a pre-check that intercepts: the refusal was a real decision
+/// being made somewhere the plan could not show it. The wrapper above keeps
+/// the error form for any caller that only wants to fail.
+pub fn pre_promote_conflict_reason(
+    context: &GlobalContext,
+    new_branch: &str,
+    existing_branches: &[String],
+    base_branch: &str,
+    env_name: &str,
+) -> Result<Option<String>> {
     if existing_branches.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     context.log_verbose(&format!(
@@ -2499,41 +2548,38 @@ pub fn check_pre_promote_conflicts(
     let mut sequence = existing_branches.to_vec();
     sequence.push(new_branch.to_string());
 
-    if let Some(failure) = preflight_compatibility_merge_tree(context, base_branch, &sequence)? {
-        // If an existing branch blocks before we even reach `new_branch`, the environment is
-        // already in a bad state (should be rare; typically prevented by earlier checks).
-        if failure.blocking_branch != new_branch {
-            return Err(anyhow::anyhow!(
-                "Cannot promote '{}' to environment '{}': environment already contains incompatible promoted branches.\n\
-                 First conflict occurs when merging '{}' onto '{}'.",
-                new_branch,
-                env_name,
-                failure.blocking_branch,
-                base_branch
-            ));
-        }
+    let Some(failure) = preflight_compatibility_merge_tree(context, base_branch, &sequence)? else {
+        return Ok(None);
+    };
 
-        let mut msg = format!(
-            "Cannot promote '{}' to environment '{}': compatibility check failed.\n\n",
-            new_branch, env_name
-        );
-        msg.push_str(&format!(
-            "  {} conflicts with {}\n",
-            new_branch, base_branch
-        ));
-        for f in &failure.conflicted_files {
-            msg.push_str(&format!("    {}\n", f));
-        }
-        msg.push('\n');
-        msg.push_str(&format!("Fix {} first:\n", new_branch));
-        msg.push_str(&format!(
-            "  git checkout {} && git rebase {}\n",
-            new_branch, base_branch
-        ));
-        return Err(anyhow::anyhow!("{}", msg));
+    // If an existing branch blocks before we even reach `new_branch`, the environment is
+    // already in a bad state (should be rare; typically prevented by earlier checks).
+    if failure.blocking_branch != new_branch {
+        return Ok(Some(format!(
+            "Cannot promote '{}' to environment '{}': environment already contains incompatible promoted branches.\n\
+             First conflict occurs when merging '{}' onto '{}'.",
+            new_branch, env_name, failure.blocking_branch, base_branch
+        )));
     }
 
-    Ok(())
+    let mut msg = format!(
+        "Cannot promote '{}' to environment '{}': compatibility check failed.\n\n",
+        new_branch, env_name
+    );
+    msg.push_str(&format!(
+        "  {} conflicts with {}\n",
+        new_branch, base_branch
+    ));
+    for f in &failure.conflicted_files {
+        msg.push_str(&format!("    {}\n", f));
+    }
+    msg.push('\n');
+    msg.push_str(&format!("Fix {} first:\n", new_branch));
+    msg.push_str(&format!(
+        "  git checkout {} && git rebase {}\n",
+        new_branch, base_branch
+    ));
+    Ok(Some(msg))
 }
 
 #[cfg(test)]

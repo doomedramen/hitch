@@ -217,7 +217,7 @@
 - [x] `AppliedWithHolds` is preserved distinctly, and `hitch rebuild`'s exit code 2 still happens for held builds.
 - [x] Repo lock, `RebuildLock`, and the `locked` metadata flag all still apply exactly as before.
 - [x] `--dry-run` is a renderer over the same planner, and agrees with a real run.
-- [x] `rebuild_environment_opts` still serves `promote`, `demote`, `approve`, and `release` with byte-identical output.
+- [x] `rebuild_environment_opts` still serves `promote`, `demote`, `approve`, and `release` with byte-identical output. **Superseded by P5:** those four no longer call it as their *top-level* entry — each now plans its own operation and reaches this function only as the nested rebuild for a dependent environment. It remains the terminating nesting point (see its doc comment in `src/utils/prelude.rs`), and its output for those nested calls is unchanged.
 - [x] All four gates green; `git diff --name-only main..explainable-ux -- crates/` empty.
 
 ---
@@ -281,7 +281,12 @@ Five, on top of the four already recorded in "Deviations from the spec" above:
   refusal P6 will want to render. A manual check confirms nothing observable
   moved: `--on-conflict halt` still exits 1 with the full `Cannot rebuild 'dev'
   — compatibility check failed` report and the `git checkout … && git rebase …`
-  next step, printed exactly once.
+  next step, printed exactly once. **Resolved by P5:** the declaration planner
+  refuses *before* composing, so it is the first producer of both —
+  `PlanWarningKind::{PolicyRefusal, ApprovalRequired}` are blocking and
+  `apply_declaration_plan` raises `PolicyBlocked` from `plan.blocked_by()`. The
+  asymmetry described above survives, and is now the real line: a halt is
+  decided by the merge, a policy or approval refusal by the plan.
 - **A test cannot force a ref transaction to fail by colliding paths.**
   `a_publish_failure_leaves_no_anchor_behind` originally made
   `.git/refs/hitch/state/dev` a *directory*, on the reasonable theory that git

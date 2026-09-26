@@ -763,6 +763,23 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("feature/auto-apply");
 
+            // ...and that the environment branch was actually rebuilt *from the
+            // edited declaration*. This is the half that is easy to get wrong:
+            // the rebuild used to run inside the `modify_metadata` closure, so it
+            // read `hitch.json` off the ref — the pre-edit declaration — and
+            // composed an environment that never contained the branch it had
+            // just approved. The declaration being correct is not evidence the
+            // build is.
+            let built = env
+                .git
+                .run(&["cat-file", "-e", "production:auto-apply.js"])?
+                .success();
+            assert!(
+                built,
+                "an approved promotion must be present in the built environment branch, not just \
+                 in the declaration — the rebuild has to compose from the post-edit config"
+            );
+
             // Verify request status is "Applied"
             let status_result = env
                 .hitch
