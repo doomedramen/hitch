@@ -446,11 +446,14 @@ mod tests {
                 .assert_stderr_contains("is locked")
                 .assert_stderr_contains("--force");
 
-            // Try to remove locked environment (should fail)
+            // Try to remove locked environment (should fail). The refusal is
+            // worded "is currently locked" now — it names the plan it refused
+            // from, rather than being a bare `Err` with nothing above it, so the
+            // reason reads as a statement about the plan.
             let result = env.hitch.run().args(&["remove", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("is locked")
+                .assert_stderr_contains("is currently locked")
                 .assert_stderr_contains("--force");
 
             Ok::<(), anyhow::Error>(())

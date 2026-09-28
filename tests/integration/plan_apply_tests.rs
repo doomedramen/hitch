@@ -2891,7 +2891,7 @@ mod tests {
                     .execute()?
                     .assert_success();
 
-                let plan = plan_remove_environment(&context_for(env, false)?, "qa")?;
+                let plan = plan_remove_environment(&context_for(env, false)?, "qa", false)?;
 
                 assert!(plan.proposed.is_none(), "and none afterwards: it is gone");
                 let current = plan.current_composition();

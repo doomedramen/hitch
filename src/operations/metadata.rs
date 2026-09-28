@@ -519,21 +519,32 @@ pub fn plan_add_environment(
     let change = EnvironmentChange::Create {
         base: base.unwrap_or("main").to_string(),
     };
-    plan_create_or_destroy(context, environment, &change)
+    plan_create_or_destroy(context, environment, &change, false)
 }
 
 /// Plan a `hitch remove`.
+///
+/// `force` is the reader's answer to the two questions a `remove` asks, so it
+/// is an *input to the decision* rather than a gate the command applies after
+/// it. That is the difference the old `remove.rs` got wrong in both directions
+/// at once: it raised the lock refusal and the promoted-branches refusal as
+/// `Err` before anything was planned, so neither had a plan above it — and
+/// clearing the lock refusal at the call site would have meant the *planner*
+/// still believed a lock was a refusal, which is the shape that makes a flag
+/// look wired while the refusal stands.
 pub fn plan_remove_environment(
     context: &GlobalContext,
     environment: &str,
+    force: bool,
 ) -> Result<OperationPlan<MetadataPlanDetail>> {
-    plan_create_or_destroy(context, environment, &EnvironmentChange::Destroy)
+    plan_create_or_destroy(context, environment, &EnvironmentChange::Destroy, force)
 }
 
 fn plan_create_or_destroy(
     context: &GlobalContext,
     environment: &str,
     change: &EnvironmentChange,
+    force: bool,
 ) -> Result<OperationPlan<MetadataPlanDetail>> {
     let config = access_metadata_read_only(context, |config| Ok(config.clone()))?;
     let existing = config.get_environment(environment).cloned();
@@ -541,24 +552,58 @@ fn plan_create_or_destroy(
 
     let (current, proposed) = match change {
         EnvironmentChange::Create { base } => {
-            if existing.is_some() {
-                warnings.push(PlanWarning::policy_refusal(format!(
-                    "Environment '{}' already exists in the configuration",
-                    environment
-                )));
+            if let Some(declared) = existing.as_ref() {
+                // The remedy is derived from the *difference*, not copied from
+                // the request. `hitch add qa --base develop` against a `qa`
+                // already on `main` is answered by `hitch set qa --base develop`
+                // — but against a `qa` already on `develop` there is nothing to
+                // do, and a remedy naming a flag would send the reader to run a
+                // command that changes nothing. The default would be worse
+                // still: `hitch add qa`, the command that just refused.
+                let remedy = if declared.base == *base {
+                    format!("nothing to declare — '{environment}' is already on base {base}")
+                } else {
+                    format!("hitch set {environment} --base {base}")
+                };
+                warnings.push(
+                    PlanWarning::policy_refusal(format!(
+                        "Environment '{}' already exists in the configuration",
+                        environment
+                    ))
+                    .with_remedy(remedy),
+                );
+                // …and the plan proposes nothing, because a refused `add` will
+                // not declare anything. The `Proposed` line would otherwise
+                // read `qa = main` above a refusal that `qa` is already
+                // exactly that — the same rule `plan_declaration_change` and
+                // `plan_set_environment` follow, and for the same reason: a
+                // plan describing an outcome it will not reach is the lie this
+                // architecture exists to prevent.
+                (
+                    Some(EnvironmentProjection {
+                        environment: environment.to_string(),
+                        base: declared.base.clone(),
+                        branches: pin_declared(context, declared)?,
+                        branch_sha: context
+                            .git()
+                            .rev_parse_opt(&format!("refs/heads/{environment}"))?,
+                    }),
+                    None,
+                )
+            } else {
+                (
+                    // There is no `qa` to project before it exists, and an empty
+                    // projection would be a statement about a thing that is not
+                    // there.
+                    None,
+                    Some(EnvironmentProjection {
+                        environment: environment.to_string(),
+                        base: base.clone(),
+                        branches: Vec::new(),
+                        branch_sha: None,
+                    }),
+                )
             }
-            (
-                // There is no `qa` to project before it exists, and an empty
-                // projection would be a statement about a thing that is not
-                // there.
-                None,
-                Some(EnvironmentProjection {
-                    environment: environment.to_string(),
-                    base: base.clone(),
-                    branches: Vec::new(),
-                    branch_sha: None,
-                }),
-            )
         }
         EnvironmentChange::Destroy => {
             // A missing environment stays an `Err`. The refusals that are *not*
@@ -572,13 +617,28 @@ fn plan_create_or_destroy(
                     environment
                 ));
             };
-            if declared.is_locked() {
-                warnings.push(PlanWarning::policy_refusal(format!(
-                    "Environment '{}' is currently locked by '{}'",
-                    environment,
-                    declared.locked_by.as_deref().unwrap_or("someone")
-                )));
+            // A lock is a *human-facing* signal, so it is a refusal the
+            // reader can overrule — and `--force` is the overrule, decided here
+            // rather than at the call site so that the plan the reader sees and
+            // the refusal the apply would raise cannot disagree about whether
+            // the lock counts.
+            if declared.is_locked() && !force {
+                let holder = declared.locked_by.as_deref().unwrap_or("someone");
+                warnings.push(
+                    PlanWarning::policy_refusal(format!(
+                        "Environment '{}' is currently locked by '{}'",
+                        environment, holder
+                    ))
+                    .with_remedy(format!(
+                        "hitch unlock {environment}, or re-run with --force"
+                    )),
+                );
             }
+            // Promoted branches are an *advisory*, not a refusal, and the reason
+            // is that the reader is being asked: this is what the confirmation
+            // is for. Today the same fact is an `Err` that names `--force` as
+            // the way out, and `--force`'s own doc comment ("Skip confirmation
+            // prompt") describes a prompt that does not exist. Deviation 3.
             if !declared.branches.is_empty() {
                 warnings.push(PlanWarning::advisory(format!(
                     "Environment '{}' still has {} promoted branch{}; removing it \
@@ -611,13 +671,20 @@ fn plan_create_or_destroy(
     // Promoted branches, not confirmation, are what needs a yes/no here — and
     // only in the case that has them. A `hitch remove` of an empty environment
     // is one keystroke like a lock, and gating it would be a new prompt
-    // introduced by a refactor. `--force` clears this at the call site
-    // (deviation 3).
+    // introduced by a refactor.
+    //
+    // `--force` clears it *in the planner* rather than at the call site, so the
+    // rendered plan says what is true: a plan whose `confirmation` is required
+    // while the command never asks is a document that lies about its own
+    // gate. It also means the call site has no `if force` at all — the flag
+    // reaches the operation rather than intercepting it, which is the failure
+    // mode `hitch rebuild --on-conflict halt` had.
     let confirmation = match change {
         EnvironmentChange::Destroy
-            if !existing
-                .as_ref()
-                .is_none_or(|declared| declared.branches.is_empty()) =>
+            if !force
+                && !existing
+                    .as_ref()
+                    .is_none_or(|declared| declared.branches.is_empty()) =>
         {
             ConfirmationRequirement::required(
                 "this removes promoted branches from the pipeline".to_string(),

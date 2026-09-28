@@ -1,5 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::{environment::get_locked_by_user, logging::validation_success};
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::operations::metadata::{apply_metadata_plan, plan_remove_environment};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
 use clap::Args;
@@ -10,82 +11,44 @@ pub struct RemoveCommand {
     #[arg()]
     pub env_name: String,
 
-    /// Skip confirmation prompt
+    /// Remove without asking, including from a locked environment
     #[arg(long)]
     pub force: bool,
+
+    /// Print the plan without applying it
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Apply the plan without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub fn run(args: RemoveCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!("Removing environment '{}'...", args.env_name));
-
-    // Step 1: pre-check() - Ensure current directory is a Git repository and working tree is clean
+    // Step 1: pre-check() — a Git repository with a clean working tree.
     crate::utils::prelude::pre_check(context)?;
 
-    // Step 2: Additional validation specific to remove
-    validate_preconditions(context, &args.env_name, args.force)?;
+    // Step 2: A mistyped name is a usage error with no plan worth drawing. The
+    // two objections a `remove` can raise that *are* about the environment — a
+    // lock, and promoted branches — belong to the planner, so they arrive
+    // above a plan the reader can see rather than as an error with nothing
+    // above it. `plan_remove_environment` decides both, and takes `force` as an
+    // input to that decision rather than letting this function overrule it.
+    validate_name(&args.env_name, "Environment")?;
+    crate::utils::command_helpers::ensure_environment_exists(context, &args.env_name)?;
 
-    // Step 3: Remove the environment
-    remove_environment(context, &args.env_name)?;
+    let plan = plan_remove_environment(context, &args.env_name, args.force)?;
 
-    context.log_success(&format!(
-        "Successfully removed environment '{}'!",
-        args.env_name
-    ));
-    Ok(())
-}
-
-/// Validate that environment is ready for removal
-fn validate_preconditions(context: &GlobalContext, env_name: &str, force: bool) -> Result<()> {
-    context.log_verbose("Validating remove preconditions...");
-
-    // Validate input name
-    validate_name(env_name, "Environment")?;
-
-    // Check if environment exists
-    crate::utils::command_helpers::ensure_environment_exists(context, env_name)?;
-
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = &config.environments[env_name];
-
-    // Check if environment has branches (confirmation required unless force)
-    if !force && !environment.branches.is_empty() {
-        // In a real implementation, we would prompt for confirmation here
-        // For now, we'll require the --force flag
-        return Err(anyhow::anyhow!(
-            "Environment '{}' has promoted branches. Use --force to remove it anyway. Note: This only removes the environment configuration, not the actual git branches.",
-            env_name
-        ));
+    if args.dry_run {
+        emit_plan(context, &plan)?;
+        return Ok(());
     }
 
-    // Check if environment is locked (but allow removal if force is used)
-    if environment.is_locked() && !force {
-        return Err(anyhow::anyhow!(
-            "Environment '{}' is locked by '{}'. Cannot remove a locked environment. Use --force to override.",
-            env_name,
-            get_locked_by_user(context, env_name)?
-        ));
+    if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+        return Ok(());
     }
 
-    validation_success(context, env_name, "Remove validation");
+    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    emit_receipt(context, &plan, &receipt)?;
     Ok(())
-}
-
-/// Remove an environment from the configuration
-fn remove_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    context.log_verbose(&format!(
-        "Removing environment '{}' from configuration...",
-        env_name
-    ));
-
-    // Modify metadata to remove the environment
-    crate::utils::prelude::modify_metadata(context, |config| {
-        config.remove_environment(env_name);
-
-        context.log_verbose(&format!(
-            "✓ Removed environment '{}' from configuration",
-            env_name
-        ));
-        Ok(())
-    })
 }
