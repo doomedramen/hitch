@@ -95,16 +95,35 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // repo-wide lock is already held for the whole window (see `operations`'s
     // module header) and this narrows that to the environment being edited.
     //
-    // `capture_config_state` stays *after* the lock is taken: capturing before
-    // would record a pre-lock declaration, and rolling back to that would undo
-    // the lock's own commit along with the edit.
+    // The snapshot is captured *before* the lock and armed *inside* it, and both
+    // halves of that are load-bearing.
+    //
+    // Captured before, because the rollback runs after `with_locked_env` has
+    // already released the lock. A snapshot taken inside the closure records
+    // `locked: true`, so restoring it put the lock *back* and left the
+    // environment wedged — every subsequent promote refused with "Environment
+    // 'dev' is currently locked by …", naming a lock holder that had gone away.
+    // The comment this replaces argued that capturing before the lock "would
+    // undo the lock's own commit along with the edit"; the rollback is a later
+    // commit, not a history rewrite, so restoring the pre-lock value is what
+    // leaves the environment correct. Nothing else writes `hitch-metadata` in the
+    // window — the planner composes nothing and anchors nothing — so a
+    // pre-lock snapshot has nothing stale in it.
+    //
+    // Armed inside, because a snapshot taken unconditionally is a snapshot of a
+    // repository the operation never touched, and rolling back to it costs two
+    // metadata commits to report a repair that did not happen. Every refusal is
+    // decided before the apply is reached — a plan that went stale, a
+    // sibling-conflict policy block, a declined confirmation, an environment
+    // locked by a human — and each of them now leaves no trace at all.
+    let snapshot = crate::utils::rollback::capture_config_state(context)?;
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            rollback_info.previous_config = crate::utils::rollback::capture_config_state(context)?;
             let plan = plan_promote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
+            rollback_info.previous_config = snapshot;
             let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
             Ok((plan, Some(receipt)))
         })
@@ -132,14 +151,17 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
         // declining is not a failure.
         Ok((_plan, None)) => Ok(()),
         Err(e) => {
-            // Show the actual error FIRST so user knows why it failed
-            context.log_error(&format!("Error: {}", e));
-
-            // Attempt automatic rollback. The plan does not make this
-            // unnecessary: the declaration edit is what it undoes, and a
-            // failure after that edit landed still needs undoing. A failure
-            // before the lock was taken captured no config, and rolling back to
-            // "nothing" is not a rollback.
+            // The cause is *not* reported here. `main` prints it, once, as
+            // `Error: …`; this arm used to print it first as `❌ Error: …` and
+            // hand the same error back, so a refused promote put the identical
+            // sentence on stderr twice under two different prefixes. Every other
+            // command in the CLI lets `main` do it, and the rollback narration
+            // below is not a loss — the error now reads as the explanation *for*
+            // that narration rather than a surprise after it.
+            //
+            // Roll back only what the apply could have written. An unarmed
+            // snapshot means the apply was never reached, so there is nothing to
+            // undo.
             if rollback_info.previous_config.is_none() {
                 return Err(e);
             }
@@ -147,7 +169,7 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
                 crate::utils::rollback::rollback_metadata_changes(context, &rollback_info)
             {
                 context.log_error(&format!(
-                    "CRITICAL: Failed to rollback metadata changes: {}. Manual intervention may be required.",
+                    "CRITICAL: failed to roll back the declaration: {}. Manual intervention may be required.",
                     rollback_err
                 ));
             }

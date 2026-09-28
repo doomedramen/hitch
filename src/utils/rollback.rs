@@ -7,9 +7,14 @@ pub fn rollback_metadata_changes(
     context: &GlobalContext,
     rollback_info: &RollbackInfo,
 ) -> Result<()> {
-    context.log_warning("Operation failed, attempting automatic rollback...");
-    context.log_info(&format!(
-        "Rolling back {} operation for branch '{}' in environment '{}'",
+    // One line, not two. This used to open with `log_warning("Operation failed,
+    // attempting automatic rollback...")` and then `log_info("Rolling back
+    // promote operation for branch 'fc' in environment 'dev'")` — the same
+    // sentence at two levels, neither carrying anything the other did not.
+    // The reason it was worth printing at all is that it runs *after* the error
+    // is already on its way out, so it cannot be the user's first clue.
+    context.log_warning(&format!(
+        "Rolling back {} for '{}' in environment '{}'",
         match rollback_info.operation {
             RollbackOperation::Promote => "promote",
             RollbackOperation::Demote => "demote",
@@ -22,24 +27,24 @@ pub fn rollback_metadata_changes(
 
     match result {
         Ok(()) => {
-            context.log_success("✓ Automatic rollback completed successfully");
-            context.log_info(&format!(
-                "You can now retry the {} command",
-                match rollback_info.operation {
-                    RollbackOperation::Promote => "promote",
-                    RollbackOperation::Demote => "demote",
-                }
-            ));
+            // No leading `✓`: `log_success` already prefixes one, so this used
+            // to print `✅ ✓ Automatic rollback completed successfully`. And no
+            // "You can now retry the promote command" after it — the error the
+            // caller returns already names what to do, and on the one failure
+            // that reaches here (a metadata write that half-landed) "just retry
+            // it" is the wrong advice, because retrying is what produced the
+            // half-landed write.
+            context.log_success("Declaration restored — nothing was changed");
             Ok(())
         }
         Err(e) => {
-            context.log_error(&format!(
-                "CRITICAL: Failed to rollback metadata changes: {}",
-                e
-            ));
+            // Reported once, by the caller. This used to log two `CRITICAL:`
+            // lines here *and* hand the error back for the caller to log a third,
+            // all spelling the same failure at two verbosities.
+            context.log_verbose(&format!("Rollback failed: {}", e));
             context
-                .log_error("Manual intervention may be required to restore metadata consistency");
-            context.log_info("You can try running 'hitch status' to check the current state");
+                .log_verbose("Manual intervention may be required to restore metadata consistency");
+            context.log_verbose("Run 'hitch status' to check the current state");
             Err(e)
         }
     }
@@ -52,38 +57,24 @@ pub fn rollback_metadata_changes(
 /// that recovery can proceed even when the repository is in the degraded state
 /// that caused the original failure.
 fn restore_previous_state(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
-    // Prefer restoring the FULL configuration snapshot so that any change beyond
-    // the target environment (an appended approval request, edits to other
-    // environments) is reverted too — not just the single `Environment`.
-    if let Some(previous_config) = rollback_info.previous_config.clone() {
-        context.log_verbose("Restoring previous configuration snapshot...");
-        crate::utils::prelude::modify_metadata_unchecked(
-            context,
-            move |config: &mut HitchConfig| {
-                *config = previous_config;
-                Ok(())
-            },
-        )?;
-        context.log_verbose("✓ Configuration restored");
-        return Ok(());
-    }
+    // Only the full-configuration snapshot. The single-`Environment` fallback
+    // that used to sit below this is dead for every current caller — promote and
+    // demote capture a snapshot and set nothing else — and it was worse than
+    // dead: with no state of either kind it warned and returned `Ok(())`, so
+    // the caller went on to report `Declaration restored — nothing was changed`
+    // about a restore that had not been attempted. A rollback that cannot happen
+    // is an error, not a quiet success.
+    let previous_config = rollback_info
+        .previous_config
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no pre-operation configuration was captured"))?;
 
-    // Fallback: restore just the single environment (older capture path).
-    if let Some(previous_state) = rollback_info.previous_state.clone() {
-        context.log_verbose("Restoring previous environment state...");
-        let env_name = rollback_info.env_name.clone();
-        crate::utils::prelude::modify_metadata_unchecked(
-            context,
-            move |config: &mut HitchConfig| {
-                config.environments.insert(env_name, previous_state);
-                Ok(())
-            },
-        )?;
-        context.log_verbose("✓ Environment state restored");
-    } else {
-        context.log_warning("No previous state available for rollback (this should not happen)");
-    }
-
+    context.log_verbose("Restoring previous configuration snapshot...");
+    crate::utils::prelude::modify_metadata_unchecked(context, move |config: &mut HitchConfig| {
+        *config = previous_config;
+        Ok(())
+    })?;
+    context.log_verbose("✓ Configuration restored");
     Ok(())
 }
 

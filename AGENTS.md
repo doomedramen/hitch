@@ -861,21 +861,50 @@ loses the branch names, the typed `AppliedWithHolds`, and the whole plan half,
 so nothing is lost from the document; and a consumer that wanted a prediction
 was reading the wrong half.
 
-**…and the same whole-config snapshot can *undo* the lock release that ran
-after it was taken. This one is still open.** `capture_config_state` is called
-*inside* `with_locked_env` — deliberately, so the snapshot is not pre-lock and a
-rollback does not also revert the lock's own commit — and
-`rollback_metadata_changes` is called *outside* it, in the command's `Err` arm,
-by which time the lock has been released. So restoring the snapshot restores
-`locked: true`, and the environment stays locked until someone runs
-`hitch unlock`. Any apply that fails after the lock reaches it: a pending
-approval request that already exists, an approver threshold that cannot be met.
-Found during P6's manual check and deliberately **not** fixed there — it is a
-`rollback`/lock-ordering question, not a rendering one, and it needs a decision
-about the snapshot's shape (re-clear the lock after restoring, versus capture
-before the lock and keep the current ordering). Reproduce with
-`hitch promote` into an approval-gated environment as the sole approver, then
-promote the same branch again.
+**A rollback snapshot has to be captured on the *far* side of the lock, and a
+rollback has to be armed only once the operation is about to write. Both halves
+are load-bearing, and getting either wrong turns a refusal into a wedge.**
+`capture_config_state` ran *inside* `with_locked_env` while
+`rollback_metadata_changes` runs *outside* it, in the command's `Err` arm, by
+which time the unlock has already committed. So the snapshot recorded
+`locked: true` and restoring it put the lock *back*: every later promote refused
+with `Environment 'dev' is currently locked by 'test@example.com'`, naming a
+holder that had gone away, and the only way out was a manual `hitch unlock`. The
+comment that justified the ordering ("capturing before would undo the lock's own
+commit") treated the rollback as a history rewrite; it is a *later* commit, so
+restoring the pre-lock value is what leaves the environment correct. The fix
+moves the capture *before* `with_locked_env` — safe because nothing else writes
+`hitch-metadata` in the window, as the planner composes and anchors nothing —
+and arms `previous_config` only after the confirmation gate, immediately before
+the apply. Arming matters as much as placement: an unconditionally-captured
+snapshot is a snapshot of a repository the operation never touched, so every
+refusal used to run a rollback that repaired nothing, cost two extra metadata
+commits, and printed three lines narrating a repair that had not happened. This
+bit on the *most ordinary* refusals there are — a planner refusal never reaches
+the apply, so it never armed, and yet it rolled back. `a_refused_promote_leaves_the_environment_unlocked`
+and `a_refused_promote_writes_no_metadata_commit` in
+`tests/integration/promote_demote_tests.rs` hold both halves, and the armed path
+separately (`a_rollback_that_fires_still_leaves_the_environment_unlocked`).
+The one failure that genuinely reaches an armed rollback is the metadata write
+itself, and the expected commit count on a refusal is therefore **2** — the lock
+and the unlock, which the crash-recovery tests depend on for the visible-lock
+signal. Do not "tidy" that constant to zero.
+
+**A cause is reported once, by `main`, and a command that also reports it is
+running a second voice on the same failure.** `promote` and `demote` both
+`log_error`'d `Error: {e}` and then returned the same error, so `main` printed it
+again as `Error: {e}` — one sentence, two prefixes, two lines on stderr. Every
+other command in the CLI lets `main` do it, and that consistency is the reason the
+extra line was pure loss. The rollback narration that used to sit between them
+(`Operation failed, attempting automatic rollback…` / `Rolling back …` /
+`You can now retry …`) is gone from the refusal path entirely, which removes the
+ordering argument for printing the cause first; on the armed path the narration
+now reads as the explanation *for* the error rather than a surprise after it.
+Two smaller instances of the same class, both fixed: `rollback_metadata_changes`
+logged two `CRITICAL:` lines and returned the error for the caller to log a third,
+and passed `"✓ Automatic rollback completed successfully"` to `log_success`, which
+already prefixes `✅` — the glyph printed twice. The `log_*` sinks own the glyph
+(see `utils/output.rs`); a message must not carry its own.
 
 **A decision the plan can make at plan time belongs in the plan, and a
 decision about the release's own result must be evaluated against the planned

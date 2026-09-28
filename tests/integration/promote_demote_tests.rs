@@ -1212,4 +1212,301 @@ mod tests {
 
         Ok(())
     }
+
+    /// How many times `needle` appears in `haystack`, non-overlapping.
+    ///
+    /// The tests below are about a fact appearing *once*. `contains` cannot
+    /// express that — it is the assertion that passes on the bug — so these
+    /// count.
+    fn occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    /// Commits on `hitch-metadata`. The strongest available statement of "a
+    /// refusal wrote nothing": a stale `locked: true` is a value, but the commit
+    /// that set it is the thing that should not exist.
+    fn metadata_commit_count(env: &TestEnvironment) -> anyhow::Result<usize> {
+        let out = env.git.run(&["rev-list", "--count", "hitch-metadata"])?;
+        Ok(out.stdout().trim().parse::<usize>()?)
+    }
+
+    /// `hitch promote` a branch into `dev`, successfully, for a later refusal to
+    /// collide with.
+    fn promote_one(env: &TestEnvironment, branch: &str) -> anyhow::Result<()> {
+        env.hitch
+            .run()
+            .args(&["promote", branch, "dev"])
+            .execute()?
+            .assert_success();
+        Ok(())
+    }
+
+    /// A feature branch, committed and back on `main`.
+    fn make_feature(env: &TestEnvironment, branch: &str) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "-b", branch])?;
+        env.fs.write_file(&format!("{branch}.txt"), branch)?;
+        env.git.run(&["add", "-f", &format!("{branch}.txt")])?;
+        env.git.run(&["commit", "-m", branch])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    /// A refused operation must say why exactly once.
+    ///
+    /// It used to say it twice: promote and demote both logged
+    /// `❌ Error: <cause>` and then returned the same error for `main` to print
+    /// as `Error: <cause>`. One sentence, two prefixes, two lines, on stderr —
+    /// and `main`'s copy is the one every other command in the CLI relies on,
+    /// so the extra line was pure duplication.
+    #[test]
+    fn a_refused_promote_says_why_exactly_once() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            make_feature(env, "feat-a")?;
+            promote_one(env, "feat-a")?;
+
+            // Promoting it again is a planner refusal, decided before anything
+            // is written.
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?;
+            let stderr = result.stderr();
+
+            assert_eq!(
+                occurrences(&stderr, "Error: "),
+                1,
+                "the cause must be reported once, not restated by a second caller:\n{stderr}"
+            );
+            assert!(
+                !stderr.contains("❌"),
+                "the command's own `❌ Error:` copy is a duplicate of `main`'s \
+                 `Error:`; only the latter survives:\n{stderr}"
+            );
+            assert!(
+                !stderr.contains("attempting automatic rollback"),
+                "nothing was written, so there is no rollback to report:\n{stderr}"
+            );
+            result.assert_failure();
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    /// A refused `promote` must leave the environment usable.
+    ///
+    /// This is the bug the duplicated reporting was hiding. `capture_config_state`
+    /// ran *inside* `with_locked_env` — after the lock was committed — and
+    /// `rollback_metadata_changes` runs *outside* it, after the unlock. So a
+    /// refusal armed a rollback, the restore wrote that pre-unlock snapshot
+    /// back, and `locked` went to `true` again. Every later `promote` then
+    /// refused with "Environment 'dev' is currently locked by 'test@example.com'"
+    /// naming a lock holder that had already gone away, and the user's way out
+    /// was a manual `hitch unlock`. It fired on the most ordinary refusals there
+    /// are, because a refusal is exactly when the rollback used to run.
+    #[test]
+    fn a_refused_promote_leaves_the_environment_unlocked() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            make_feature(env, "feat-a")?;
+            promote_one(env, "feat-a")?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?
+                .assert_failure();
+
+            let config = env.read_hitch_config()?;
+            assert!(
+                !config
+                    .environments
+                    .get("dev")
+                    .expect("dev was declared")
+                    .is_locked(),
+                "a refusal must not re-apply the lock `with_locked_env` released"
+            );
+
+            // The consequence, which is what a user would actually notice: the
+            // next promote works. Asserting the field alone would let a fix that
+            // writes `false` without changing the behaviour pass.
+            make_feature(env, "feat-b")?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-b", "dev"])
+                .execute()?
+                .assert_success();
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    /// A refusal must commit nothing beyond the lock pair.
+    ///
+    /// The rollback used to cost two more commits per refusal — the lock, the
+    /// unlock, a restore, and the lock the restore put back — to arrive at the
+    /// state it started from, and that second lock is the wedge
+    /// `a_refused_promote_leaves_the_environment_unlocked` is about. The
+    /// snapshot is now taken before the lock and armed only once the apply is
+    /// about to write, so a refusal commits the lock pair and nothing else.
+    ///
+    /// Two, not zero: `with_locked_env` commits the lock and then the unlock, and
+    /// that pair is load-bearing beyond this operation. It is how a process
+    /// killed mid-command leaves a visible lock behind for `hitch unlock` to
+    /// find, which the crash-recovery tests depend on. Do not "tidy" the
+    /// expected count to zero.
+    #[test]
+    fn a_refused_promote_writes_no_metadata_commit() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            make_feature(env, "feat-a")?;
+            promote_one(env, "feat-a")?;
+
+            let before = metadata_commit_count(env)?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?
+                .assert_failure();
+            let after = metadata_commit_count(env)?;
+
+            assert_eq!(
+                after - before,
+                2,
+                "a refusal must commit the lock and the unlock and nothing else — \
+                 a third and fourth mean a rollback ran for a write that never happened"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    /// The same properties for `demote`, which shares the shape.
+    #[test]
+    fn a_refused_demote_says_why_once_writes_nothing_and_leaves_no_lock() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            make_feature(env, "feat-a")?;
+
+            // Nothing is promoted, so this is a planner refusal.
+            let before = metadata_commit_count(env)?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["demote", "feat-a", "dev"])
+                .execute()?;
+            let stderr = result.stderr();
+
+            result.assert_failure();
+            assert_eq!(
+                occurrences(&stderr, "Error: "),
+                1,
+                "the cause must be reported once:\n{stderr}"
+            );
+            assert_eq!(
+                metadata_commit_count(env)? - before,
+                2,
+                "the lock pair and nothing else — see \
+                 `a_refused_promote_writes_no_metadata_commit`"
+            );
+            assert!(
+                !env.read_hitch_config()?
+                    .environments
+                    .get("dev")
+                    .expect("dev was declared")
+                    .is_locked(),
+                "a refusal must not re-apply the lock `with_locked_env` released"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    /// A rollback that *does* fire must also leave the environment unlocked.
+    ///
+    /// The refusals above never reach the apply, so they never arm the snapshot.
+    /// This one does: the environment is approval-gated, the plan is blocked, and
+    /// the apply then fails while creating the request — because the sole
+    /// approver is the requester, who cannot approve their own. So the snapshot
+    /// is armed, the rollback runs, and the restored snapshot is the *pre-lock*
+    /// one. Before the fix the restored snapshot was the pre-unlock one, so this
+    /// path wedged the environment exactly as the refusals above did, on the one
+    /// input that has always been reproducible.
+    #[test]
+    fn a_rollback_that_fires_still_leaves_the_environment_unlocked() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            make_feature(env, "feat-a")?;
+            env.hitch
+                .run()
+                .args(&[
+                    "set",
+                    "dev",
+                    "--requires-approval",
+                    "true",
+                    // The harness's own identity, so the request has no eligible
+                    // approver and the apply fails rather than asking.
+                    "--add-approver",
+                    "test@example.com",
+                ])
+                .execute()?
+                .assert_success();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
+                .execute()?;
+            let stdout = result.stdout();
+            result.assert_failure();
+
+            // The rollback ran, so this test cannot pass vacuously: an unarmed
+            // snapshot would print nothing about rolling back.
+            assert!(
+                stdout.contains("Rolling back"),
+                "this test is about the armed path, so the rollback must have \
+                 fired:\n{stdout}"
+            );
+            assert_eq!(
+                occurrences(&stdout, "Rolling back"),
+                1,
+                "one repair, one line:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("attempting automatic rollback"),
+                "the lead-in used to restate the line that follows it:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("You can now retry"),
+                "the error already names what to do next, and on the failure \
+                 that reaches a rollback 'just retry' is the wrong advice:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("✅ ✓"),
+                "`log_success` already prints the glyph:\n{stdout}"
+            );
+
+            assert!(
+                !env.read_hitch_config()?
+                    .environments
+                    .get("dev")
+                    .expect("dev was declared")
+                    .is_locked(),
+                "restoring a pre-lock snapshot must not put the lock back"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
 }

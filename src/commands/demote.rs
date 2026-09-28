@@ -79,14 +79,18 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     // Step 3: Plan, then apply, both under the environment lock. Planning inside
     // the lock is forced, not stylistic: `with_locked_env` commits the lock to
     // `hitch-metadata` first, so a plan built outside it is stale on arrival.
+    //
+    // The snapshot is captured before the lock and armed inside it — see
+    // `promote::run` for why both halves of that are load-bearing.
+    let snapshot = crate::utils::rollback::capture_config_state(context)?;
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            rollback_info.previous_config = crate::utils::rollback::capture_config_state(context)?;
             let plan = plan_demote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
 
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
+            rollback_info.previous_config = snapshot;
             let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
             Ok((plan, Some(receipt)))
         })
@@ -108,11 +112,13 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
         // `promote::run`.
         Ok((_plan, None)) => Ok(()),
         Err(e) => {
-            // Show the actual error FIRST so user knows why it failed
-            context.log_error(&format!("Error: {}", e));
-
-            // A failure before the lock was taken captured no config, and
-            // rolling back to "nothing" is not a rollback.
+            // The cause is reported once, by `main` — see `promote::run`. This
+            // arm used to print it as `❌ Error: …` and hand the same error back
+            // for `Error: …`, so a refused demote put one sentence on stderr
+            // twice under two prefixes.
+            //
+            // An unarmed snapshot means the apply was never reached: nothing was
+            // written, so there is nothing to undo and no repair to report.
             if rollback_info.previous_config.is_none() {
                 return Err(e);
             }
@@ -120,7 +126,7 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
                 crate::utils::rollback::rollback_metadata_changes(context, &rollback_info)
             {
                 context.log_error(&format!(
-                    "CRITICAL: Failed to rollback metadata changes: {}. Manual intervention may be required.",
+                    "CRITICAL: failed to roll back the declaration: {}. Manual intervention may be required.",
                     rollback_err
                 ));
             }
