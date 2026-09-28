@@ -16,7 +16,7 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Twelve commits, so far:
+Thirteen commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
@@ -29,6 +29,7 @@ Twelve commits, so far:
 - `1b6ad19` — P6: `src/core/render.rs`, the shared plan and receipt renderers; a global `--json`; `--dry-run` on all four mutating commands; `GlobalFlags` and `DiagnosticOutputSink`; and the one gated plan-then-apply sequence (`rebuild_environment_gated`).
 - `da81531` — the P6 plan's "Execution notes", and the master plan's P6 status.
 - `6f9e261` — the P7 plan (9 tasks, 11 global constraints, 8 recorded deviations).
+- `4c844aa` — P7: the matrix (`core/status.rs`), the explanation model (`core/why.rs`), `render_matrix`/`render_why`/`render_equation`; `hitch status` rebuilt around the matrix with `--environments`; `hitch why`; the read-only `--json` envelope; and the P7 tail (nested-rebuild narration suppressed by default, the `Result` block's grouping and dedupe, and holds from a nested rebuild reaching the receipt).
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
