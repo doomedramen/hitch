@@ -1,8 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::{
-    environment::get_locked_by_user,
-    logging::{operation_info, operation_success, validation_start, validation_success},
-};
+use crate::core::render::{confirm_plan, emit_receipt, render_plan};
+use crate::operations::metadata::{apply_metadata_plan, plan_lock};
 use crate::utils::validation::{validate_environment_exists, validate_name};
 use anyhow::Result;
 use clap::Args;
@@ -15,41 +13,33 @@ pub struct LockCommand {
 }
 
 pub fn run(args: LockCommand, context: &GlobalContext) -> Result<()> {
-    operation_info(context, "Locking", &args.env_name);
+    // Step 1: Precondition checks. Only the two that are *not* about the lock
+    // itself — a name that is not a name, and an environment that does not
+    // exist. The lock's own preconditions belong to the planner, which is what
+    // puts them in a plan above the refusal rather than in an error with
+    // nothing above it; see `plan_lock`.
+    validate_name(&args.env_name, "Environment")?;
+    validate_environment_exists(context, &args.env_name)?;
 
-    // Step 1: Precondition checks
-    validate_preconditions(context, &args.env_name)?;
+    // Step 2: Plan, then apply. No `with_locked_env`: the environment lock is
+    // what this command *is*, and taking it through the mechanism meant to
+    // protect an environment would have `hitch lock dev` deadlock on its own
+    // pre-check. No rollback either, and none is needed — the apply is one
+    // `modify_metadata` closure that runs before the write. See
+    // `operations::metadata`'s header.
+    let plan = plan_lock(context, &args.env_name)?;
 
-    // Step 2: Lock the environment
-    crate::utils::prelude::lock_environment(context, &args.env_name)?;
-
-    operation_success(context, "locked", &args.env_name);
-    Ok(())
-}
-
-/// Validate that environment exists and is ready for locking
-fn validate_preconditions(context: &GlobalContext, env_name: &str) -> Result<()> {
-    validation_start(context, "lock");
-
-    // Validate input name
-    validate_name(env_name, "Environment")?;
-
-    // Check if environment exists
-    validate_environment_exists(context, env_name)?;
-
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = &config.environments[env_name];
-
-    // Check if environment is already locked
-    if environment.is_locked() {
-        return Err(anyhow::anyhow!(
-            "Environment '{}' is already locked by '{}'",
-            env_name,
-            get_locked_by_user(context, env_name)?
-        ));
+    // A lock asks for no confirmation: it is one keystroke, and §10.2 is
+    // explicit that showing a plan is not conditional on a prompt existing.
+    // `confirm_plan` therefore takes `decide_gate`'s `Proceed` arm and prints.
+    if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+        return Ok(());
     }
 
-    validation_success(context, env_name, "Lock validation");
+    // Step 3: Apply and report. The refusal — already locked — arrives as an
+    // `Err` from here, not from a pre-check, so the plan above it is the one
+    // the reader was just shown.
+    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    emit_receipt(context, &plan, &receipt)?;
     Ok(())
 }

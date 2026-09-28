@@ -2553,4 +2553,483 @@ mod tests {
         })?;
         Ok(())
     }
+
+    /// The metadata operations — `lock`, `unlock`, `set`, `add`, `remove` — are
+    /// planned in their own nested module because they share almost nothing with
+    /// the three above except the harness: nothing composes, nothing anchors,
+    /// and the only dependency a plan has is one SHA. The tests are grouped by
+    /// the property they defend rather than by command, because the properties
+    /// are what generalise.
+    mod metadata {
+        use super::*;
+        use hitch::operations::metadata::{
+            apply_metadata_plan, plan_add_environment, plan_lock, plan_remove_environment,
+            plan_set_environment, plan_unlock, EnvironmentSet, MetadataPlanDetail,
+        };
+        use hitch::operations::model::{
+            EnvironmentField, EnvironmentFieldValue, OperationKind, PlanWarningKind,
+        };
+
+        type MetaPlan = OperationPlan<MetadataPlanDetail>;
+
+        /// A `hitch set` with no flags spelled out, so each test says only the
+        /// flag it is about. `Option::None` everywhere means "not requested",
+        /// and every field of `EnvironmentSet` is optional precisely so a caller
+        /// that names one flag is not also asserting that the other six are
+        /// absent by accident.
+        fn set_args() -> EnvironmentSet {
+            EnvironmentSet::default()
+        }
+
+        fn lock_plan(env: &TestEnvironment) -> anyhow::Result<MetaPlan> {
+            plan_lock(&context_for(env, false)?, "dev")
+        }
+
+        fn unlock_plan(env: &TestEnvironment) -> anyhow::Result<MetaPlan> {
+            plan_unlock(&context_for(env, false)?, "dev")
+        }
+
+        fn set_plan(env: &TestEnvironment, requested: EnvironmentSet) -> anyhow::Result<MetaPlan> {
+            plan_set_environment(&context_for(env, false)?, "dev", &requested)
+        }
+
+        /// The approver list as it stands on the ref, which is the only place
+        /// `hitch set` writes it — the working tree is not where the
+        /// declaration lives.
+        fn approvers_on_ref(env: &TestEnvironment) -> anyhow::Result<Vec<String>> {
+            let config: serde_json::Value = serde_json::from_str(&git_plain(
+                &env.temp_dir,
+                &["show", "hitch-metadata:hitch.json"],
+            )?)?;
+            Ok(config["environments"]["dev"]["approvers"]
+                .as_array()
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|s| s.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+
+        /// How many commits `hitch-metadata` has, so "wrote no metadata commit"
+        /// can be asserted against a number rather than a reflog line.
+        fn metadata_commit_count(env: &TestEnvironment) -> anyhow::Result<usize> {
+            Ok(
+                git_plain(&env.temp_dir, &["rev-list", "--count", "hitch-metadata"])?
+                    .trim()
+                    .parse()?,
+            )
+        }
+
+        /// Turn on the approval gate with a coherent configuration, so a test
+        /// about the *auto* `min_approvals` starts from a known one-approver,
+        /// zero-threshold state rather than from whatever the fixture left.
+        fn with_approval_gate(env: &TestEnvironment) -> anyhow::Result<()> {
+            declare_branches(env, "dev", &[])?;
+            let mut config: serde_json::Value = serde_json::from_str(&git_plain(
+                &env.temp_dir,
+                &["show", "hitch-metadata:hitch.json"],
+            )?)?;
+            config["environments"]["dev"]["requires_approval"] = serde_json::json!(false);
+            config["environments"]["dev"]["min_approvals"] = serde_json::json!(0);
+            config["environments"]["dev"]["approvers"] = serde_json::json!([]);
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?;
+            env.git
+                .run(&["commit", "-m", "test: clear the approval gate"])?;
+            env.git.run(&["checkout", "main"])?;
+            Ok(())
+        }
+
+        // ------------------------------------------------------------------
+        // The fingerprint: one SHA, and nothing else.
+        // ------------------------------------------------------------------
+
+        #[test]
+        fn a_lock_plan_tracks_only_the_declaration() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                make_feature(env, "auth")?;
+                declare_branches(env, "dev", &["auth"])?;
+
+                let plan = lock_plan(env)?;
+
+                assert!(
+                    plan.fingerprint.refs.is_empty(),
+                    "a lock moves no ref, so tracking one would be a dependency \
+                     nobody could invalidate: {:?}",
+                    plan.fingerprint.refs
+                );
+                assert!(
+                    plan.fingerprint.metadata_sha.is_some(),
+                    "and the declaration is the one thing it *does* depend on"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn a_lock_plan_describes_a_composition_that_does_not_change() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                make_feature(env, "auth")?;
+                declare_branches(env, "dev", &["auth"])?;
+
+                let plan = lock_plan(env)?;
+
+                // Both `Some` and equal is a *different fact* from `None`, and
+                // renders differently. A lock composes nothing and changes
+                // nothing about what is composed, so there is a composition on
+                // both sides and it is the same one.
+                assert_eq!(
+                    plan.current, plan.proposed,
+                    "a lock must not claim the environment will look different"
+                );
+                assert!(
+                    plan.compositions.is_empty(),
+                    "and it composes nothing, so it predicts no result: {:?}",
+                    plan.compositions
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn a_lock_plan_names_the_ref_it_writes_and_who_holds_the_lock() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                let plan = lock_plan(env)?;
+
+                assert_eq!(
+                    plan.effects.len(),
+                    1,
+                    "a lock is one metadata edit and nothing else: {:?}",
+                    plan.effects
+                );
+                match &plan.effects[0] {
+                    PlannedEffect::MetadataChange {
+                        refname,
+                        description,
+                    } => {
+                        assert_eq!(
+                            refname, "refs/heads/hitch-metadata",
+                            "the declaration is the ref it lands on"
+                        );
+                        let email = context_for(env, false)?.git().get_user_email()?;
+                        assert!(
+                            description.contains(&email),
+                            "the resolved user email, not a placeholder: {description}"
+                        );
+                    }
+                    other => panic!("a lock is a metadata change, not {other:?}"),
+                }
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        // ------------------------------------------------------------------
+        // The decision is the resolved edit, not the flags.
+        // ------------------------------------------------------------------
+
+        #[test]
+        fn a_set_that_changes_nothing_plans_nothing_and_writes_nothing() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                with_approval_gate(env)?;
+                let mut requested = set_args();
+                requested.add_approver = vec!["alice@example.com".to_string()];
+                let plan = set_plan(env, requested.clone())?;
+                apply_metadata_plan(&context_for(env, false)?, &plan, &mut |_| {})?;
+
+                // Second run: the approver is already there, so the resolved
+                // edit is empty. A planner built from the *flags* would name an
+                // add, and its executor would perform one.
+                let before = metadata_commit_count(env)?;
+                let second = set_plan(env, requested)?;
+                assert!(
+                    second.detail.changes.is_empty(),
+                    "the decision is the difference, and there is none: {:?}",
+                    second.detail.changes
+                );
+                assert_eq!(
+                    second.current, second.proposed,
+                    "so the environment will not look different either"
+                );
+
+                let receipt = apply_metadata_plan(&context_for(env, false)?, &second, &mut |_| {})?;
+                assert_eq!(
+                    receipt.outcome,
+                    OperationOutcome::NoChange,
+                    "a successful no-op is a successful outcome, not a degenerate \
+                     or failed one"
+                );
+                assert_eq!(
+                    metadata_commit_count(env)?,
+                    before,
+                    "and an empty edit must not spend a commit to say so"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn enabling_approval_names_the_threshold_it_raises() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                with_approval_gate(env)?;
+                let mut requested = set_args();
+                requested.requires_approval = Some(true);
+                requested.add_approver = vec!["alice@example.com".to_string()];
+
+                let plan = set_plan(env, requested)?;
+
+                let fields: Vec<EnvironmentField> =
+                    plan.detail.changes.iter().map(|c| c.field).collect();
+                assert_eq!(
+                    fields,
+                    vec![
+                        EnvironmentField::RequiresApproval,
+                        EnvironmentField::MinApprovals,
+                        EnvironmentField::Approvers,
+                    ],
+                    "in the order the executor applies them"
+                );
+                let min = plan
+                    .detail
+                    .changes
+                    .iter()
+                    .find(|c| c.field == EnvironmentField::MinApprovals)
+                    .expect("a threshold of 0 with approval on would not validate");
+                assert_eq!(
+                    (min.old.clone(), min.new.clone()),
+                    (
+                        EnvironmentFieldValue::Count(0),
+                        EnvironmentFieldValue::Count(1)
+                    ),
+                    "the auto-raise is part of the edit, and a plan that did not \
+                     name it would print one edit and apply two"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn a_new_base_named_beside_a_promoted_branch_names_the_branch_it_absorbs(
+        ) -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                make_feature(env, "auth")?;
+                make_feature(env, "billing")?;
+                declare_branches(env, "dev", &["auth", "billing"])?;
+
+                let mut requested = set_args();
+                requested.base = Some("auth".to_string());
+                let plan = set_plan(env, requested)?;
+
+                assert!(
+                    plan.detail
+                        .changes
+                        .iter()
+                        .any(|c| c.field == EnvironmentField::Base),
+                    "the base is the edit that was asked for"
+                );
+                assert_eq!(
+                    plan.detail.branch_absorbed_by_base.as_deref(),
+                    Some("auth"),
+                    "and it takes the promoted branch of the same name with it. \
+                     Today's preview does not mention this at all, so a user \
+                     who read the plan would not know their list shrank."
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        // ------------------------------------------------------------------
+        // Create and destroy are claims, not gaps.
+        // ------------------------------------------------------------------
+
+        #[test]
+        fn an_added_environment_has_no_current_composition() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                let plan = plan_add_environment(&context_for(env, false)?, "qa", None)?;
+
+                assert!(
+                    plan.current.is_none(),
+                    "there is no `qa` to project before it exists, and an \
+                     empty projection would be a statement about a thing that \
+                     is not there: {:?}",
+                    plan.current
+                );
+                let proposed = plan.proposed_composition();
+                assert_eq!(proposed.environment, "qa");
+                assert_eq!(proposed.base, "main");
+                assert!(
+                    proposed.branches.is_empty(),
+                    "a new environment promotes nothing"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn a_removed_environment_has_no_proposed_composition() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                env.hitch
+                    .run()
+                    .args(&["add", "qa"])
+                    .execute()?
+                    .assert_success();
+
+                let plan = plan_remove_environment(&context_for(env, false)?, "qa")?;
+
+                assert!(plan.proposed.is_none(), "and none afterwards: it is gone");
+                let current = plan.current_composition();
+                assert_eq!(current.environment, "qa");
+                assert_eq!(current.base, "main");
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        // ------------------------------------------------------------------
+        // Identity.
+        // ------------------------------------------------------------------
+
+        #[test]
+        fn a_plan_id_is_stable_across_runs_and_tracks_the_declaration() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                let first = lock_plan(env)?;
+                let again = lock_plan(env)?;
+                assert_eq!(
+                    first.id, again.id,
+                    "nothing changed, so the same inputs must name the same plan"
+                );
+
+                // Any metadata write moves the SHA, and the ID is derived from
+                // the fingerprint — which is the only way a consumer can tell
+                // two plans apart without diffing them.
+                env.hitch
+                    .run()
+                    .args(&["add", "qa"])
+                    .execute()?
+                    .assert_success();
+                let moved = lock_plan(env)?;
+                assert_ne!(
+                    first.id, moved.id,
+                    "a different declaration is a different plan, or a stale \
+                     receipt could be matched to a fresh plan"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn an_unlock_someone_else_holds_is_a_refusal_in_a_plan() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                // Someone else takes the lock, by writing the declaration
+                // directly: the point is what a *later* command does about a
+                // lock that is not its author's, and `hitch lock` is already
+                // tested above.
+                env.hitch
+                    .run()
+                    .args(&["lock", "dev"])
+                    .execute()?
+                    .assert_success();
+                let mut config: serde_json::Value = serde_json::from_str(&git_plain(
+                    &env.temp_dir,
+                    &["show", "hitch-metadata:hitch.json"],
+                )?)?;
+                config["environments"]["dev"]["locked_by"] = serde_json::json!("someone@else.com");
+                env.git.run(&["checkout", "hitch-metadata"])?;
+                env.fs
+                    .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+                env.git.run(&["add", "hitch.json"])?;
+                env.git
+                    .run(&["commit", "-m", "test: hand the lock to someone else"])?;
+                env.git.run(&["checkout", "main"])?;
+
+                let plan = unlock_plan(env)?;
+
+                // A refusal, not an error: `plan_unlock` returns `Ok`, so the
+                // reader sees the plan *and* the reason it will not apply. An
+                // `Err` here would have printed the reason with nothing above
+                // it, which is the pre-P4 experience.
+                let blocking = plan
+                    .blocked_by()
+                    .expect("another holder must refuse an unlock");
+                assert_eq!(blocking.kind, PlanWarningKind::PolicyRefusal);
+                assert!(
+                    blocking.message.contains("someone@else.com"),
+                    "naming the holder is the whole content of the refusal: {}",
+                    blocking.message
+                );
+                assert_eq!(
+                    plan.current, plan.proposed,
+                    "and a blocked plan proposes nothing that will not happen"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn the_approver_list_the_apply_writes_is_the_resolved_one() -> anyhow::Result<()> {
+            let framework = HitchTestFramework::new()?;
+            framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+                with_approval_gate(env)?;
+                let mut requested = set_args();
+                requested.add_approver = vec![
+                    "alice@example.com".to_string(),
+                    "bob@example.com".to_string(),
+                ];
+                requested.requires_approval = Some(true);
+                let plan = set_plan(env, requested)?;
+                apply_metadata_plan(&context_for(env, false)?, &plan, &mut |_| {})?;
+
+                assert_eq!(
+                    approvers_on_ref(env)?,
+                    vec!["alice@example.com", "bob@example.com"],
+                    "the declaration is the record, and it is the only place a \
+                     reader would look for who must approve"
+                );
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(())
+        }
+
+        #[test]
+        fn every_metadata_kind_names_its_own_command() -> anyhow::Result<()> {
+            // A remedy is the one line a user copies verbatim, so a kind that
+            // borrowed another operation's name would send them somewhere else.
+            let cases: Vec<(OperationKind, &str)> = vec![
+                (OperationKind::Lock, "lock"),
+                (OperationKind::Unlock, "unlock"),
+                (OperationKind::SetEnvironment, "set"),
+                (OperationKind::AddEnvironment, "add"),
+                (OperationKind::RemoveEnvironment, "remove"),
+            ];
+            for (kind, verb) in cases {
+                assert_eq!(
+                    kind.command_hint("dev", "").split(' ').nth(1),
+                    Some(verb),
+                    "{kind} must not send the user to another command"
+                );
+            }
+            Ok(())
+        }
+    }
 }

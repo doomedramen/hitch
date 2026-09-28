@@ -446,6 +446,14 @@ fn plan_declaration_change(
         }
     }
     if let Some(reason) = &refused {
+        // No remedy override, and the reason is why: for *this* refusal the
+        // default is right. The reason text already names the unblocker — "Fix
+        // feat-b first: `git checkout feat-b && git rebase main`" — and the
+        // promote itself is genuinely still the command to run once the rebase
+        // lands. `hitch lock dev` on a locked environment is the opposite case,
+        // where the default names the command that just failed and can only
+        // fail again; that is the distinction a remedy override exists for, and
+        // getting it the wrong way round is worse than not having it.
         warnings.push(PlanWarning::policy_refusal(reason.clone()));
     }
 
@@ -940,20 +948,27 @@ fn apply_blocked_plan(
             })
         }
         PlanWarningKind::PolicyRefusal => {
-            let reason = plan
+            // The *whole* warning, not just its message: the remedy is a
+            // separate field on it, and taking the message alone would be the
+            // shape that made the remedy unreachable.
+            let blocking = plan
                 .warnings
                 .iter()
                 .find(|w| w.kind == PlanWarningKind::PolicyRefusal)
-                .map(|w| w.message.clone())
-                .unwrap_or_default();
+                .expect("the arm is only reachable through `blocked_by`, which returns a warning");
             Err(PlanApplyError::PolicyBlocked {
                 environment: environment.to_string(),
-                reason,
+                reason: blocking.message.clone(),
                 // `command_hint` already spells the full `hitch …` invocation.
                 // The extra `"hitch {}"` wrapper this used to add printed the
                 // word twice — `hitch hitch promote …` — in the one remedy a
-                // user is told to copy.
-                remedy: plan.kind.command_hint(environment, &plan.detail.argument),
+                // user is told to copy. And the hint is only the default: a
+                // refusal whose unblocker is a different command supplies its
+                // own, because "re-run the promote that just conflicted" is not
+                // an answer.
+                remedy: blocking
+                    .remedy_or(&plan.kind.command_hint(environment, &plan.detail.argument))
+                    .to_string(),
             }
             .into_anyhow())
         }

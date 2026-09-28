@@ -540,6 +540,20 @@ pub struct PlanWarning {
     /// force every executor to string-match the message to tell them apart —
     /// two representations of one fact, which is how they drift apart.
     pub kind: PlanWarningKind,
+    /// What the reader should do instead, when the default is wrong.
+    ///
+    /// `None` means "use the operation's own `command_hint`", which is the right
+    /// answer for a *stale* plan — re-run the command and it recalculates. It is
+    /// the wrong answer for a *refusal*, where the reader's options are
+    /// something else entirely: `hitch lock dev` on an already-locked
+    /// environment was told "To proceed: `hitch lock dev`", the exact command
+    /// that had just failed, because the remedy was the operation's identity
+    /// rather than the operation's unblocker.
+    ///
+    /// Only the planner can fill this in — it is the half that knows what the
+    /// reader's actual next move is — so a new refusal must say what that is
+    /// rather than inheriting a re-run.
+    pub remedy: Option<String>,
 }
 
 impl PlanWarning {
@@ -549,6 +563,7 @@ impl PlanWarning {
         Self {
             message: message.into(),
             kind: PlanWarningKind::ApprovalRequired,
+            remedy: None,
         }
     }
 
@@ -558,6 +573,7 @@ impl PlanWarning {
         Self {
             message: message.into(),
             kind: PlanWarningKind::PolicyRefusal,
+            remedy: None,
         }
     }
 
@@ -566,7 +582,25 @@ impl PlanWarning {
         Self {
             message: message.into(),
             kind: PlanWarningKind::Advisory,
+            remedy: None,
         }
+    }
+
+    /// Replace the default "re-run this command" remedy with the one that
+    /// actually unblocks the reader.
+    pub fn with_remedy(mut self, remedy: impl Into<String>) -> Self {
+        self.remedy = Some(remedy.into());
+        self
+    }
+
+    /// The remedy to print, falling back to the operation's own command.
+    ///
+    /// The fallback is why this lives on the warning rather than at each raise
+    /// site: two raise sites spelling out the same "warning's remedy if it has
+    /// one, else `command_hint`" would be two places for a future warning kind
+    /// to be added to and be silently given the wrong one.
+    pub fn remedy_or<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.remedy.as_deref().unwrap_or(fallback)
     }
 
     pub fn is_blocking(&self) -> bool {

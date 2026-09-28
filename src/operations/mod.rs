@@ -63,3 +63,11 @@ pub mod declaration;
 pub mod model;
 pub mod rebuild;
 pub mod release;
+// A metadata operation's rollback story is different, and deliberately so: see
+// this file's header. A metadata plan's whole effect is one `modify_metadata`
+// closure, and that closure runs *before* the write, so a closure that errors
+// commits nothing — there is no state a rollback would have to repair. Promote
+// and demote keep theirs because their nested rebuild can fail *after* the edit
+// lands. Do not copy promote's rollback here; there is no failure for it to
+// serve.
+pub mod metadata;

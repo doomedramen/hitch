@@ -20,9 +20,11 @@ mod tests {
 
             // Lock the environment
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            // The command's own "Successfully locked 'dev'!" line is gone; the
+            // receipt says it, and names the holder — which that line never did.
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully locked 'dev'!");
+                .assert_stdout_contains("lock 'dev' held by");
 
             // Verify environment is locked
             let config = env.read_hitch_config()?;
@@ -64,7 +66,7 @@ mod tests {
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully unlocked environment 'dev'");
+                .assert_stdout_contains("release the lock on 'dev'");
 
             // Verify environment is unlocked
             let config = env.read_hitch_config()?;
@@ -229,7 +231,7 @@ mod tests {
                 let result = env.hitch.run().args(&["lock", env_name]).execute()?;
                 result
                     .assert_success()
-                    .assert_stdout_contains(&format!("Successfully locked '{}'", env_name));
+                    .assert_stdout_contains(&format!("lock '{}' held by", env_name));
             }
 
             // Verify all environments are locked
@@ -276,10 +278,9 @@ mod tests {
             // Unlock all environments
             for env_name in ["dev", "qa", "staging"] {
                 let result = env.hitch.run().args(&["unlock", env_name]).execute()?;
-                result.assert_success().assert_stdout_contains(&format!(
-                    "Successfully unlocked environment '{}'",
-                    env_name
-                ));
+                result
+                    .assert_success()
+                    .assert_stdout_contains(&format!("release the lock on '{}'", env_name));
             }
 
             // Verify all environments are unlocked
@@ -329,9 +330,11 @@ mod tests {
 
             // Lock environment with promoted branches
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            // The command's own "Successfully locked 'dev'!" line is gone; the
+            // receipt says it, and names the holder — which that line never did.
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully locked 'dev'!");
+                .assert_stdout_contains("lock 'dev' held by");
 
             // Verify environment is locked and branches are preserved
             let config = env.read_hitch_config()?;
@@ -496,6 +499,189 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result.assert_success();
 
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    // ── plan → apply → receipt ──────────────────────────────────────────
+    //
+    // A lock is the smallest operation in the CLI: one ref, one commit, no
+    // composition, no push. It is therefore the sharpest test of whether the
+    // three documents render *and mean* something at this size. The two
+    // refusals are the other half — they used to print a bare error with no plan
+    // above it, and a refusal whose plan the reader cannot see is a refusal
+    // they have to reconstruct.
+
+    #[test]
+    fn a_lock_shows_a_plan_and_a_receipt_both_naming_the_locker() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            let out = result.stdout();
+            result.assert_success();
+
+            assert!(out.contains("Will change"), "the plan: {out}");
+            assert!(out.contains("Applied"), "and the receipt: {out}");
+            // Both halves name the ref, and nothing else may: a third mention
+            // would be the command talking over its own receipt, and one fewer
+            // would mean a document without its effect.
+            assert_eq!(
+                out.matches("hitch-metadata").count(),
+                2,
+                "once in the plan's 'Will change' and once in the receipt's \
+                 effects, and nowhere else: {out}"
+            );
+            assert!(
+                out.contains('@'),
+                "a lock that does not name its holder is the one thing it \
+                 exists to prevent: {out}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_lock_emits_a_json_document_with_its_plan_and_its_receipt() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env.hitch.run().args(&["lock", "dev", "--json"]).execute()?;
+            let stdout = result.stdout();
+            result.assert_success();
+
+            // Under `--json` the document is the only thing on stdout; a log line
+            // ahead of it would be a channel split that regressed, so report the
+            // whole body rather than digging the document out of it.
+            let document: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+                panic!("`--json` stdout is not a JSON document ({e}):\n{stdout}")
+            });
+            assert_eq!(document["schema_version"], 1, "{document}");
+            assert_eq!(document["plan"]["kind"], "Lock", "{document}");
+            assert!(document["receipt"].is_object(), "{document}");
+            assert_eq!(document["receipt"]["operation"], "Lock", "{document}");
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_lock_that_is_refused_still_shows_the_plan_it_refused() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["lock", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            let out = result.stdout();
+            let err = result.stderr();
+            result.assert_failure();
+            assert!(
+                err.contains("already locked"),
+                "and it says why, in the same words as before: {err}"
+            );
+            // The plan, so the reader can see what was refused instead of
+            // reconstructing it. Asserted as the *refusal section* rather than
+            // as the ref name, because a blocked plan has no effect rows: it
+            // proposes nothing that will not happen, so a `Will change` line
+            // reading "lock 'dev' held by …" above a refusal that it cannot lock
+            // would be a plan claiming the very effect it is refusing. See
+            // `plan_declaration_change`'s "Effects. Empty for a blocked plan".
+            assert!(
+                out.contains("Why this cannot apply"),
+                "the refusal is in a plan, not in a bare error: {out}"
+            );
+            assert!(
+                !out.contains("Will change"),
+                "and the plan proposes nothing it will not do: {out}"
+            );
+            assert!(
+                !out.contains("hitch-metadata"),
+                "which means it names no ref to write, and does not pretend to: {out}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn an_unlock_by_a_stranger_writes_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["lock", "dev"])
+                .execute()?
+                .assert_success();
+
+            // The declared holder becomes someone else, so the unlock below is
+            // by a stranger. The repository identity is unchanged, which is the
+            // point: the *declared* holder decides, not who is at the keyboard.
+            let mut config: serde_json::Value = serde_json::from_str(
+                &env.git
+                    .run(&["show", "hitch-metadata:hitch.json"])?
+                    .stdout(),
+            )?;
+            config["environments"]["dev"]["locked_by"] = serde_json::json!("someone@else.com");
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            env.fs
+                .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+            env.git.run(&["add", "hitch.json"])?;
+            env.git
+                .run(&["commit", "-m", "test: hand the lock to someone else"])?;
+            env.git.run(&["checkout", "main"])?;
+            let before = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
+            result
+                .assert_failure()
+                .assert_stderr_contains("someone@else.com");
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "hitch-metadata"])?
+                    .stdout()
+                    .trim(),
+                before,
+                "a refused unlock must not spend a metadata commit"
+            );
             Ok::<(), anyhow::Error>(())
         });
 

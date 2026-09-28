@@ -64,26 +64,18 @@ pub mod environment {
 }
 
 /// Reusable logging patterns
+///
+/// One function survives, and it is a `--verbose` line for a pre-plan check —
+/// the only kind of check that is allowed to narrate, because it is the only
+/// kind that reaches a reader *before* there is a plan to reach. `validation_start`,
+/// `operation_info` and `operation_success` were deleted with `hitch lock`, their
+/// last caller: each was a second voice for an operation that has a plan and a
+/// receipt, and the whole point of those two documents is that they are the only
+/// ones.
 pub mod logging {
     use crate::commands::global_context::GlobalContext;
 
-    /// Standard validation success message
     pub fn validation_success(context: &GlobalContext, item: &str, item_type: &str) {
         context.log_verbose(&format!("✓ {} validation passed for '{}'", item_type, item));
-    }
-
-    /// Standard validation start message
-    pub fn validation_start(context: &GlobalContext, operation: &str) {
-        context.log_verbose(&format!("Validating {} preconditions...", operation));
-    }
-
-    /// Standard operation success message
-    pub fn operation_success(context: &GlobalContext, operation: &str, target: &str) {
-        context.log_success(&format!("Successfully {} '{}'!", operation, target));
-    }
-
-    /// Standard operation info message
-    pub fn operation_info(context: &GlobalContext, operation: &str, target: &str) {
-        context.log_info(&format!("{} '{}'...", operation, target));
     }
 }

@@ -161,7 +161,20 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
 
     if !plan.warnings.is_empty() {
         out.push('\n');
-        heading(&mut out, "Needs your decision");
+        // Two headings, decided by the *warnings present* and not by the
+        // renderer being called from somewhere new. "Needs your decision" is
+        // right for an approval request and wrong for a policy refusal, whose
+        // whole content is that no decision available to this reader will let
+        // it through — and a heading inviting a decision that cannot help is
+        // the kind of thing a reader acts on before reading the line under it.
+        heading(
+            &mut out,
+            if plan.warnings.iter().any(|w| w.is_blocking()) {
+                "Why this cannot apply"
+            } else {
+                "Needs your decision"
+            },
+        );
         for warning in &plan.warnings {
             // By *kind*, never by matching the message: a renderer that
             // string-matched would silently reclassify every warning whose
@@ -2392,6 +2405,7 @@ mod tests {
         p.warnings = vec![PlanWarning {
             message: "promote would conflict with an existing promoted branch".into(),
             kind: PlanWarningKind::PolicyRefusal,
+            remedy: None,
         }];
         let refused = render_plan(&p);
         assert!(
@@ -2405,6 +2419,7 @@ mod tests {
         p.warnings = vec![PlanWarning {
             message: "'qa' will not be rebuilt — compatibility check failed".into(),
             kind: PlanWarningKind::Advisory,
+            remedy: None,
         }];
         let advisory = render_plan(&p);
         assert!(

@@ -143,6 +143,37 @@
    `⏳ Locking` / `⏳ Updating` / `⏳ Rebuilding` / `⚠ Rebuilt … with N held`
    quartet does not.
 
+6. **`PlanWarning` gained an optional `remedy`, and the rule is that only a
+   *refusal* may fill it in.** `PlanApplyError::PolicyBlocked` prints
+   "Nothing was changed. To proceed:\n  {remedy}" from `OperationKind::command_hint`,
+   which is the right answer for a *stale* plan — re-run the command and it
+   recalculates — and the wrong answer for a refusal, where the reader's options
+   are something else entirely. A refused `hitch lock dev` was told "To proceed:
+   `hitch lock dev`", the exact command that had just failed, under a heading
+   asserting that it would work. The field is on the warning rather than at the
+   raise site because the *planner* is the only half that knows the reader's
+   real next move, and the two raise sites spelling out their own
+   `remedy.unwrap_or(command_hint)` would be two places for a future warning
+   kind to be added and silently inherit the wrong one.
+
+   The rule that came out of the manual check, and the reason it is stated here
+   rather than just implemented: **the default is right more often than not.**
+   `declaration.rs`'s promote-conflict refusal deliberately does *not* override,
+   because there the reason text already names the rebase and re-running the
+   promote afterwards genuinely is the command to run. Two tests assert
+   `hitch promote branch-b dev` in the remedy and failed on a well-meant
+   override. A remedy override is for the case where the default names a
+   command that *cannot* work — and getting it the wrong way round is worse
+   than not having the mechanism, because the wrong override is a confident
+   instruction where the default was merely imperfect.
+
+   A remedy may be a sentence rather than a command, and the two refusals that
+   need one both use it: `hitch unlock dev` on an unlocked environment gets
+   "nothing to undo — 'dev' is already unlocked" (not `hitch lock dev`, which
+   would answer a question the reader did not ask), and an unlock of someone
+   else's lock gets "ask someone@else.com to unlock it" (no command helps, and
+   one that failed is worse than none).
+
 ---
 
 ### Task 1 — The model: an optional projection pair, and a delete effect
@@ -299,7 +330,7 @@
   `plan_add_environment`/`plan_remove_environment`, `apply_metadata_plan`,
   `validate_metadata_plan`, `EnvironmentChange` (the add/remove direction enum).
 
-- [ ] **Tests first**, in `tests/integration/plan_apply_tests.rs`, and failing:
+- [x] **Tests first**, in `tests/integration/plan_apply_tests.rs`, and failing:
   - a lock plan's `fingerprint.refs` is **empty** and its `metadata_sha` is
     `Some`;
   - a lock plan's `current == proposed` and `compositions` is empty;
@@ -323,30 +354,46 @@
   - each planner's `id` is stable across two runs against an unchanged
     repository, and differs when `metadata_sha` differs.
 
-- [ ] `MetadataPlanDetail`:
+- [x] `MetadataPlanDetail` — as built, in `src/operations/metadata.rs`. Two
+  changes from the sketch above, both because the sketch was shaped for a
+  family that does not exist:
+
   ```rust
   pub struct MetadataPlanDetail {
       pub environment: String,
-      /// The user's original positional argument, for the remedy.
       pub argument: String,
-      /// The resolved edit, in the order the executor applies it. Never the
-      /// clap args: see Constraint 2.
+      pub edit: MetadataEdit,          // stated, not inferred
       pub changes: Vec<EnvironmentFieldChange>,
-      /// Collateral the edit causes but no flag names — a branch demoted
-      /// because it became the base, `min_approvals` auto-set to 1.
-      pub collateral: Vec<CollateralChange>,
+      pub branch_absorbed_by_base: Option<String>,   // singular: Option, not Vec
+      pub locked_by: Option<String>,
       pub base: Option<String>,
-      pub branches: Option<Vec<PinnedBranch>>,
   }
   ```
-  `base`/`branches` are `None` for a lock/unlock (nothing composes) and `Some`
-  for `set`/`add`/`remove`, which is what lets the executor rebuild the
-  projection's `proposed` side without re-reading the declaration.
 
-- [ ] `EnvironmentChange { Create { base }, Destroy }` — one enum, one planner,
+  - **The collateral is an `Option<String>`, not a `Vec` of a one-variant
+    enum.** There is exactly one kind of collateral and it is singular — at most
+    one promoted branch can equal the new base — so `Vec<CollateralChange>` was a
+    shape with no second member, and a reader holding it would have to check
+    whether emptiness meant "no collateral" or "a collateral kind not yet
+    implemented". `min_approvals` is *not* collateral: it is a second
+    `EnvironmentFieldChange`, and listing it twice is what the plan forbids.
+  - **The detail carries a stated `MetadataEdit`, not a shape the executor
+    infers.** The first draft inferred the edit from "are there changes?", and
+    that is wrong in a way a test would have found late: an `unlock` carries no
+    field changes, and so does `hitch set dev --min-approvals 1` against a
+    threshold that was already 1. An executor that guessed would unlock on one
+    and write settings on the other, both silently. A discriminator the plan
+    *states* is worth more than one it leaves to be inferred.
+  - **`branches` is gone.** The sketch justified it as letting the executor
+    rebuild the projection's `proposed` side, but the projection is already in
+    the plan, in `proposed` — so the field would have been a second copy of a
+    value the plan already carries, readable by only one function, and one
+    refactor away from a second source of truth.
+
+- [x] `EnvironmentChange { Create { base }, Destroy }` — one enum, one planner,
   two entry points, mirroring `DeclarationChange`.
 
-- [ ] `plan_lock` / `plan_unlock` — one implementation over
+- [x] `plan_lock` / `plan_unlock` — one implementation over
   `LockChange { Lock, Unlock }`, because the two differ in exactly one boolean
   and in which refusal they raise. Neither takes a `ConfirmationRequirement`
   beyond `not_required()`: a lock is one keystroke, and §10.2 is explicit that a
@@ -354,39 +401,39 @@
   are no silent `hitch lock`s in this CLI), which is `decide_gate`'s `Proceed`
   arm, not a new behaviour.
 
-- [ ] `plan_set_environment` — reads the environment once, computes the
+- [x] `plan_set_environment` — reads the environment once, computes the
   resolved `changes` list, and raises **refusals as
   `PlanWarning::policy_refusal`** rather than as `Err`, so that the reader sees
   the plan *and* the reason it cannot apply. The approval-config validation
   (`set.rs:334-343`) moves here from the closure: a decision the plan can make
   at plan time belongs in the plan.
 
-- [ ] `plan_add_environment` / `plan_remove_environment` — `create_or_destroy`
+- [x] `plan_add_environment` / `plan_remove_environment` — `create_or_destroy`
   over `EnvironmentChange`. The `remove` refusals that are *not* about
   confirmation (no such environment) stay `Err`; the two that are *about*
   confirmation (branches promoted, environment locked) become a plan plus a
   `ConfirmationRequirement::required(reason)`, per deviation 3.
 
-- [ ] `validate_metadata_plan` — the same body as
+- [x] `validate_metadata_plan` — the same body as
   `operations::rebuild::validate_plan` minus the resolution loop, with the
   environment and argument read off `plan.detail`. **Do not call
   `rebuild::validate_plan`**: it is typed to `RebuildPlanDetail` and its
   resolution arm would be dead weight here. If the duplication becomes three
   copies, extract then — not before.
 
-- [ ] `apply_metadata_plan` — one `modify_metadata` closure that applies
+- [x] `apply_metadata_plan` — one `modify_metadata` closure that applies
   `detail.changes` **verbatim** and re-reads the environment afterwards to
   assemble `resulting_state` and the `MetadataChange` `AppliedEffect`. No
   `discard` is needed: a metadata plan anchors nothing, which is the one thing
   `apply_rebuild_plan`'s `finally` exists to guarantee and the reason a metadata
   planner has no equivalent to forget.
 
-- [ ] Register `pub mod metadata;` in `src/operations/mod.rs:62`, and extend the
+- [x] Register `pub mod metadata;` in `src/operations/mod.rs:62`, and extend the
   module header's "One planner per operation" paragraph to say that a
   *metadata* operation's rollback story is Constraint 3's, so the next planner
   author does not copy promote's.
 
-- [ ] `just format && just format-check && just lint && just test`.
+- [x] `just format && just format-check && just lint && just test`.
 
 ---
 
@@ -399,7 +446,7 @@
 - Consumes: `plan_lock`/`plan_unlock`, `apply_metadata_plan`, `emit_receipt`.
 - Produces: nothing new. Two commands that plan, apply and emit.
 
-- [ ] **Test first**: `tests/integration/lock_unlock_tests.rs` gains
+- [x] **Test first**: `tests/integration/lock_unlock_tests.rs` gains
   (a) `a_lock_shows_a_plan_and_a_receipt_and_names_the_locker` — the plan's
   `Will change` row and the receipt's effect row both name `hitch-metadata` and
   the harness identity; (b) `hitch lock dev --json` emits
@@ -408,22 +455,53 @@
   and **no** plan printed, because the refusal happens before the plan exists;
   (d) `hitch unlock dev` by a non-locker still exits 1 and writes no commit.
 
-- [ ] `lock.rs::run` becomes: pre-checks → `plan_lock` → `emit_plan` (or
+- [x] `lock.rs::run` becomes: pre-checks → `plan_lock` → `emit_plan` (or
   `confirm_plan`, which is a no-`Ask` `Proceed` here) → `apply_metadata_plan` →
   `emit_receipt`. Delete `operation_info`/`operation_success` calls
   (`lock.rs:18`, `:26`) and `validation_start` (`:32`).
 
-- [ ] `unlock.rs::run` likewise. Delete `log_info("Unlocking environment …")`
+- [x] `unlock.rs::run` likewise. Delete `log_info("Unlocking environment …")`
   (`:15`) and `log_success` (`:23-26`).
 
-- [ ] Delete `operation_info`, `operation_success` and `validation_start` from
+- [x] Delete `operation_info`, `operation_success` and `validation_start` from
   `src/utils/command_helpers.rs:86`, `:81`, `:76` — `lock.rs` was their only
   caller. Keep `validation_success` (`:71`), which `release.rs:159` still uses,
   and note in its doc comment that it is a `--verbose` line for a pre-plan
   check, which is the only thing that is allowed to be one.
 
-- [ ] Manual check against a throwaway repo: `hitch lock dev`, `hitch unlock dev`,
+- [x] Manual check against a throwaway repo: `hitch lock dev`, `hitch unlock dev`,
   `hitch lock dev` twice, and the same four under `--json`.
+
+  The manual check found three defects the tests could not have, all of them in
+  the *refusal* path, which is why it is a required step and not a formality:
+
+  1. **A blocked plan still listed the effect it was refusing.** The plan's
+     `Will change` read `lock 'dev' held by test@example.com` directly above a
+     refusal that it cannot lock. `plan_declaration_change` already had the rule
+     — "Effects. Empty for a blocked plan, because none of them will happen"
+     (`declaration.rs:531`) — and this module was the first planner to be
+     written without inheriting it. All three planners here now branch on
+     `blocked`.
+  2. **`⛔` sat under a heading reading "Needs your decision."** True for an
+     approval request; the opposite of true for a policy refusal, whose whole
+     content is that no decision available to the reader will let it through.
+     `render_plan` now picks the heading from `any(w.is_blocking())` — "Why
+     this cannot apply" — rather than from where it was called.
+  3. **The refusal's remedy was the command the reader had just run.** A
+     refused `hitch lock dev` printed "Nothing was changed. To proceed: `hitch
+     lock dev`" — the one move guaranteed to refuse identically, printed under
+     a heading that says it will work. Fixed at the model: `PlanWarning` gained
+     an optional `remedy`, set by the planner (the only half that knows the
+     reader's real next move) and read through `remedy_or(command_hint)`. See
+     the entry in the Deviations section.
+
+  A fourth thing the check confirmed *is* right: the promote-conflict refusal
+  in `declaration.rs` deliberately does **not** override its remedy, because
+  there the default is correct — the reason text already names the rebase, and
+  re-running the promote after it is genuinely the command to run. Two tests
+  assert `hitch promote branch-b dev` and would have failed on an override;
+  getting a remedy override the wrong way round is worse than not having the
+  mechanism.
 
 ---
 

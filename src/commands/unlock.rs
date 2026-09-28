@@ -1,5 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::utils::command_helpers::logging::validation_success;
+use crate::core::render::{confirm_plan, emit_receipt, render_plan};
+use crate::operations::metadata::{apply_metadata_plan, plan_unlock};
 use crate::utils::validation::{validate_environment_exists, validate_name};
 use anyhow::Result;
 use clap::Args;
@@ -12,60 +13,21 @@ pub struct UnlockCommand {
 }
 
 pub fn run(args: UnlockCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!("Unlocking environment '{}'...", args.env_name));
+    // Step 1: Precondition checks, and only those that are not about the lock.
+    // "Not locked" and "locked by someone else" are the planner's business, so
+    // that both arrive in a plan the reader can see above the refusal. See
+    // `plan_unlock`.
+    validate_name(&args.env_name, "Environment")?;
+    validate_environment_exists(context, &args.env_name)?;
 
-    // Step 1: Precondition checks
-    validate_preconditions(context, &args.env_name)?;
+    let plan = plan_unlock(context, &args.env_name)?;
 
-    // Step 2: Unlock the environment
-    unlock_environment(context, &args.env_name)?;
-
-    context.log_success(&format!(
-        "Successfully unlocked environment '{}'!",
-        args.env_name
-    ));
-    Ok(())
-}
-
-/// Validate that environment exists and is ready for unlocking
-fn validate_preconditions(context: &GlobalContext, env_name: &str) -> Result<()> {
-    context.log_verbose("Validating unlock preconditions...");
-
-    // Validate input name
-    validate_name(env_name, "Environment")?;
-
-    // Check if environment exists
-    validate_environment_exists(context, env_name)?;
-
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = &config.environments[env_name];
-
-    // Check if environment is locked
-    if !environment.is_locked() {
-        return Err(anyhow::anyhow!(
-            "Environment '{}' is not currently locked",
-            env_name
-        ));
+    // No confirmation, for the same reason `hitch lock` takes none.
+    if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+        return Ok(());
     }
 
-    // Check if environment is locked by the current user
-    let current_user = context.git().get_user_email()?;
-    if let Some(locked_by) = &environment.locked_by {
-        if locked_by != &current_user {
-            return Err(anyhow::anyhow!(
-                "Environment '{}' is locked by '{}'. Only the locker can unlock it.",
-                env_name,
-                locked_by
-            ));
-        }
-    }
-
-    validation_success(context, env_name, "Unlock validation");
+    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    emit_receipt(context, &plan, &receipt)?;
     Ok(())
-}
-
-/// Unlock an environment
-fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
-    crate::utils::prelude::unlock_environment(context, env_name)
 }
