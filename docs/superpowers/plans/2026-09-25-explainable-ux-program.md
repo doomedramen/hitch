@@ -16,7 +16,7 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Fifteen commits, so far:
+Sixteen commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
@@ -32,6 +32,7 @@ Fifteen commits, so far:
 - `4c844aa` — P7: the matrix (`core/status.rs`), the explanation model (`core/why.rs`), `render_matrix`/`render_why`/`render_equation`; `hitch status` rebuilt around the matrix with `--environments`; `hitch why`; the read-only `--json` envelope; and the P7 tail (nested-rebuild narration suppressed by default, the `Result` block's grouping and dedupe, and holds from a nested rebuild reaching the receipt).
 - `317c4e4` — the P7 plan's "As executed" and the master plan's P7 status, recording P7's own commit SHA.
 - `5e0c833` — the receipt's warning contract: the plan→receipt warning copy removed from all four sites, the `Skipping rebuild` narrator removed, the `PolicyBlocked` remedy's doubled `hitch hitch` fixed, and `a_receipt_never_restates_a_plan_warning` plus `test_a_hold_is_stated_once_not_twice` holding the result. The fourth duplicate P7 recorded as deliberately unfixed.
+- `faa7d27` — a refusal reports its cause once, and never rolls back what was not written: the duplicated `Error:` print in `promote`/`demote` removed, the rollback snapshot captured before `with_locked_env` and armed only after the confirmation gate (so a refusal no longer re-locks the environment it refused in), and the rollback narration reduced to one line about the repair. Closes the `rollback_metadata_changes` / `with_locked_env` ordering item P6 found and P7 recorded.
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
