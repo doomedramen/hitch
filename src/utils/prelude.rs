@@ -1859,7 +1859,7 @@ fn try_replay_resolution(
     if !confirmed_keys.contains(&key) {
         if context.assume_yes {
             context.log_warning(&format!(
-                "♻️ Applying recorded resolution {} for '{}' (recorded by {} at {}) under \
+                "Applying recorded resolution {} for '{}' (recorded by {} at {}) under \
                  --yes/--replay-resolutions.",
                 &key[..12.min(key.len())],
                 branch,
@@ -1919,7 +1919,7 @@ fn try_replay_resolution(
     match apply {
         Ok(new_composed) => {
             context.log_info(&format!(
-                "♻️ Reused recorded resolution {} for '{}' (by {}).",
+                "Reused recorded resolution {} for '{}' (by {}).",
                 &key[..12.min(key.len())],
                 branch,
                 res.meta.recorded_by

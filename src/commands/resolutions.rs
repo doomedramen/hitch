@@ -110,7 +110,7 @@ fn forget(context: &GlobalContext, key: &str) -> Result<()> {
     let key = resolve_key_prefix(context, key)?;
     let refname = format!("{}{}", resolutions::RESOLUTIONS_REF_PREFIX, key);
     context.git().delete_ref(&refname)?;
-    context.log_success(&format!("✓ Forgot resolution {}", key));
+    context.log_success(&format!("Forgot resolution {}", key));
     context.log_info(
         "This only deletes the local ref. If it was shared, delete it on origin too: \
          git push origin --delete <refname>",
@@ -125,7 +125,7 @@ fn fetch(context: &GlobalContext) -> Result<()> {
         .fetch_refspec(resolutions::RESOLUTIONS_REFSPEC)?;
     let all = resolutions::list_resolutions(context.git())?;
     context.log_success(&format!(
-        "✓ {} resolution(s) now available locally.",
+        "{} resolution(s) now available locally.",
         all.len()
     ));
     Ok(())

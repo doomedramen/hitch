@@ -12,6 +12,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 
 use crate::core::state::{ChangedInput, RepositoryStateSnapshot};
+use crate::types::OnConflict;
 use crate::utils::build_record::PinnedBranch;
 use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::CompatibilityConflict;
@@ -30,7 +31,56 @@ pub enum OperationKind {
     Promote,
     Demote,
     Release,
+    /// Flip an environment's human-facing lock on, recording the locking user.
+    /// A separate variant from `Unlock` because the two are separate commands
+    /// with separate refusals: a remedy that named the wrong one would send
+    /// someone to lock the environment they were trying to unlock.
+    Lock,
+    Unlock,
+    /// Edit an environment's own settings — base, conflict policy, approval
+    /// policy, approvers. One operation, because one `hitch set` invocation can
+    /// change all of them, and the plan has to show the whole *resolved* edit as
+    /// a single decision rather than one plan per flag.
+    SetEnvironment,
+    AddEnvironment,
+    RemoveEnvironment,
+    /// The prune sweep. Its own variant because its effects are deletions
+    /// rather than updates, which is the one place a receipt's effect list can
+    /// contain something that did not happen.
+    Cleanup,
+    /// The declaration change an approval has authorised, applied by
+    /// `hitch approve` once the threshold is met.
+    ///
+    /// A promotion or a demotion, but not one the user ran — they ran
+    /// `hitch approve`. That is the entire reason this is not just `Promote`:
+    /// the approval is already committed and the request's status is `Approved`,
+    /// not `Applied`, so a stale plan's remedy has to be `hitch approve
+    /// <request-id>`, which resumes at exactly the point the failure left off. A
+    /// `hitch promote` remedy would send the user to re-authorise something they
+    /// already authorised — and would then be refused for being already
+    /// promoted, because the declaration edit has already landed.
+    ApprovalApply,
 }
+
+/// Every variant, in one place, so a test can sweep them.
+///
+/// The enum is a growing enumeration — a new operation adds a variant — but this
+/// list is what makes adding one *deliberate*: forgetting to add it here is
+/// silent, and the only thing that catches it is a test that iterates the list
+/// and checks the properties a kind is supposed to have.
+pub const OPERATION_KINDS: [OperationKind; 11] = [
+    OperationKind::Rebuild,
+    OperationKind::Promote,
+    OperationKind::Demote,
+    OperationKind::Release,
+    OperationKind::Lock,
+    OperationKind::Unlock,
+    OperationKind::SetEnvironment,
+    OperationKind::AddEnvironment,
+    OperationKind::RemoveEnvironment,
+    OperationKind::Cleanup,
+    OperationKind::ApprovalApply,
+];
 
 impl OperationKind {
     /// The command a user would type to re-run this operation, used to end
@@ -38,31 +88,64 @@ impl OperationKind {
     /// never carry a remedy string that disagrees with itself.
     ///
     /// `argument` is the positional argument the user actually typed, and it
-    /// only has a meaning for the two operations that take one. `Rebuild` and
-    /// `Release` name their environment and ignore it; that is why the
-    /// parameter is documented here rather than hidden behind a second
-    /// method — and why the plan records the user's original argument rather
-    /// than a branch list it derived. For the environment-name-expands-to-
-    /// branches form of promote, `hitch promote dev qa` and
-    /// `hitch promote feat-a feat-b qa`-shaped intents are *different commands
-    /// that do the same thing*, and a remedy has to name the one that was run.
+    /// only has a meaning for the operations that take one. `Rebuild`,
+    /// `Release`, `Lock`, `Unlock` and `SetEnvironment` name their environment
+    /// and ignore it; that is why the parameter is documented here rather than
+    /// hidden behind a second method — and why the plan records the user's
+    /// original argument rather than a branch list it derived. For the
+    /// environment-name-expands-to-branches form of promote, `hitch promote dev
+    /// qa` and `hitch promote feat-a feat-b qa`-shaped intents are *different
+    /// commands that do the same thing*, and a remedy has to name the one that
+    /// was actually run.
+    ///
+    /// Total, with no wildcard arm, because a remedy is the one line a user
+    /// copies verbatim after a refusal. A `_ =>` here would put a
+    /// plausible-looking *wrong* command on the screen, which is worse than no
+    /// remedy at all.
     pub fn command_hint(self, environment: &str, argument: &str) -> String {
         match self {
             OperationKind::Rebuild => format!("hitch rebuild {}", environment),
             OperationKind::Release => format!("hitch release {}", environment),
             OperationKind::Promote => format!("hitch promote {} {}", argument, environment),
             OperationKind::Demote => format!("hitch demote {} {}", argument, environment),
+            OperationKind::Lock => format!("hitch lock {}", environment),
+            OperationKind::Unlock => format!("hitch unlock {}", environment),
+            // `hitch set <env>` and nothing more. A stale plan means the
+            // environment changed since this plan was built, so re-running
+            // recomputes the whole edit from whatever is true then — printing a
+            // guess at which flags the user originally typed would be a command
+            // that runs and does something else.
+            OperationKind::SetEnvironment => format!("hitch set {}", environment),
+            OperationKind::AddEnvironment => format!("hitch add {}", environment),
+            OperationKind::RemoveEnvironment => format!("hitch remove {}", environment),
+            // With `--apply`, not bare `hitch cleanup`: a cleanup plan is only
+            // ever *shown* without it, so the remedy for a stale plan has to be
+            // the command that would actually do the work.
+            OperationKind::Cleanup => "hitch cleanup --apply".to_string(),
+            OperationKind::ApprovalApply => format!("hitch approve {}", argument),
         }
     }
 }
 
 impl fmt::Display for OperationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // One lowercase word per variant, and never two: this is the plan JSON's
+        // `"kind"` and the head of the plan `id`, so it is a stability surface a
+        // consumer could reasonably key on. `plan_worries`, `sash_ok` and
+        // `sash_fail` each have exactly one word, which is the in-tree evidence
+        // that a two-word variant is a shape nobody needs.
         match self {
             OperationKind::Rebuild => write!(f, "rebuild"),
             OperationKind::Promote => write!(f, "promote"),
             OperationKind::Demote => write!(f, "demote"),
             OperationKind::Release => write!(f, "release"),
+            OperationKind::Lock => write!(f, "lock"),
+            OperationKind::Unlock => write!(f, "unlock"),
+            OperationKind::SetEnvironment => write!(f, "set"),
+            OperationKind::AddEnvironment => write!(f, "add"),
+            OperationKind::RemoveEnvironment => write!(f, "remove"),
+            OperationKind::Cleanup => write!(f, "cleanup"),
+            OperationKind::ApprovalApply => write!(f, "approve"),
         }
     }
 }
@@ -95,42 +178,92 @@ pub enum OperationIntent {
     },
     /// Merge `<environment>`'s promoted branches into `target`.
     ReleaseEnvironment { environment: String, target: String },
+    /// Turn `<environment>`'s human-facing lock on.
+    LockEnvironment { environment: String },
+    /// Turn `<environment>`'s human-facing lock off.
+    UnlockEnvironment { environment: String },
+    /// Change `<environment>`'s own settings.
+    ///
+    /// `changes` is the **resolved** edit — the difference between the
+    /// declaration as it is and the declaration as it will be — and not the flags
+    /// the user typed. The difference matters in exactly the case that is easiest
+    /// to get wrong: `hitch set dev --add-approver alice@example.com` run twice
+    /// makes no change the second time, and a plan built from the *flags* would
+    /// claim an edit that does not exist. This enum therefore has to carry what
+    /// the planner resolved, or the headline is lying about the operation.
+    SetEnvironment {
+        environment: String,
+        changes: Vec<EnvironmentFieldChange>,
+    },
+    /// Declare a new environment on `base`.
+    AddEnvironment { environment: String, base: String },
+    /// Drop an environment from the declaration.
+    RemoveEnvironment { environment: String },
+    /// Sweep the archive refs older than the retention window.
+    ///
+    /// `candidates` is what the sweep *found*, not what it will necessarily
+    /// delete — the executor can fail a delete, and a plan that promised a
+    /// deletion which then failed would be a promise, not a prediction. It also
+    /// means an empty plan is meaningful: "nothing to prune" is an answer, and
+    /// the plan says so rather than rendering an empty document.
+    Cleanup { candidates: Vec<String> },
+    /// The declaration change an approval has already authorised, applied by
+    /// `hitch approve`.
+    ///
+    /// Shaped like a promote or a demote because the *edit* is one of those, and
+    /// separately named because the user ran `hitch approve`, not `hitch
+    /// promote` — so the headline and the remedy have to name the command that
+    /// was run.
+    ApplyApproval {
+        request_id: String,
+        environment: String,
+        branches: Vec<String>,
+    },
 }
 
-impl fmt::Display for OperationIntent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OperationIntent::RebuildEnvironment { environment } => {
-                write!(f, "Rebuild '{}' from its declared inputs", environment)
-            }
-            OperationIntent::PromoteBranches {
-                environment,
-                branches,
-            } => write!(f, "Promote {} → {}", named(branches), environment),
-            OperationIntent::DemoteBranches {
-                environment,
-                branches,
-            } => write!(f, "Demote {} from {}", named(branches), environment),
-            OperationIntent::ReleaseEnvironment {
-                environment,
-                target,
-            } => {
-                write!(f, "Release '{}' to '{}'", environment, target)
-            }
-        }
-    }
+/// One field of an environment's settings, as a machine token.
+///
+/// The *name* of the field is a stable token here and the word a person reads is
+/// chosen in `core::render`, for the same reason `OperationKind` has a `Display`
+/// but a renderer still picks its own headline: a model that carries prose gets
+/// re-worded by every consumer that formats it, and they drift.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentField {
+    Base,
+    OnConflict,
+    RequiresApproval,
+    MinApprovals,
+    Approvers,
 }
 
-/// `'feat-a'` for one branch, `2 branches (a, b)` for several. Naming them is
-/// worth the extra width exactly when there is more than one, because that is
-/// the form the user is least likely to have typed and most likely to want
-/// confirmed before the declaration is written.
-fn named(branches: &[String]) -> String {
-    match branches.len() {
-        0 => "nothing".to_string(),
-        1 => format!("'{}'", branches[0]),
-        n => format!("{} branches ({})", n, branches.join(", ")),
-    }
+/// One setting's value, typed so the renderer can word it without inspecting
+/// JSON.
+///
+/// A `String` would have been simpler and would have been the bug: `set` already
+/// prints the Rust `Debug` of `OnConflict` (`Eject` / `Halt`) straight to the
+/// user, which is a type name where a policy name belongs. Carrying the typed
+/// value is what makes the renderer responsible for the words.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub enum EnvironmentFieldValue {
+    Branch(String),
+    ConflictPolicy(OnConflict),
+    Flag(bool),
+    Count(usize),
+    Addresses(Vec<String>),
+}
+
+/// One field's before-and-after, as the planner resolved it.
+///
+/// `old` and `new` are both present rather than a single `Option<new>` because
+/// every field of an `Environment` has a value on both sides of a `hitch set` —
+/// there is no "unset" for `base` or `min_approvals` — and an `Option` would
+/// have to invent one to mean "unchanged", which is a lie the renderer would then
+/// have to special-case.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentFieldChange {
+    pub field: EnvironmentField,
+    pub old: EnvironmentFieldValue,
+    pub new: EnvironmentFieldValue,
 }
 
 /// What hitch knows about one environment's branch composition at one moment.
@@ -275,6 +408,16 @@ pub enum PlannedEffect {
         old: Option<String>,
         new: String,
     },
+    /// A local ref this plan will *remove*, which `LocalRefUpdate` cannot
+    /// express: a deleted ref has no value to update it to, and a variant
+    /// carrying `new: String` would have to carry a lie or a sentinel.
+    ///
+    /// No `old` here either, and that is deliberate rather than an omission. The
+    /// plan's claim that the ref exists, and at which value, is
+    /// [`PlanFingerprint::refs`]'s job — the same claim every other effect makes
+    /// about its ref — so carrying it a second time in the effect is a copy that
+    /// can disagree with the fingerprint the validator actually checks.
+    LocalRefDelete { refname: String },
     /// A ref on the remote, reached via a push. Predicted only when the
     /// command will actually attempt one.
     RemoteRefUpdate {
@@ -332,6 +475,7 @@ impl PlannedEffect {
         match self {
             PlannedEffect::MetadataChange { refname, .. }
             | PlannedEffect::LocalRefUpdate { refname, .. }
+            | PlannedEffect::LocalRefDelete { refname }
             | PlannedEffect::RemoteRefUpdate { refname, .. }
             | PlannedEffect::DependentEnvironmentRebuild { refname, .. }
             | PlannedEffect::PromotionPrune { refname, .. } => Cow::Borrowed(refname),
@@ -341,10 +485,12 @@ impl PlannedEffect {
 
     /// The value this effect claims will be there afterwards. `None` for the
     /// variants whose `description` is human text and has no single ref value
-    /// to predict.
+    /// to predict — and for a deletion, where the honest prediction is that
+    /// there will be no value.
     pub fn predicted_value(&self) -> Option<&str> {
         match self {
             PlannedEffect::MetadataChange { .. }
+            | PlannedEffect::LocalRefDelete { .. }
             | PlannedEffect::DependentEnvironmentRebuild { .. }
             | PlannedEffect::PromotionPrune { .. } => None,
             PlannedEffect::LocalRefUpdate { new, .. }
@@ -597,10 +743,25 @@ pub struct OperationPlan<I> {
     pub kind: OperationKind,
     pub intent: OperationIntent,
     pub fingerprint: PlanFingerprint,
-    /// What is true now.
-    pub current: EnvironmentProjection,
-    /// What will be true after this plan applies.
-    pub proposed: EnvironmentProjection,
+    /// What is true now, as an environment composition.
+    ///
+    /// `None` means *there is no composition on this side of the operation*,
+    /// which is a claim rather than a gap. `hitch add qa` has no `qa` to
+    /// project before it runs, and no honest `EnvironmentProjection` for an
+    /// environment that does not exist — a projection is a statement about a
+    /// thing, and there is no thing yet. The type that could express it anyway
+    /// (`base: ""`) would be the same class of model that lies.
+    ///
+    /// The other `None` case is ordinary: an operation that composes nothing
+    /// and changes nothing about what is composed — `hitch lock dev`. Both
+    /// sides are then `Some` and *equal*, which is a different fact from
+    /// `None` and renders differently: see [`crate::core::render::render_plan`].
+    pub current: Option<EnvironmentProjection>,
+    /// What will be true after this plan applies. The same two `None` cases as
+    /// [`Self::current`], and for `hitch remove qa` it is the one that is
+    /// `None`: the environment is gone afterwards, so there is no composition
+    /// left to describe.
+    pub proposed: Option<EnvironmentProjection>,
     pub compositions: Vec<CompositionPlan>,
     pub effects: Vec<PlannedEffect>,
     pub unaffected: Vec<UnaffectedResource>,
@@ -621,6 +782,35 @@ impl<I> OperationPlan<I> {
             .first()
             .map(|c| c.result_sha.as_str())
             .unwrap_or_default()
+    }
+
+    /// The composition this plan starts from, for an operation that has one.
+    ///
+    /// `expect`, not a fallback, and the message is the reason. The only callers
+    /// are planners whose operation is a change *to an environment that exists*
+    /// — a promote, a demote, an approved apply — so a `None` here is a planner
+    /// bug rather than a case to render around. Substituting an empty
+    /// environment for a missing one would be the model claiming a composition
+    /// of nothing where one demonstrably exists, which is worse than a panic
+    /// because it would be reported to the user as a fact.
+    pub fn current_composition(&self) -> &EnvironmentProjection {
+        self.current.as_ref().expect(
+            "this operation edits an environment that exists, so it has a `current` \
+             composition to describe",
+        )
+    }
+
+    /// The composition this plan ends at, for an operation that has one.
+    ///
+    /// The mirror of [`Self::current_composition`], and for the same reason. The
+    /// operations that legitimately have no proposed composition are the two that
+    /// create and destroy an environment, and neither of them has a *planner*
+    /// that wants this accessor — they are the `None` arms, by design.
+    pub fn proposed_composition(&self) -> &EnvironmentProjection {
+        self.proposed.as_ref().expect(
+            "this operation leaves an environment in place, so it has a `proposed` \
+             composition to describe",
+        )
     }
 
     /// The blocking warning that stops this plan, if any.
@@ -706,6 +896,15 @@ pub enum AppliedEffect {
         old: Option<String>,
         new: String,
     },
+    /// A local ref that no longer exists.
+    ///
+    /// `old` is the value that was observed immediately before the delete,
+    /// which is *not* the plan's prediction: a plan predicts the deletion, the
+    /// receipt reports the ref that was actually there when it happened. When
+    /// the two disagree — because the ref moved since the plan was built — the
+    /// fingerprint is what noticed, and the receipt's value is what a reviewer
+    /// needs to see.
+    LocalRefDelete { refname: String, old: String },
     RemoteRefUpdate {
         refname: String,
         old: Option<String>,
@@ -807,6 +1006,7 @@ impl AppliedEffect {
         match self {
             AppliedEffect::MetadataChange { refname, .. }
             | AppliedEffect::LocalRefUpdate { refname, .. }
+            | AppliedEffect::LocalRefDelete { refname, .. }
             | AppliedEffect::RemoteRefUpdate { refname, .. }
             | AppliedEffect::DependentEnvironmentRebuild { refname, .. }
             | AppliedEffect::PromotionPrune { refname, .. } => Cow::Borrowed(refname),
@@ -1256,8 +1456,8 @@ mod tests {
                 branches: vec!["feat-a".into()],
             },
             fingerprint: PlanFingerprint::new(),
-            current: projection.clone(),
-            proposed: projection,
+            current: Some(projection.clone()),
+            proposed: Some(projection),
             compositions: Vec::new(),
             effects: Vec::new(),
             unaffected: Vec::new(),
@@ -1330,6 +1530,84 @@ mod tests {
         assert_eq!(applied.refname(), "refs/tags/v1.2.0-3f9a2b1c");
     }
 
+    /// A deletion is not an update with an empty right-hand side, and this is
+    /// where that is pinned: `predicted_value` is `None` because the honest
+    /// prediction is that there will be no value, while `refname` still resolves
+    /// so the effect groups with every other effect on that ref.
+    #[test]
+    fn a_delete_names_its_ref_and_predicts_no_value() {
+        let planned = PlannedEffect::LocalRefDelete {
+            refname: "refs/hitch/prev/dev".into(),
+        };
+        assert_eq!(planned.refname(), "refs/hitch/prev/dev");
+        assert_eq!(planned.predicted_value(), None);
+
+        let applied = AppliedEffect::LocalRefDelete {
+            refname: "refs/hitch/prev/dev".into(),
+            old: "b".repeat(40),
+        };
+        assert_eq!(applied.refname(), "refs/hitch/prev/dev");
+    }
+
+    /// The properties every kind must have, swept over every kind.
+    ///
+    /// A sweep rather than a few spot-checks, because the failure mode of the
+    /// kind enum is *additive*: a new variant with a plausible-looking remedy
+    /// that names the wrong command is not caught by any test that only checks
+    /// `Promote`. Two properties are asserted for all of them, and both are about
+    /// a user's next move rather than about the model:
+    ///
+    /// - the remedy is a real `hitch` invocation, so it can be pasted;
+    /// - it names the *same* command as `Display`, so a plan's identity and its
+    ///   remedy cannot disagree about what the user ran.
+    #[test]
+    fn every_kind_names_a_command_and_its_re_own_name() {
+        for kind in OPERATION_KINDS {
+            let hint = kind.command_hint("dev", "feat-a");
+            assert!(
+                hint.starts_with("hitch "),
+                "{kind}'s remedy is not a hitch command: {hint}"
+            );
+            // The remedy's verb and the kind's name are the same word, except
+            // for the two kinds whose command and model name differ on purpose
+            // (`SetEnvironment` → `set`, `ApplyApproval` → `approve`), which is
+            // exactly why this comparison is written as a table rather than as
+            // an equality.
+            let verb = hint.strip_prefix("hitch ").unwrap();
+            let verb = verb.split(' ').next().unwrap();
+            assert_eq!(
+                verb,
+                kind.to_string(),
+                "{kind}'s remedy names a different command than the kind does"
+            );
+        }
+    }
+
+    /// `Cleanup` is the one kind whose remedy carries a flag, and it has to: a
+    /// cleanup plan is only ever *shown* without `--apply`, so naming the bare
+    /// command would send the user to a command that prints the same plan again.
+    #[test]
+    fn the_cleanup_remedy_names_the_command_that_would_do_the_work() {
+        assert_eq!(
+            OperationKind::Cleanup.command_hint("dev", "dev"),
+            "hitch cleanup --apply"
+        );
+    }
+
+    /// An approval's stale-plan remedy resumes the approval, not the promotion.
+    ///
+    /// The failure this pins: a `hitch promote` remedy would ask the user to
+    /// re-authorise something they already authorised, and would then be refused
+    /// for being already promoted — so the user is stuck between two commands,
+    /// both of which fail, at exactly the moment they most need a next step.
+    #[test]
+    fn an_approval_stale_plan_resumes_at_the_approval() {
+        assert_eq!(
+            OperationKind::ApprovalApply.command_hint("qa", "req-42"),
+            "hitch approve req-42"
+        );
+    }
+
     /// `refname()` is documented as a grouping key rather than an identity, so
     /// a plan that both stamps `hitch-metadata` and prunes from it must be
     /// buildable. This is the case that proves the doc rather than the claim.
@@ -1360,42 +1638,6 @@ mod tests {
             !DependentRebuildOutcome::Skipped("locked by another operation".into()).owes_effect()
         );
         assert!(DependentRebuildOutcome::Failed("merge base is gone".into()).owes_effect());
-    }
-
-    #[test]
-    fn the_intent_headline_names_what_will_change() {
-        assert_eq!(
-            OperationIntent::PromoteBranches {
-                environment: "dev".into(),
-                branches: vec!["feat-a".into()],
-            }
-            .to_string(),
-            "Promote 'feat-a' → dev"
-        );
-        assert_eq!(
-            OperationIntent::PromoteBranches {
-                environment: "qa".into(),
-                branches: vec!["a".into(), "b".into()],
-            }
-            .to_string(),
-            "Promote 2 branches (a, b) → qa"
-        );
-        assert_eq!(
-            OperationIntent::DemoteBranches {
-                environment: "qa".into(),
-                branches: vec!["a".into()],
-            }
-            .to_string(),
-            "Demote 'a' from qa"
-        );
-        assert_eq!(
-            OperationIntent::ReleaseEnvironment {
-                environment: "dev".into(),
-                target: "main".into(),
-            }
-            .to_string(),
-            "Release 'dev' to 'main'"
-        );
     }
 
     #[test]

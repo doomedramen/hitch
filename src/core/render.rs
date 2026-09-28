@@ -79,10 +79,30 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
         }
     }
 
-    for (title, projection) in [("Current", &plan.current), ("Proposed", &plan.proposed)] {
-        out.push('\n');
-        heading(&mut out, title);
-        out.push_str(&format!("  {}\n", describe_projection(projection)));
+    // The `Current`/`Proposed` pair exists to show a *transition*, so it
+    // renders only when there is one. Three arms, total, decided on the model
+    // rather than on the prose — which is why the third needs no invented
+    // wording:
+    //
+    // - both `Some` and equal: an operation that composes nothing and changes
+    //   nothing about what is composed (`hitch lock dev`). Rendering the pair
+    //   anyway would print `dev = main` twice — the same fact twice, saying
+    //   nothing about the lock, which is the thing the user is here to read.
+    // - both `Some` and different: the ordinary case, both sides.
+    // - exactly one `Some`: create and destroy. `hitch add qa` has no `qa` to
+    //   project before it runs, and `hitch remove qa` will have none after, so
+    //   `None` is the honest claim and the one side that exists speaks alone.
+    //   The headline already names which way the operation goes, so this arm
+    //   does not have to say "does not exist yet" as well.
+    if plan.current != plan.proposed {
+        for (title, projection) in [("Current", &plan.current), ("Proposed", &plan.proposed)] {
+            let Some(projection) = projection else {
+                continue;
+            };
+            out.push('\n');
+            heading(&mut out, title);
+            out.push_str(&format!("  {}\n", describe_projection(projection)));
+        }
     }
 
     // An anchor is a write hitch makes and then takes back, so it is listed —
@@ -190,6 +210,56 @@ pub fn plan_headline<I>(plan: &OperationPlan<I>) -> String {
             environment,
             target,
         } => format!("Release {environment} → {target}"),
+        // The seven metadata operations. Each names *what* it does and nothing
+        // it does not: `hitch set dev` with three fields changed says "3
+        // settings" rather than listing them, because the field list is the
+        // plan's "Will change" section and repeating it in the headline would
+        // print the same three words twice in one screen.
+        crate::operations::model::OperationIntent::LockEnvironment { environment } => {
+            format!("Lock {environment}")
+        }
+        crate::operations::model::OperationIntent::UnlockEnvironment { environment } => {
+            format!("Unlock {environment}")
+        }
+        crate::operations::model::OperationIntent::SetEnvironment {
+            environment,
+            changes,
+        } => format!(
+            "Set {environment} · {} setting",
+            count(changes.len(), "setting")
+        ),
+        crate::operations::model::OperationIntent::AddEnvironment { environment, base } => {
+            format!("Add {environment} on {base}")
+        }
+        crate::operations::model::OperationIntent::RemoveEnvironment { environment } => {
+            format!("Remove {environment}")
+        }
+        // The count, not the refs. Thirty refnames in a headline is a wall, and
+        // the plan's effect list is where a reader goes to see what was found.
+        crate::operations::model::OperationIntent::Cleanup { candidates } => format!(
+            "Clean up {} archived ref{}",
+            count(candidates.len(), ""),
+            if candidates.len() == 1 { "" } else { "s" }
+        ),
+        crate::operations::model::OperationIntent::ApplyApproval {
+            environment,
+            branches,
+            ..
+        } => format!("Approve {} → {environment}", list(branches)),
+    }
+}
+
+/// `1 setting`, `3 settings`, `0 settings` — count and noun, pluralised.
+///
+/// Separate from the branch-list helper above because a branch list *names* its
+/// members when there is one and only counts them when there are many, which is
+/// the opposite trade: a list of one refname is easier to read than "1 ref", and
+/// a list of thirty is not.
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
     }
 }
 
@@ -605,6 +675,10 @@ fn describe_planned_effect<I>(effect: &PlannedEffect, plan: &OperationPlan<I>) -
         } => {
             format!("publish {} → {}", previous(old.as_ref()), short(new))
         }
+        // "delete", not a transition with an empty right-hand side. The
+        // two-column table this renders into is resource → what happens, so the
+        // cell has to name the verb to be a sentence at all.
+        PlannedEffect::LocalRefDelete { refname } => format!("delete {}", short_ref(refname)),
         PlannedEffect::TagCreation { name, target_sha } => {
             format!("tag {name} at {}", short(target_sha))
         }
@@ -968,6 +1042,18 @@ fn render_applied_effect(out: &mut String, effect: &AppliedEffect) {
                 short_ref(refname),
                 previous(old.as_ref()),
                 short(new)
+            ));
+        }
+        // A ✓, because the ref *was* deleted — this is the observation, so it
+        // cannot be ✓ for something that failed (that is the receipt's `⧗`
+        // `Still owed` section's job). The value it had is the second line,
+        // because "deleted feat-x" without it cannot be distinguished from a
+        // delete of a *different* commit of the same branch.
+        AppliedEffect::LocalRefDelete { refname, old } => {
+            out.push_str(&format!(
+                "  ✓ delete {}\n    was {}\n",
+                short_ref(refname),
+                short(old)
             ));
         }
         // The name that exists, not the one that was intended — release
@@ -1796,8 +1882,13 @@ mod tests {
             kind: OperationKind::Promote,
             intent,
             fingerprint: PlanFingerprint::new(),
-            current: projection("dev", "main", &[]),
-            proposed: projection("dev", "main", &[]),
+            // Equal on both sides, so the fixture has no transition in it. Every
+            // test that is *about* a projection therefore has to differ the two
+            // explicitly, which is the property the three-arm rule is for: a test
+            // that sets only `proposed` and finds nothing rendered is being told
+            // it has not actually made a transition.
+            current: Some(projection("dev", "main", &[])),
+            proposed: Some(projection("dev", "main", &[])),
             compositions: Vec::new(),
             effects: Vec::new(),
             unaffected: Vec::new(),
@@ -1937,8 +2028,12 @@ mod tests {
             environment: "dev".into(),
             branches: vec!["login".into()],
         });
-        p.current = projection("dev", "main", &[("auth", &sha('1')), ("search", &sha('2'))]);
-        p.proposed = projection(
+        p.current = Some(projection(
+            "dev",
+            "main",
+            &[("auth", &sha('1')), ("search", &sha('2'))],
+        ));
+        p.proposed = Some(projection(
             "dev",
             "main",
             &[
@@ -1946,7 +2041,7 @@ mod tests {
                 ("search", &sha('2')),
                 ("login", &sha('3')),
             ],
-        );
+        ));
         let rendered = render_plan(&p);
         assert!(
             has_block(&rendered, "Current\n  dev = main + auth + search"),
@@ -1966,7 +2061,11 @@ mod tests {
         let mut p = plan(OperationIntent::RebuildEnvironment {
             environment: "dev".into(),
         });
-        p.proposed = projection("dev", "main", &[("zebra", &sha('1')), ("apple", &sha('2'))]);
+        p.proposed = Some(projection(
+            "dev",
+            "main",
+            &[("zebra", &sha('1')), ("apple", &sha('2'))],
+        ));
         let rendered = render_plan(&p);
         assert!(
             has_line(&rendered, "  dev = main + zebra + apple"),
@@ -1979,11 +2078,75 @@ mod tests {
 
     #[test]
     fn an_environment_with_no_promoted_branches_renders_as_its_base_alone() {
+        // The demote-to-empty shape, because the fixture's `current` and
+        // `proposed` are equal and a plan with no transition renders neither
+        // side — so setting only `proposed` here would test nothing.
         let mut p = plan(OperationIntent::RebuildEnvironment {
             environment: "dev".into(),
         });
-        p.proposed = projection("dev", "main", &[]);
+        p.current = Some(projection("dev", "main", &[("auth", &sha('1'))]));
+        p.proposed = Some(projection("dev", "main", &[]));
         assert!(has_line(&render_plan(&p), "  dev = main"));
+    }
+
+    /// The arm that keeps a metadata operation from narrating itself twice.
+    ///
+    /// Written as a test rather than left to the shape of the renderer because
+    /// the failure it guards against is silent in the worst way: a `hitch lock
+    /// dev` plan that printed `Current / dev = main` and `Proposed / dev = main`
+    /// would be *correct* on both lines and useless on both, and no review of the
+    /// rendered output would obviously catch it.
+    #[test]
+    fn a_plan_with_no_transition_renders_neither_side_of_the_equation() {
+        let mut p = plan(OperationIntent::LockEnvironment {
+            environment: "dev".into(),
+        });
+        p.effects.push(PlannedEffect::MetadataChange {
+            refname: "refs/heads/hitch-metadata".into(),
+            description: "lock 'dev'".into(),
+        });
+        let rendered = render_plan(&p);
+        assert!(
+            !rendered.contains("Current") && !rendered.contains("Proposed"),
+            "an unchanged composition has no transition to show: {rendered}"
+        );
+        // And the operation is still fully described — dropping the equation
+        // must not cost the plan its only effect. Matched as a substring because
+        // the effect table prefixes each row with its resource.
+        assert!(
+            rendered.contains("lock 'dev'"),
+            "dropping the equation must not cost the plan its effect: {rendered}"
+        );
+    }
+
+    /// The create arm: there is no `qa` before, so there is nothing to project.
+    #[test]
+    fn a_created_environment_proposes_an_equation_and_has_no_current_one() {
+        let mut p = plan(OperationIntent::AddEnvironment {
+            environment: "qa".into(),
+            base: "main".into(),
+        });
+        p.current = None;
+        p.proposed = Some(projection("qa", "main", &[]));
+        let rendered = render_plan(&p);
+        assert!(has_block(&rendered, "Proposed\n  qa = main"), "{rendered}");
+        assert!(!rendered.contains("Current"), "{rendered}");
+    }
+
+    /// The destroy arm: `qa` exists now and will not afterwards.
+    #[test]
+    fn a_removed_environment_has_a_current_equation_and_no_proposed_one() {
+        let mut p = plan(OperationIntent::RemoveEnvironment {
+            environment: "qa".into(),
+        });
+        p.current = Some(projection("qa", "main", &[("auth", &sha('1'))]));
+        p.proposed = None;
+        let rendered = render_plan(&p);
+        assert!(
+            has_block(&rendered, "Current\n  qa = main + auth"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Proposed"), "{rendered}");
     }
 
     // ---- composition -----------------------------------------------------
@@ -2108,6 +2271,9 @@ mod tests {
                 branches: vec!["login".into(), "search".into()],
                 refname: "refs/heads/hitch-metadata".into(),
             },
+            PlannedEffect::LocalRefDelete {
+                refname: "refs/heads/hitch/prev/dev".into(),
+            },
         ];
         let rendered = render_plan(&p);
 
@@ -2119,7 +2285,7 @@ mod tests {
             .skip_while(|l| *l != "Will change")
             .skip(1)
             .collect();
-        assert_eq!(lines.len(), 6, "{rendered}");
+        assert_eq!(lines.len(), 7, "{rendered}");
         for line in &lines {
             let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
@@ -2137,6 +2303,11 @@ mod tests {
                     "tag hitch-release-dev-to-main-2026-01-01T00-00-00Z tag hitch-release-dev-to-main-2026-01-01T00-00-00Z at fffffff",
                     "qa rebuild qa — it is built on 'dev', which was rebuilt",
                     "hitch-metadata prune login, search from qa",
+                    // A deletion says the verb. `LocalRefUpdate` cannot express
+                    // one, so this is the only way the sweep can cover it — and
+                    // a `→` with an empty right-hand side would be the failure
+                    // this arm exists to prevent.
+                    "hitch/prev/dev delete hitch/prev/dev",
                 ]
                 .contains(&collapsed.as_str()),
                 "unexpected effect line {collapsed:?} in {rendered}"
@@ -2446,6 +2617,22 @@ mod tests {
             target_sha: sha('f'),
         }];
         assert!(render_receipt(&r).contains("tag hitch-release-dev-to-main-2026-01-01T00-00-00Z-2"));
+    }
+
+    #[test]
+    fn a_deleted_ref_reports_the_value_that_was_there() {
+        // The value, not just the name: "deleted prev/dev" cannot be
+        // distinguished from a delete of a *different* commit of the same
+        // branch, and the whole reason the receipt exists is the difference
+        // between what was predicted and what is there.
+        let mut r = receipt(OperationOutcome::Applied);
+        r.effects = vec![AppliedEffect::LocalRefDelete {
+            refname: "refs/hitch/backup/dev".into(),
+            old: sha('a'),
+        }];
+        let rendered = render_receipt(&r);
+        assert!(has_line(&rendered, "  ✓ delete backup/dev"), "{rendered}");
+        assert!(has_line(&rendered, "    was aaaaaaa"), "{rendered}");
     }
 
     // ---- resulting state -------------------------------------------------
@@ -2972,7 +3159,7 @@ mod tests {
         let mut p = plan(OperationIntent::RebuildEnvironment {
             environment: "dev".into(),
         });
-        p.proposed = projection("dev", "main", &[("auth", &sha('1')[..])]);
+        p.proposed = Some(projection("dev", "main", &[("auth", &sha('1')[..])]));
         p.compositions = vec![CompositionPlan {
             environment: "dev".into(),
             base: pinned("main", &sha('9')),

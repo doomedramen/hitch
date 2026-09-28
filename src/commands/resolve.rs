@@ -463,7 +463,7 @@ fn finish_mode_a(
             context.log_info(&format!("Force pushing rebased '{}' to origin", branch));
             match force_push_with_deploy_key_if_configured(context, branch, &prior_remote_sha) {
                 Ok(()) => {
-                    context.log_success(&format!("✓ Pushed '{}'", branch));
+                    context.log_success(&format!("Pushed '{}'", branch));
                     Ok(crate::utils::prelude::PushOutcome::Pushed)
                 }
                 Err(e) => Err(anyhow::anyhow!(
@@ -476,7 +476,7 @@ fn finish_mode_a(
         },
     )?;
 
-    context.log_success(&format!("✓ '{}' rebased onto '{}'", branch, base));
+    context.log_success(&format!("'{}' rebased onto '{}'", branch, base));
     context.log_info(&format!(
         "Run 'hitch rebuild {}' to pick this up.",
         env_name
@@ -750,7 +750,7 @@ fn continue_session(
     publish_result?;
 
     context.log_success(&format!(
-        "✓ Published '{}' with '{}' included.",
+        "Published '{}' with '{}' included.",
         env_name, branch
     ));
     if recorded {
@@ -939,7 +939,7 @@ fn abort_session(
         let _ = context.git().delete_branch(&temp_branch, true);
     }
 
-    context.log_success(&format!("✓ Discarded resolve session for '{}'", branch));
+    context.log_success(&format!("Discarded resolve session for '{}'", branch));
     Ok(())
 }
 

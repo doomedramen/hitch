@@ -63,7 +63,7 @@ pub fn run(args: CleanupArgs, context: &GlobalContext) -> Result<()> {
     } else {
         let deleted_count = perform_cleanup(context, &to_delete)?;
         context.log_success(&format!(
-            "✓ Successfully cleaned up {} approval requests",
+            "Successfully cleaned up {} approval requests",
             deleted_count
         ));
     }
@@ -156,7 +156,10 @@ fn display_cleanup_summary(
 
 fn confirm_cleanup(context: &GlobalContext, count: usize) -> Result<bool> {
     context.log_info("");
-    context.log_info("⚠️  This action cannot be undone!");
+    // A warning glyph from the sink, not one carried in the message: this
+    // printed `ℹ️ ⚠️` before, which is two glyphs disagreeing about how
+    // serious the line is.
+    context.log_warning("This action cannot be undone!");
 
     context.confirm(&format!("Confirm cleanup of {} requests?", count))
 }

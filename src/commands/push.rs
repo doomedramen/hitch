@@ -33,6 +33,6 @@ pub fn run(args: PushCommand, context: &GlobalContext) -> Result<()> {
         push_branch_with_deploy_key_if_configured(context, &args.branch)?;
     }
 
-    context.log_success(&format!("✓ Pushed '{}' to origin", args.branch));
+    context.log_success(&format!("Pushed '{}' to origin", args.branch));
     Ok(())
 }

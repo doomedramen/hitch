@@ -1136,12 +1136,12 @@ mod tests {
             // about — a promote that silently rebuilt nothing would look
             // identical to one that did the right thing.
             assert!(
-                plan.current.branches.is_empty(),
+                plan.current_composition().branches.is_empty(),
                 "current declaration should be empty: {:?}",
-                plan.current.branches
+                plan.current_composition().branches
             );
             let proposed: Vec<&str> = plan
-                .proposed
+                .proposed_composition()
                 .branches
                 .iter()
                 .map(|p| p.branch.as_str())
@@ -1357,11 +1357,14 @@ mod tests {
                 .blocked_by()
                 .expect("an approval-gated environment must block its own plan");
             assert_eq!(blocking.kind, PlanWarningKind::ApprovalRequired);
+            // The whole projection, not just its branch list: a plan that will
+            // not apply must not claim a different end state in *any* field, and
+            // an equality that skips `branch_sha` would not notice a rebuild it
+            // had already promised.
             assert_eq!(
-                plan.current.branches, plan.proposed.branches,
+                plan.current, plan.proposed,
                 "a plan that will not apply must not claim a different end state"
             );
-            assert_eq!(plan.current.branch_sha, plan.proposed.branch_sha);
 
             let receipt = apply_declaration(env, &plan, false)?;
             assert_eq!(
@@ -1402,7 +1405,7 @@ mod tests {
                 .blocked_by()
                 .expect("promoting a branch that conflicts with a promoted sibling must refuse");
             assert_eq!(blocking.kind, PlanWarningKind::PolicyRefusal);
-            assert_eq!(plan.current.branches, plan.proposed.branches);
+            assert_eq!(plan.current, plan.proposed);
 
             let error =
                 apply_declaration(env, &plan, false).expect_err("a refused plan must not apply");
@@ -1445,13 +1448,13 @@ mod tests {
 
             let plan = demote_plan(env, "feat-a", "dev", false, false)?;
             let current: Vec<&str> = plan
-                .current
+                .current_composition()
                 .branches
                 .iter()
                 .map(|p| p.branch.as_str())
                 .collect();
             let proposed: Vec<&str> = plan
-                .proposed
+                .proposed_composition()
                 .branches
                 .iter()
                 .map(|p| p.branch.as_str())

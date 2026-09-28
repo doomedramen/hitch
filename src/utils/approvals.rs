@@ -196,13 +196,13 @@ pub fn approve_request(
     // Add approval
     request.add_approval(approver_email, comment);
 
-    context.log_info(&format!("✓ Approval recorded for request {}", request_id));
+    context.log_info(&format!("Approval recorded for request {}", request_id));
 
     // Check if threshold is met
     if request.threshold_met(min_approvals) {
         request.mark_approved();
         context.log_info(&format!(
-            "✓ Approval threshold met ({} approvals)",
+            "Approval threshold met ({} approvals)",
             request.approval_count()
         ));
         return Ok(true); // Threshold met, ready to execute
@@ -258,7 +258,7 @@ pub fn reject_request(
     // Reject the request
     request.reject(rejecter_email, reason);
 
-    context.log_success(&format!("✓ Request {} rejected", request_id));
+    context.log_success(&format!("Request {} rejected", request_id));
 
     Ok(())
 }
@@ -279,7 +279,7 @@ pub fn cancel_request(
     // Cancel the request
     request.cancel();
 
-    context.log_success(&format!("✓ Request {} cancelled", request_id));
+    context.log_success(&format!("Request {} cancelled", request_id));
 
     Ok(())
 }
@@ -343,7 +343,7 @@ pub fn display_approval_request_info(
         .get_environment(&request.environment)
         .ok_or_else(|| anyhow!("Environment '{}' not found", request.environment))?;
 
-    context.log_success(&format!("✓ Approval request created: {}", request_id));
+    context.log_success(&format!("Approval request created: {}", request_id));
     context.log_info("");
     context.log_info(&format!("Environment: {}", request.environment));
     context.log_info(&format!("Branch: {}", request.branch));

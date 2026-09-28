@@ -29,7 +29,7 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     let request = crate::utils::prelude::get_approval_request_by_id(context, &args.request_id)?;
     let request_id = request.id.clone();
     let environment_name = request.environment.clone();
-    context.log_info(&format!("  ✓ Request found: {}", short_id(&request_id)));
+    context.log_info(&format!("Request found: {}", short_id(&request_id)));
 
     let environment =
         crate::utils::prelude::get_environment_config_for_approval(context, &environment_name)?;
@@ -63,7 +63,7 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
             let executed = execute_approved_operation(context, &request_id, &environment_name)?;
             context.log_info("");
             if executed {
-                context.log_success(&format!("✓ Request {} applied successfully!", request_id));
+                context.log_success(&format!("Request {} applied successfully!", request_id));
             }
             return Ok(());
         }
@@ -98,11 +98,11 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     context.log_info("");
     if executed {
         context.log_success(&format!(
-            "✓ Request {} approved and operation executed successfully!",
+            "Request {} approved and operation executed successfully!",
             request_id
         ));
     } else {
-        context.log_success(&format!("✓ Request {} approved successfully!", request_id));
+        context.log_success(&format!("Request {} approved successfully!", request_id));
         context.log_info(&format!(
             "Waiting for {} more approval(s) to execute the operation.",
             min_approvals.saturating_sub(request_details.approvals.len())
@@ -164,7 +164,7 @@ fn validate_and_approve(
                 args.comment.clone(),
             )?;
 
-            context.log_info("  ✓ Approval recorded");
+            context.log_info("Approval recorded");
 
             let updated_request = config
                 .get_approval_request(request_id)
@@ -236,15 +236,12 @@ fn execute_approved_operation(
     );
 
     // Execute the operation with rollback protection
-    context.log_info(&format!(
-        "  ⏳ Locking environment '{}'...",
-        environment_name
-    ));
+    context.log_info(&format!("Locking environment '{}'...", environment_name));
     let result = with_locked_env(context, environment_name, || {
-        context.log_info(&format!("  ✓ Environment '{}' locked", environment_name));
+        context.log_info(&format!("Environment '{}' locked", environment_name));
 
         context.log_info("");
-        context.log_info("  ⏳ Updating environment metadata...");
+        context.log_info("Updating environment metadata...");
 
         // The declaration edit and the request's own status change are one
         // transaction, and they are the operation's durable effect.
@@ -279,7 +276,7 @@ fn execute_approved_operation(
 
     match result {
         Ok(()) => {
-            context.log_info(&format!("  ✓ Environment '{}' unlocked", environment_name));
+            context.log_info(&format!("Environment '{}' unlocked", environment_name));
             context.log_verbose("✓ Operation executed successfully");
             Ok(true)
         }
@@ -321,7 +318,7 @@ fn apply_declaration_change(
             if !environment.branches.contains(&request.branch) {
                 environment.add_branch(request.branch.clone());
                 context.log_info(&format!(
-                    "  ✓ Branch '{}' added to environment '{}'",
+                    "Branch '{}' added to environment '{}'",
                     request.branch, request.environment
                 ));
             } else {
@@ -341,7 +338,7 @@ fn apply_declaration_change(
 
             environment.remove_branch(&request.branch);
             context.log_info(&format!(
-                "  ✓ Branch '{}' removed from environment '{}'",
+                "Branch '{}' removed from environment '{}'",
                 request.branch, request.environment
             ));
         }
@@ -375,7 +372,7 @@ fn apply_declaration_change(
 /// itself.
 fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Result<()> {
     context.log_info("");
-    context.log_info("  ⏳ Rebuilding environment...");
+    context.log_info("Rebuilding environment...");
     // `Log`, unlike every other caller. `hitch approve` is the one command that
     // still reaches a rebuild without a plan of its own, so the `StepLogger`
     // transcript is the only account of the composition it can show. That is a
@@ -390,7 +387,7 @@ fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Re
         Ok(outcome) => {
             if !outcome.held.is_empty() {
                 context.log_warning(&format!(
-                    "  ⚠ Rebuilt '{}' with {} branch(es) held: {}",
+                    "Rebuilt '{}' with {} branch(es) held: {}",
                     environment_name,
                     outcome.held.len(),
                     outcome
@@ -405,7 +402,7 @@ fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Re
         }
         Err(e) => {
             context.log_warning(&format!(
-                "  ⚠ The approval was applied to '{}' but rebuilding it failed:\n    {}\n    \
+                "The approval was applied to '{}' but rebuilding it failed:\n    {}\n    \
                  The declaration is saved; the environment is not built. To build it:\n      \
                  hitch rebuild {}",
                 environment_name, e, environment_name
@@ -424,7 +421,7 @@ fn attempt_approval_rollback(context: &GlobalContext, rollback_info: &RollbackIn
             config.get_environment_mut(&rollback_info.env_name),
         ) {
             *env = previous_state.clone();
-            context.log_info("✓ Restored previous environment state");
+            context.log_info("Restored previous environment state");
         }
         Ok(())
     })
@@ -439,7 +436,7 @@ fn attempt_operation_rollback(context: &GlobalContext, rollback_info: &RollbackI
             config.get_environment_mut(&rollback_info.env_name),
         ) {
             *env = previous_state.clone();
-            context.log_info("✓ Restored previous environment state");
+            context.log_info("Restored previous environment state");
         }
         Ok(())
     })

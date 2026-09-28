@@ -25,7 +25,7 @@ pub fn run(args: RejectArgs, context: &GlobalContext) -> Result<()> {
 
     // Step 3: Show completion status
     context.log_success(&format!(
-        "✓ Request {} rejected successfully!",
+        "Request {} rejected successfully!",
         args.request_id
     ));
 
@@ -98,7 +98,7 @@ fn validate_rejection_authorization(
 
     // Check if self-rejection (allowed but should be discouraged)
     if current_user == request.requested_by {
-        context.log_warning("⚠️  You are rejecting your own request");
+        context.log_warning("You are rejecting your own request");
     }
 
     Ok(())

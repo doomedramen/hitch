@@ -68,12 +68,34 @@ pub enum DeclarationChange {
     /// `dev` into `qa` can name branches `qa` never promoted, and erroring on
     /// them would make a partial demotion impossible.
     Remove(Vec<String>),
+    /// Promote these branches, on the strength of an approval that has already
+    /// been committed.
+    ///
+    /// A variant of *this* enum rather than a third planner, because it is the
+    /// same edit to the same declaration in the same direction — a promote
+    /// planner that took a flag saying "don't check the approval gate" would be
+    /// a promote with a hole in it, and a separate planner would duplicate the
+    /// three steps (edit, snapshot, rebuild) that have to stay in agreement.
+    ///
+    /// What differs is *identity*: the user ran `hitch approve <id>`, so the
+    /// plan's kind, headline and remedy all have to name that command. That is
+    /// why `kind()` below is a method on the change rather than a parameter at
+    /// the call site — a parameter could disagree with the change it claims to
+    /// describe, and nothing would notice.
+    ApprovedApply {
+        branches: Vec<String>,
+        /// The approval request, carried so the plan can be correlated with the
+        /// row in `hitch approvals` and the receipt can name it.
+        request_id: String,
+    },
 }
 
 impl DeclarationChange {
     pub fn branches(&self) -> &[String] {
         match self {
-            DeclarationChange::Add(b) | DeclarationChange::Remove(b) => b,
+            DeclarationChange::Add(b)
+            | DeclarationChange::Remove(b)
+            | DeclarationChange::ApprovedApply { branches: b, .. } => b,
         }
     }
 
@@ -81,6 +103,7 @@ impl DeclarationChange {
         match self {
             DeclarationChange::Add(_) => OperationKind::Promote,
             DeclarationChange::Remove(_) => OperationKind::Demote,
+            DeclarationChange::ApprovedApply { .. } => OperationKind::ApprovalApply,
         }
     }
 }
@@ -156,6 +179,30 @@ pub fn proposed_declaration(
             Vec::new(),
             current.iter().chain(branches.iter()).cloned().collect(),
         ),
+        // Identical arithmetic to `Add`, and deliberately *not* a separate
+        // computation: an approval-authorised promotion is the same edit, so a
+        // second implementation would be a second thing that can disagree about
+        // what the resulting declaration is. The only difference is downstream,
+        // where the approval gate is skipped.
+        //
+        // A branch that is already promoted is folded in rather than appended a
+        // second time, so re-running an approved apply after a partial apply
+        // yields the same declaration and the plan reports `NoChange` — which is
+        // the honest description of a re-run, and what makes it safe to retry.
+        DeclarationChange::ApprovedApply { branches, .. } => {
+            let added: Vec<String> = branches
+                .iter()
+                .filter(|b| !current.contains(*b))
+                .cloned()
+                .collect();
+            let mut next = current.to_vec();
+            for branch in branches {
+                if !next.contains(branch) {
+                    next.push(branch.clone());
+                }
+            }
+            (added, Vec::new(), next)
+        }
         DeclarationChange::Remove(branches) => {
             let removed: Vec<String> = branches
                 .iter()
@@ -268,9 +315,21 @@ fn plan_declaration_change(
 ) -> Result<OperationPlan<DeclarationPlanDetail>> {
     on_step("Validating promotion preconditions");
     let kind = change.kind();
+    // Total, with no wildcard. A `_ => "demotion"` here would have labelled
+    // every operation added after this code was written as a demotion, and the
+    // word only shows up under `--verbose` — so the failure would be a wrong
+    // word in a log line that nobody reads, in a planner that is otherwise
+    // correct. Cheap to make exhaustive; expensive to discover.
     let verb = match kind {
-        OperationKind::Promote => "promotion",
-        _ => "demotion",
+        OperationKind::Promote | OperationKind::ApprovalApply => "promotion",
+        OperationKind::Demote => "demotion",
+        other => {
+            unreachable!(
+                "{} is not a declaration change; plan_declaration_change takes a \
+                 DeclarationChange, so its kind is one of the three above (got {other})",
+                other
+            )
+        }
     };
     context.log_verbose(&format!("Validating {} preconditions...", verb));
 
@@ -303,6 +362,24 @@ fn plan_declaration_change(
                         branch,
                         environment
                     );
+                }
+                validate_branch_for_promotion(context, branch)?;
+            }
+        }
+        // Shares `Add`'s checks on purpose. The edit is identical; the only
+        // difference is that the approval gate is not applied (the approval *is*
+        // the gate) and the already-promoted check is a `log_verbose` rather than
+        // a bail — a re-run after a partial apply is legal, and the plan's
+        // `NoChange` outcome is the honest description of it. See
+        // `commands/approvals/approve.rs`.
+        DeclarationChange::ApprovedApply { branches, .. } => {
+            for branch in branches {
+                if declared.branches.contains(branch) {
+                    context.log_verbose(&format!(
+                        "Branch '{}' is already promoted to environment '{}'; nothing to add",
+                        branch, environment
+                    ));
+                    continue;
                 }
                 validate_branch_for_promotion(context, branch)?;
             }
@@ -382,7 +459,17 @@ fn plan_declaration_change(
     // approval would be asking the user to authorise something that will then
     // be refused, and the request would sit pending against a change that can
     // never be applied. So the gate is only recorded when nothing else blocks.
-    let approval_gated = refused.is_none() && declared.requires_approval_check();
+    //
+    // An `ApprovedApply` change is never gated, and that is the whole point of
+    // the variant: the approval has already been granted and committed, so
+    // re-requesting one would be asking the user to authorise a second time the
+    // thing they authorised. The condition lives *here* rather than at the call
+    // site in `approve.rs` because a gate flag passed in from outside could
+    // disagree with the change it is claimed to describe, and the two places
+    // would be free to drift.
+    let approval_gated = !matches!(change, DeclarationChange::ApprovedApply { .. })
+        && refused.is_none()
+        && declared.requires_approval_check();
     if approval_gated {
         context.log_info(&format!(
             "Environment '{}' requires approval before {}",
@@ -445,8 +532,9 @@ fn plan_declaration_change(
     let mut effects: Vec<PlannedEffect> = Vec::new();
     if !approval_gated && refused.is_none() {
         let verb_past = match kind {
-            OperationKind::Promote => "promote",
-            _ => "demote",
+            OperationKind::Promote | OperationKind::ApprovalApply => "promote",
+            OperationKind::Demote => "demote",
+            other => unreachable!("not a declaration change: {other}"),
         };
         effects.push(PlannedEffect::MetadataChange {
             refname: "refs/heads/hitch-metadata".to_string(),
@@ -472,8 +560,9 @@ fn plan_declaration_change(
                 because: format!(
                     "its declaration is being {} by this plan",
                     match kind {
-                        OperationKind::Promote => "extended",
-                        _ => "shortened",
+                        OperationKind::Promote | OperationKind::ApprovalApply => "extended",
+                        OperationKind::Demote => "shortened",
+                        other => unreachable!("not a declaration change: {other}"),
                     }
                 ),
                 refname: env_ref.clone(),
@@ -537,10 +626,18 @@ fn plan_declaration_change(
                 environment: environment.to_string(),
                 branches: branches.clone(),
             },
+            DeclarationChange::ApprovedApply {
+                branches,
+                request_id,
+            } => OperationIntent::ApplyApproval {
+                request_id: request_id.clone(),
+                environment: environment.to_string(),
+                branches: branches.clone(),
+            },
         },
         fingerprint,
-        current,
-        proposed,
+        current: Some(current),
+        proposed: Some(proposed),
         compositions: Vec::new(),
         effects,
         unaffected,
@@ -565,7 +662,12 @@ fn plan_declaration_change(
                 environment,
                 match kind {
                     OperationKind::Promote => "promotion",
-                    _ => "demotion",
+                    OperationKind::Demote => "demotion",
+                    other => unreachable!(
+                        "only a promote or a demote can be approval-gated: an approved \
+                         apply is past the gate by construction, and no other kind \
+                         reaches this planner (got {other})"
+                    ),
                 },
             ))
         } else {
@@ -785,16 +887,21 @@ fn apply_blocked_plan(
             // moving with the code.
             let requested = match plan.kind {
                 OperationKind::Promote => plan.detail.added.clone(),
-                _ => plan.detail.removed.clone(),
+                OperationKind::Demote => plan.detail.removed.clone(),
+                other => {
+                    unreachable!("only a promote or a demote can be approval-gated (got {other})")
+                }
             };
             let requests = create_approval_requests_for_operation(
                 context,
                 environment,
                 &requested,
-                if plan.kind == OperationKind::Promote {
-                    Operation::Promote
-                } else {
-                    Operation::Demote
+                match plan.kind {
+                    OperationKind::Promote => Operation::Promote,
+                    OperationKind::Demote => Operation::Demote,
+                    other => unreachable!(
+                        "only a promote or a demote can be approval-gated (got {other})"
+                    ),
                 },
             )?;
             for id in &requests {
@@ -877,11 +984,16 @@ fn applied_declaration_description(
             branches.join(", ")
         }
     };
+    let before = plan.current_composition();
     match plan.kind {
-        OperationKind::Promote => {
+        OperationKind::Promote | OperationKind::ApprovalApply => {
+            // Computed from the *declaration as it is now* rather than from
+            // `detail.added`, so a re-run that added nothing describes itself
+            // honestly ("promote nothing into 'dev' (now: feat-a)") instead of
+            // claiming the addition the earlier attempt made.
             let added = declared_now
                 .iter()
-                .filter(|b| !plan.current.branches.iter().any(|p| &p.branch == *b))
+                .filter(|b| !before.branches.iter().any(|p| &p.branch == *b))
                 .cloned()
                 .collect::<Vec<_>>();
             format!(
@@ -891,9 +1003,8 @@ fn applied_declaration_description(
                 list(declared_now)
             )
         }
-        _ => {
-            let removed = plan
-                .current
+        OperationKind::Demote => {
+            let removed = before
                 .branches
                 .iter()
                 .filter(|p| !declared_now.contains(&p.branch))
@@ -906,6 +1017,7 @@ fn applied_declaration_description(
                 list(declared_now)
             )
         }
+        other => unreachable!("not a declaration change: {other}"),
     }
 }
 

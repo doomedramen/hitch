@@ -30,7 +30,7 @@ pub fn run(args: CancelArgs, context: &GlobalContext) -> Result<()> {
 
     // Step 6: Show completion status
     context.log_success(&format!(
-        "✓ Request {} cancelled successfully!",
+        "Request {} cancelled successfully!",
         args.request_id
     ));
 
@@ -87,9 +87,14 @@ fn show_cancellation_confirmation(
         }
     }
 
+    // One `log_warning`, one glyph, two sentences. Three calls here printed
+    // `ℹ️ ⚠️  Are you sure…` — two different glyphs on one line, from an info
+    // sink wearing a warning's marker — followed by a second `ℹ️` for the
+    // continuation. The sinks own the glyph; the message carries the words.
     context.log_info("");
-    context.log_info("⚠️  Are you sure you want to cancel this request?");
-    context.log_info("  This action cannot be undone.");
+    context.log_warning(
+        "Are you sure you want to cancel this request?\n  This action cannot be undone.",
+    );
 
     if context.confirm("Confirm cancellation of this request?")? {
         context.log_info("Cancellation confirmed.");

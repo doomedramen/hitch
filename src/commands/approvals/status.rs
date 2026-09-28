@@ -178,12 +178,15 @@ fn display_snapshot_info(
         }
     );
 
-    // Verify snapshot is current
+    // Verify snapshot is current. Both arms are the *same* sentence through the
+    // *same* sink, so the two versions cannot drift — which is how this pair had
+    // drifted into one bare `println!` with a hand-typed `✓` and one `log_warning`
+    // with a hand-typed `⚠️`, each carrying a glyph the sink would have added
+    // anyway.
     match crate::utils::snapshot::validate_snapshot(context, snapshot) {
-        Ok(()) => println!("  Snapshot status: Current ✓"),
+        Ok(()) => context.log_success("Snapshot status: Current"),
         Err(e) => {
-            context.log_warning("  Snapshot status: Outdated ⚠️");
-            context.log_warning(&format!("    {}", e));
+            context.log_warning(format!("Snapshot status: Outdated\n  {}", e).as_str());
         }
     }
 
