@@ -19,6 +19,7 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::commands::global_context::{GlobalContext, GlobalFlags};
+    use hitch::core::state::EnvironmentHealth;
     use hitch::operations::declaration::{
         apply_declaration_plan, plan_demote, plan_promote, DeclarationPlanDetail,
         DeclarationPlanOptions,
@@ -747,17 +748,52 @@ mod tests {
                 OperationOutcome::AppliedWithHolds,
                 "holds must never be collapsed into Applied"
             );
+
+            // The hold is a *prediction* and lives in the plan. It is decided by
+            // `compose_environment` before the apply starts, so re-printing it
+            // in the receipt would assert a future in a document about the
+            // past — and the apply did not learn it, so by
+            // `ExecutionReceipt::warnings` it does not belong there at all.
             assert!(
-                receipt
+                plan.warnings.iter().any(|w| w.message.contains("held out")),
+                "the hold belongs to the plan, as a prediction: {:?}",
+                plan.warnings
+            );
+            assert!(
+                !receipt
                     .warnings
                     .iter()
                     .any(|w| w.message.contains("held out")),
-                "a hold must be reported as a warning: {:?}",
+                "a receipt must not re-print the plan's prediction: {:?}",
                 receipt.warnings
             );
             assert!(
-                !receipt.warnings.iter().any(|w| w.owes_effect),
-                "a hold is not an owed effect"
+                !receipt.has_owed_effects(),
+                "a hold is not owed work: {:?}",
+                receipt.warnings
+            );
+
+            // The *fact* is the authority's, not the plan's: the post-state says
+            // the environment is partially realised and names what was held.
+            // Without this the receipt would carry no trace of the hold beyond
+            // the outcome enum, and the plan it quotes would be the only
+            // account of it.
+            let resulting = receipt
+                .resulting_state
+                .as_ref()
+                .expect("a receipt for a rebuild reports the resulting state")
+                .environments
+                .iter()
+                .find(|e| e.name == "dev")
+                .expect("the resulting state names the rebuilt environment");
+            assert!(
+                matches!(
+                    &resulting.health,
+                    EnvironmentHealth::PartiallyRealised { held } if held.len() == 1
+                ),
+                "the hold must be readable from the resulting state, not only \
+                 from the plan: {:?}",
+                resulting.health
             );
 
             // And the CLI contract: exit 2 means "succeeded, with holds".
@@ -1913,19 +1949,152 @@ mod tests {
                 Some("AppliedWithHolds"),
                 "the typed form of the exit-2 fact: {document}"
             );
-            let warnings = document["receipt"]["warnings"]
+
+            // The hold is named twice, in two roles, and the roles are what keep
+            // this from being the duplication the CLI had. The *plan* half
+            // predicts it, with the partner and the file count, because that is
+            // what a prediction is for and it was decided before the apply
+            // began. The *receipt* half confirms it, in the authority's own
+            // verdict, naming which branch was held. A consumer holding the
+            // document gets both; one reading only `receipt.warnings` gets
+            // nothing, and should — see `ExecutionReceipt::warnings`.
+            let plan_warnings = document["plan"]["warnings"]
+                .as_array()
+                .expect("plan warnings is an array")
+                .iter()
+                .map(|w| w["message"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>();
+            assert!(
+                plan_warnings.iter().any(|m| m.contains("feat-right")),
+                "the plan half must name the hold it predicts: {plan_warnings:?}"
+            );
+
+            let receipt_warnings = document["receipt"]["warnings"]
                 .as_array()
                 .expect("warnings is an array")
                 .iter()
                 .map(|w| w["message"].as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>();
             assert!(
-                warnings.iter().any(|m| m.contains("feat-right")),
-                "a receipt that exited 2 must name the hold that caused it: {warnings:?}"
+                receipt_warnings.is_empty(),
+                "a hold is nothing the apply discovered, so the receipt half must \
+                 not restate the plan's prediction: {receipt_warnings:?}"
+            );
+
+            let held = document["receipt"]["resulting_state"]["environments"]
+                .as_array()
+                .expect("resulting_state names the environments")
+                .iter()
+                .find(|e| e["name"].as_str() == Some("dev"))
+                .expect("dev is in the resulting state");
+            assert_eq!(
+                held["health"]["partially_realised"]["held"],
+                serde_json::json!(["feat-right"]),
+                "the fact behind the exit 2, from the authority: {held}"
             );
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(())
+    }
+
+    /// The generalisation behind the three per-site fixes: **a receipt's
+    /// warnings never restate a plan's warnings.**
+    ///
+    /// The copy this forbids was one mechanical `map` repeated in `rebuild`,
+    /// `declaration` and `release` (and a second one in `declaration`'s
+    /// approval arm), so it produced four double-printed advisories and one
+    /// sentence that appeared twice wearing `⛔` in the plan and `⚠️` in the
+    /// receipt. Asserted across all three operations rather than once per site,
+    /// because the failure mode is a *new* planner reintroducing the shape, not
+    /// a regression in a particular executor.
+    ///
+    /// The three plans chosen here are the three advisory families that existed:
+    /// a hold (rebuild), a `--no-rebuild` stale environment (declaration), and
+    /// `--no-prune` (release). Each is a consequence decided *before* the apply
+    /// began, which is the whole reason none of them is something the apply
+    /// learned.
+    #[test]
+    fn a_receipt_never_restates_a_plan_warning() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            // A hold, which the rebuild planner turns into an advisory.
+            conflicting_pair(env)?;
+            declare_branches(env, "dev", &["feat-a", "feat-b"])?;
+            let rebuild = plan(env, PlanPurpose::Preview, false)?;
+            assert!(
+                !rebuild.warnings.is_empty(),
+                "this test is vacuous unless the plan predicts something"
+            );
+            let rebuild_receipt = apply(env, &rebuild, false)?;
+            assert_no_restated_warning(&rebuild, &rebuild_receipt);
+
+            // A `--no-rebuild` stale environment, from the declaration planner.
+            let declaration = plan_demote(
+                &context_for(env, false)?,
+                "feat-b",
+                "dev",
+                DeclarationPlanOptions { no_rebuild: true },
+                &mut |_| {},
+            )?;
+            assert!(
+                declaration
+                    .warnings
+                    .iter()
+                    .any(|w| w.message.contains("left stale")),
+                "this test is vacuous unless the plan predicts a stale environment: {:?}",
+                declaration.warnings
+            );
+            let declaration_receipt =
+                apply_declaration_plan(&context_for(env, false)?, &declaration, &mut |_| {})?;
+            assert_no_restated_warning(&declaration, &declaration_receipt);
+
+            // A `--no-prune` consequence, from the release planner.
+            declare_branches(env, "qa", &["feat-a"])?;
+            let release = release_plan(
+                env,
+                "dev",
+                "main",
+                ReleasePlanOptions {
+                    no_prune: true,
+                    ..Default::default()
+                },
+                false,
+            )?;
+            assert!(
+                release
+                    .warnings
+                    .iter()
+                    .any(|w| w.message.contains("stay in their declarations")),
+                "this test is vacuous unless the plan predicts a --no-prune \
+                 consequence: {:?}",
+                release.warnings
+            );
+            let release_receipt = apply_release(env, &release, false)?;
+            assert_no_restated_warning(&release, &release_receipt);
+
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A plan's warnings are predictions; a receipt's warnings are facts the
+    /// apply discovered. No message may appear in both.
+    ///
+    /// Compared by message rather than by count, because the thing being
+    /// forbidden is the *same sentence twice*: a receipt that happened to carry
+    /// its own distinct warning is allowed, and a plan that carried none would
+    /// pass vacuously — hence the `assert!(!plan.warnings.is_empty())` at every
+    /// call site rather than inside here.
+    fn assert_no_restated_warning<I>(plan: &OperationPlan<I>, receipt: &Receipt) {
+        for warning in &receipt.warnings {
+            assert!(
+                !plan.warnings.iter().any(|p| p.message == warning.message),
+                "a receipt warning restates a plan's prediction verbatim, so one \
+                 fact is printed in two documents — and a prediction, at that: \
+                 {:?}",
+                warning.message
+            );
+        }
     }
 
     #[test]

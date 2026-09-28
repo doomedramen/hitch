@@ -711,15 +711,15 @@ fn assemble_receipt(
         description: format!("'rebuilt_at' stamp for '{}'", env),
     });
 
-    let mut warnings: Vec<ExecutionWarning> = plan
-        .warnings
-        .iter()
-        .filter(|w| !w.is_blocking())
-        .map(|w| ExecutionWarning {
-            message: w.message.clone(),
-            owes_effect: false,
-        })
-        .collect();
+    // Empty, and that is the contract rather than an oversight: see
+    // `ExecutionReceipt::warnings`. This used to copy every non-blocking plan
+    // warning, which is to say every hold `compose_environment` decided *at plan
+    // time* — so the receipt re-printed, verbatim, the sentence that says the
+    // branch "will be held out of this build", in a document whose subject is
+    // what already happened. The hold is a prediction, so it belongs to the
+    // plan; the fact is that `dev` is now `partially realised`, which
+    // `resulting_state` reads from the authority and the Result block renders.
+    let mut warnings: Vec<ExecutionWarning> = Vec::new();
 
     // The owed push. A failed push is not a failed rebuild — the local branch
     // is published and the journal record survives so the next mutating

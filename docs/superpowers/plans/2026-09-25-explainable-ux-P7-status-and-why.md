@@ -736,6 +736,18 @@ hold and let the other say something else, which is a question about
 silently fixed, because the two that were fixed were the two that were asked
 for.
 
+> **Resolved after P7, in a follow-up commit.** The framing above was right and
+> the answer turned out to be neither half. The premise — "the plan is a
+> prediction and the advisory is a fact" — is what makes the *copy* the bug
+> rather than either document. Both were the same sentence because a receipt's
+> warnings were built by a mechanical `map` over the plan's, and a `PlanWarning`
+> is never a receipt warning. Removing the copy in all four places it existed
+> (`rebuild`, `declaration`, `release`, and `declaration`'s `ApprovalRequested`
+> arm) leaves the hold predicted once in the plan and stated once as a fact in
+> the `Result` block, read from `core::state`. `a_receipt_never_restates_a_plan_warning`
+> holds the generalisation. See the master plan's "the receipt's warning
+> contract" for the full rule and the two costs that were accepted.
+
 ### Carried forward, still open
 
 - **`hitch approve` has no receipt.** The honest route is a

@@ -308,7 +308,11 @@ covered.
   for user-facing failures are multi-line, end with the exact command to run
   next (`git checkout {branch} && git rebase {base}`, `hitch rebuild {env}`,
   ...). Match that style for new errors — a bare error string without a next
-  step is a worse experience than the rest of the CLI.
+  step is a worse experience than the rest of the CLI. Build that next step with
+  `OperationKind::command_hint`, which already spells the full `hitch …`
+  invocation: the `PolicyBlocked` arm used to wrap it in a second `"hitch {}"`
+  and printed a remedy nobody could paste — `hitch hitch promote fc dev` — so
+  treat "it names the command" and "it is the command" as two different claims.
 - **Comments**: sparse, and only for *why*, not *what* — a hidden invariant,
   a workaround for a specific git quirk, a reason a naive approach doesn't
   work. Don't add comments restating what the code obviously does.
@@ -805,6 +809,57 @@ metadata write itself — and `test_rollback_...` in
 `approval_workflow_tests.rs` exercises that. The typed form is
 `ExecutionWarning { owes_effect: true }`, which is *not* the same as a plain
 warning; P6 renders the difference.
+
+**A receipt's warnings are what the *apply* learned, and copying a plan's
+warnings into them is a prediction in the wrong tense.** All three executors
+used to open with the same three lines — `plan.warnings`, filtered to
+non-blocking, mapped into `ExecutionWarning { owes_effect: false }` — which put
+every advisory in two documents, verbatim. It read as four separate double
+prints, and they were worth separating because each said something slightly
+different about the same rule:
+
+- `hitch rebuild`'s hold advisory: **"will be held out of this build"**,
+  re-printed inside a receipt whose subject is what already happened. The hold
+  is decided by `compose_environment` at *plan* time — the apply learned
+  nothing — and the fact that belongs in the receipt is already in
+  `resulting_state` as `PartiallyRealised { held }`, read from the authority.
+- promote/demote's `--no-rebuild` advisory: **"will be left stale until it is
+  rebuilt"**, which the `Result` block also says, as `⧗ dev   needs rebuild`.
+  This one also had a **fourth** copy: a `log_info` "Skipping rebuild for
+  environment 'dev' (--no-rebuild flag set)…" sitting in the gap between the
+  halves — the same second voice the nested-rebuild transcript was, for a
+  decision the user had just made with a flag.
+- release's advisories: `--no-prune`, `--no-rebuild-dependents`, and the
+  per-environment stale skips. All consequences of flags, all decided before the
+  apply began. Their facts are the *absence* of a prune effect and the Result
+  block.
+- the `ApprovalRequested` arm, which copied **all** warnings including blocking
+  ones: so an approval-gated promote printed `⛔ Environment 'prod' requires
+  approval before promotion` in the plan and then the identical sentence again
+  as `⚠️` in the receipt. Same words, **different glyph** — which is worse than
+  the duplication, because a blocking plan warning renders `⛔` and a non-owed
+  receipt warning renders `⚠️`, so one fact wore two urgencies in one document
+  pair.
+
+The rule is now on the field (`ExecutionReceipt::warnings`): three documents
+describe one operation and each has a job — the plan says what is *about* to
+happen, `effects` says what happened, `resulting_state` says where things
+stand, and `warnings` is the only one for a fact discovered *while* applying (a
+push that failed, a nested rebuild that did not run — the plan could not have
+known those, and the resulting state may look normal despite them). Every
+current producer sets `owes_effect: true`, so the non-owed branch in
+`render_receipt` is reachable only from a unit test; the field stays, because
+the distinction is real, but a new *non-owed* receipt warning is a signal to
+check whether the thing is a plan warning or a resulting-state fact wearing a
+receipt's clothes. `a_receipt_never_restates_a_plan_warning` in
+`plan_apply_tests.rs` asserts the generalisation across all three operations
+rather than per site, because the failure mode is a *new* planner reintroducing
+the shape — and it has teeth: re-adding the copy in `rebuild.rs` alone makes it
+fail. **The cost is real and was accepted deliberately:** a `--json` consumer
+reading only `receipt.warnings` loses the hold's *partner* and file count. It
+loses the branch names, the typed `AppliedWithHolds`, and the whole plan half,
+so nothing is lost from the document; and a consumer that wanted a prediction
+was reading the wrong half.
 
 **…and the same whole-config snapshot can *undo* the lock release that ran
 after it was taken. This one is still open.** `capture_config_state` is called

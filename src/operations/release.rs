@@ -1120,15 +1120,16 @@ fn apply_validated_plan(
         || push_branch_with_deploy_key_if_configured(context, target).map(|()| PushOutcome::Pushed),
     )?;
 
-    let mut warnings: Vec<ExecutionWarning> = plan
-        .warnings
-        .iter()
-        .filter(|w| !w.is_blocking())
-        .map(|w| ExecutionWarning {
-            message: w.message.clone(),
-            owes_effect: false,
-        })
-        .collect();
+    // Empty, and that is the contract rather than an oversight: see
+    // `ExecutionReceipt::warnings`. This used to copy every non-blocking plan
+    // warning, which for a release is a family of them — `--no-prune`,
+    // `--no-rebuild-dependents`, and the per-environment "will be left stale"
+    // skips. All are consequences of flags the *user* passed, decided before
+    // the apply started, and all were re-printed verbatim below a receipt that
+    // had already published. The predictions are the plan's; the facts are
+    // `effects` (a prune is a prune, or its absence) and the Result block's
+    // `⧗ <env>   needs rebuild` for anything left stale.
+    let mut warnings: Vec<ExecutionWarning> = Vec::new();
 
     // 3. The tag push, as its own best-effort step with its own gating.
     //

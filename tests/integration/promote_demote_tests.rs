@@ -506,6 +506,20 @@ mod tests {
                 .args(&["promote", "branch-b", "dev"])
                 .execute()?;
 
+            // The remedy is the one line a user copies, so it has to be a
+            // command that runs. It used to read `hitch hitch promote …`,
+            // because `command_hint` already spells the full invocation and the
+            // `PolicyBlocked` arm wrapped it in another `"hitch {}"`.
+            let stderr = result.stderr();
+            assert!(
+                !stderr.contains("hitch hitch"),
+                "a remedy that does not run is worse than none:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("hitch promote branch-b dev"),
+                "the refusal must name the command that would have worked:\n{stderr}"
+            );
+
             result
                 .assert_failure()
                 .assert_stderr_contains("compatibility check failed")
@@ -943,8 +957,10 @@ mod tests {
     // Item 5: --no-rebuild flag for batching promotes/demotes
     // -------------------------------------------------------------------------
 
-    /// `hitch promote --no-rebuild` should add the branch to metadata but skip
-    /// the rebuild step, printing the "Skipping rebuild" message.
+    /// `hitch promote --no-rebuild` should add the branch to metadata but leave
+    /// the environment branch unbuilt, and say so once as a prediction (the
+    /// plan's advisory) and once as a fact (the Result block's verdict, read
+    /// from the authority).
     #[test]
     fn test_promote_no_rebuild_skips_rebuild() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -967,16 +983,44 @@ mod tests {
                 .run()
                 .args(&["promote", "feat-no-rebuild", "dev", "--no-rebuild"])
                 .execute()?;
+            let stdout = result.stdout();
 
-            result
-                .assert_success()
-                .assert_stdout_contains("promote feat-no-rebuild into 'dev'")
-                .assert_stdout_contains("Skipping rebuild");
+            assert!(
+                stdout.contains("promote feat-no-rebuild into 'dev'"),
+                "the declaration edit must be reported:\n{stdout}"
+            );
+            // The authority's verdict, not a narrator's announcement of it.
+            // `branch missing`, not `needs rebuild`: a declared environment with
+            // no ref at all is decided before the record is read, so a
+            // never-built `dev` and a stale `dev` are different facts and only
+            // the second is a staleness verdict. The demote test below is the
+            // one that reads `needs rebuild`, because there `dev` was built.
+            assert!(
+                stdout.contains("branch missing"),
+                "an unbuilt environment must read as missing, from the authority:\n{stdout}"
+            );
+            // Once, in the plan. A "Skipping rebuild for environment 'dev'…"
+            // narrator used to sit in the gap between the halves saying the
+            // same thing, and the receipt used to copy the advisory verbatim —
+            // four renderings of one consequence of a flag the user just typed.
+            assert_eq!(
+                stdout
+                    .matches("will be left stale until it is rebuilt")
+                    .count(),
+                1,
+                "the stale-environment consequence is predicted once:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("Skipping rebuild"),
+                "a second voice for a decision already made with a flag:\n{stdout}"
+            );
 
-            // Branch must appear in metadata
+            // And the behaviour the flag names: the declaration changed, the
+            // environment branch was never built.
             let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.branches.contains(&"feat-no-rebuild".to_string()));
+            env.assert.git_branch_not_exists(&env.git, "dev")?;
 
             Ok::<(), anyhow::Error>(())
         });
@@ -1083,11 +1127,30 @@ mod tests {
                 .run()
                 .args(&["demote", "feat-demote-no-rebuild", "dev", "--no-rebuild"])
                 .execute()?;
+            let stdout = result.stdout();
 
-            result
-                .assert_success()
-                .assert_stdout_contains("demote feat-demote-no-rebuild out of 'dev'")
-                .assert_stdout_contains("Skipping rebuild");
+            assert!(
+                stdout.contains("demote feat-demote-no-rebuild out of 'dev'"),
+                "the declaration edit must be reported:\n{stdout}"
+            );
+            // The environment was built a moment ago and the demotion was not
+            // composed into it, so the verdict is the authority's — and it is
+            // the reason `--no-rebuild` is more than an optimisation.
+            assert!(
+                stdout.contains("needs rebuild"),
+                "an unbuilt environment must read as needing a rebuild:\n{stdout}"
+            );
+            assert_eq!(
+                stdout
+                    .matches("will be left stale until it is rebuilt")
+                    .count(),
+                1,
+                "the stale-environment consequence is predicted once:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("Skipping rebuild"),
+                "a second voice for a decision already made with a flag:\n{stdout}"
+            );
 
             // Branch must be removed from metadata
             let config = env.read_hitch_config()?;

@@ -660,15 +660,14 @@ pub fn apply_declaration_plan(
         Ok(())
     })?;
 
-    let mut warnings: Vec<ExecutionWarning> = plan
-        .warnings
-        .iter()
-        .filter(|w| !w.is_blocking())
-        .map(|w| ExecutionWarning {
-            message: w.message.clone(),
-            owes_effect: false,
-        })
-        .collect();
+    // Empty, and that is the contract rather than an oversight: see
+    // `ExecutionReceipt::warnings`. This used to copy every non-blocking plan
+    // warning, which is to say the "`dev` will be left stale until it is
+    // rebuilt" advisory — a consequence of a flag the *user* passed, decided
+    // before the apply started, and re-printed verbatim below a receipt that
+    // had already applied. The prediction is the plan's; the fact is the Result
+    // block's `⧗ dev   needs rebuild`, read from the authority.
+    let mut warnings: Vec<ExecutionWarning> = Vec::new();
 
     // Read the declaration back rather than describing the edit from the plan.
     // The plan said what it intended; this says what is there. A description
@@ -689,16 +688,16 @@ pub fn apply_declaration_plan(
         description: applied_declaration_description(plan, &declared_now),
     }];
 
-    if !plan.detail.rebuild {
-        // `--no-rebuild` is a deliberate decision to leave the environment
-        // branch stale, and the message says so in the imperative the user
-        // needs. The plan carries the same statement as an advisory; this is
-        // the same advice said the way the CLI has always said it.
-        context.log_info(&format!(
-            "Skipping rebuild for environment '{}' (--no-rebuild flag set). Run 'hitch rebuild {}' when ready.",
-            environment, environment
-        ));
-    } else {
+    // Nothing is said here when `--no-rebuild` left the environment stale. It
+    // used to print "Skipping rebuild for environment 'dev' (--no-rebuild flag
+    // set). Run 'hitch rebuild dev' when ready." — a fourth rendering of one
+    // fact, in the gap between the halves: the plan's advisory already says the
+    // environment will be left stale and how to fix it, the receipt copy below
+    // said it again, and the Result block closes with `⧗ dev   needs rebuild`
+    // from the authority. Same class as the `StepLogger` transcript this branch
+    // is nested inside of: a second voice for a decision the user already made
+    // with a flag, above the one document that accounts for it.
+    if plan.detail.rebuild {
         // The nested rebuild goes quiet. Its plan said `rebuild {env} — …`
         // above, the receipt below says what became of it, and the
         // `RebuildOutcome` carries the one fact neither of those can derive —
@@ -815,14 +814,21 @@ fn apply_blocked_plan(
                         environment
                     ),
                 }],
-                warnings: plan
-                    .warnings
-                    .iter()
-                    .map(|w| ExecutionWarning {
-                        message: w.message.clone(),
-                        owes_effect: false,
-                    })
-                    .collect(),
+                // Empty, per `ExecutionReceipt::warnings`. This used to copy
+                // *every* plan warning, blocking ones included, so an
+                // approval-gated promote printed
+                // `⛔ Environment 'prod' requires approval before promotion` in
+                // the plan and then the identical sentence again as a receipt
+                // warning — the same words under a different glyph, since a
+                // blocking plan warning renders `⛔` and a non-owed receipt
+                // warning renders `⚠️`. One fact wearing two urgencies in two
+                // documents is worse than the duplication it replaces.
+                //
+                // The approval's substance does not go missing: the effect above
+                // says a request was created, `outcome` is
+                // `ApprovalRequested` (exit 0), and the command prints the
+                // request id and the `hitch approvals list` next step.
+                warnings: Vec::new(),
                 resulting_state: build_state_snapshot(context).ok(),
             })
         }
@@ -836,10 +842,11 @@ fn apply_blocked_plan(
             Err(PlanApplyError::PolicyBlocked {
                 environment: environment.to_string(),
                 reason,
-                remedy: format!(
-                    "hitch {}",
-                    plan.kind.command_hint(environment, &plan.detail.argument)
-                ),
+                // `command_hint` already spells the full `hitch …` invocation.
+                // The extra `"hitch {}"` wrapper this used to add printed the
+                // word twice — `hitch hitch promote …` — in the one remedy a
+                // user is told to copy.
+                remedy: plan.kind.command_hint(environment, &plan.detail.argument),
             }
             .into_anyhow())
         }

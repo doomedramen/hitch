@@ -422,7 +422,6 @@ mod tests {
             // dev was built from branch-a alone
             let dev_content = env.git.run(&["show", "dev:shared.txt"])?;
             assert_eq!(dev_content.stdout().trim(), "from branch-a");
-
             // No hitch-tmp-* branch leaked
             let branches = env.git.run(&["branch", "--list", "hitch-tmp-*"])?;
             assert!(
@@ -443,6 +442,50 @@ mod tests {
             // User remains on main
             let branch_out = env.git.run(&["branch", "--show-current"])?;
             assert_eq!(branch_out.stdout().trim(), "main");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A hold is stated once, not twice.
+    ///
+    /// `apply_rebuild_plan` used to copy every non-blocking plan warning into
+    /// `receipt.warnings`, so the plan's "will be held out of this build" — a
+    /// decision `compose_environment` makes at *plan* time — was re-printed
+    /// verbatim below a receipt reporting what had already happened. Asserted on
+    /// the CLI prose rather than only on the library types
+    /// (`plan_apply_tests::a_receipt_never_restates_a_plan_warning` covers all
+    /// three operations) because the user-visible symptom is two printed
+    /// sentences, and a fix that kept the copy in one code path would still
+    /// print it here.
+    #[test]
+    fn test_a_hold_is_stated_once_not_twice() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_two_conflicting_branches(env)?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["--no-push", "rebuild", "dev"])
+                .execute()?;
+            let stdout = result.stdout();
+
+            assert_eq!(
+                stdout.matches("will be held out of this build").count(),
+                1,
+                "the hold is predicted once, in the plan:\n{stdout}"
+            );
+            // The plan's wording is a prediction, and a prediction belongs to
+            // the plan. What the receipt adds is the authority's verdict, which
+            // is a different sentence about a different thing.
+            assert!(
+                stdout.contains("partially realised"),
+                "the receipt reports where things stand, from the authority:\n{stdout}"
+            );
 
             Ok::<(), anyhow::Error>(())
         });

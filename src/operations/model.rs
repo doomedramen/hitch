@@ -840,6 +840,30 @@ pub struct ExecutionReceipt {
     pub completed_at: DateTime<Utc>,
     pub outcome: OperationOutcome,
     pub effects: Vec<AppliedEffect>,
+    /// What the **apply** learned, and only that.
+    ///
+    /// A `PlanWarning` is a *prediction*, printed in the plan and carried in
+    /// the plan half of the `--json` document. It is never re-rendered here.
+    /// Three documents can describe one operation, and each has a job: the plan
+    /// says what is about to happen, `effects` says what happened, and
+    /// `resulting_state` says where things stand — the last read from the
+    /// authority, not from the plan's own expectations. This field is for the
+    /// fourth thing, which is the only one none of the three can supply: a fact
+    /// discovered *while* applying. A push that failed, a nested rebuild that
+    /// did not run — the plan did not and could not know those, and the
+    /// resulting state may well look normal despite them.
+    ///
+    /// Every current producer sets `owes_effect: true`, so the non-owed branch
+    /// in `render_receipt` is exercised only by a unit test. It is kept because
+    /// the distinction is real — a note that costs the user nothing is not owed
+    /// work — but a new non-owed warning is a signal to check first whether the
+    /// thing belongs here at all, or is a plan warning or a resulting-state fact
+    /// wearing a receipt's clothes. Every copy that used to breach this was a
+    /// prediction in the wrong tense: `compose_environment` decides a hold at
+    /// *plan* time, so a receipt reporting "will be held out of this build" was
+    /// asserting a future in a document about the past — and re-rendering a
+    /// blocking warning as a non-owed one also re-glyphed it, so one sentence
+    /// appeared twice wearing `⛔` in the plan and `⚠️` in the receipt.
     pub warnings: Vec<ExecutionWarning>,
     /// The state of the repository after the operation, read from the single
     /// authority (`core::state::build_state_snapshot`) rather than re-derived
