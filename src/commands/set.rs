@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::operations::metadata::{apply_metadata_plan, plan_set_environment, EnvironmentSet};
 use crate::types::OnConflict;
-use crate::utils::command_helpers::{ensure_environment_exists, environment::get_locked_by_user};
 use crate::utils::validation::{validate_base_branch_exists, validate_name};
 use anyhow::Result;
 use clap::Args;
@@ -39,315 +40,78 @@ pub struct SetCommand {
     /// and continue with the rest (default), or halt the whole rebuild
     #[arg(long)]
     pub on_conflict: Option<OnConflict>,
+
+    /// Print the plan without applying it
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Apply the plan without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
-    context.log_info(&format!("Updating environment '{}'...", args.env_name));
-
-    // Step 1: Pre-check - Ensure current directory is a Git repository and working tree is clean
+    // Step 1: Pre-check — a Git repository with a clean working tree.
     crate::utils::prelude::pre_check(context)?;
 
-    // Step 2: Validate preconditions
-    validate_preconditions(context, &args.env_name, &args)?;
+    // Step 2: Preconditions. The environment's *own* state — locked, and the
+    // approval configuration the resolved edit would produce — belongs to the
+    // planner, so that a refusal arrives in a plan the reader can see above it
+    // rather than as an error with nothing above it. See `plan_set_environment`.
+    validate_name(&args.env_name, "Environment")?;
+    crate::utils::command_helpers::ensure_environment_exists(context, &args.env_name)?;
+    if let Some(base) = &args.base {
+        validate_name(base, "Base branch")?;
+        validate_base_branch_exists(context, base)?;
+    }
+    if let Some(0) = args.min_approvals {
+        anyhow::bail!("Minimum approvals must be at least 1");
+    }
+    // The two flags whose *values* are themselves invalid, checked here because
+    // clap has already parsed them and there is nothing for a plan to resolve:
+    // an unparseable email is not a disagreement between two settings.
+    for email in args.add_approver.iter().chain(&args.set_approvers) {
+        if !email.contains('@') || !email.contains('.') {
+            anyhow::bail!("Invalid email format for approver: {email}");
+        }
+    }
 
-    // Step 3: Check if any changes are being made
-    if !has_changes(&args) {
+    let requested = EnvironmentSet {
+        base: args.base.clone(),
+        requires_approval: args.requires_approval,
+        min_approvals: args.min_approvals,
+        add_approver: args.add_approver.clone(),
+        remove_approver: args.remove_approver.clone(),
+        set_approvers: args.set_approvers.clone(),
+        on_conflict: args.on_conflict,
+    };
+
+    if requested.is_empty() {
         context.log_warning("No changes specified. Use --help to see available options.");
         return Ok(());
     }
 
-    // Step 4: Show what will change and confirm
-    if !show_changes(context, &args.env_name, &args)? {
-        context.log_info("Update cancelled by user.");
+    // Step 3: Plan, then apply. No `with_locked_env` and no rollback; see
+    // `operations::metadata`'s header for why a metadata edit needs neither.
+    let plan = plan_set_environment(context, &args.env_name, &requested)?;
+
+    if args.dry_run {
+        // Previewed outside the lock, which is moot here: a metadata edit takes
+        // no lock and composes nothing, so there is no lock to keep out of and
+        // no composition for a preview to describe more optimistically than the
+        // apply would.
+        emit_plan(context, &plan)?;
         return Ok(());
     }
 
-    // Step 5: Apply the changes
-    apply_changes(context, &args)?;
-
-    context.log_success(&format!(
-        "Successfully updated environment '{}'!",
-        args.env_name
-    ));
-    Ok(())
-}
-
-/// Check if any changes are specified
-fn has_changes(args: &SetCommand) -> bool {
-    args.base.is_some()
-        || args.requires_approval.is_some()
-        || args.min_approvals.is_some()
-        || !args.add_approver.is_empty()
-        || !args.remove_approver.is_empty()
-        || !args.set_approvers.is_empty()
-        || args.on_conflict.is_some()
-}
-
-/// Validate that environment is ready for update
-fn validate_preconditions(
-    context: &GlobalContext,
-    env_name: &str,
-    args: &SetCommand,
-) -> Result<()> {
-    context.log_verbose("Validating set preconditions...");
-
-    // Validate environment name
-    validate_name(env_name, "Environment")?;
-
-    // Check if environment exists
-    ensure_environment_exists(context, env_name)?;
-
-    // Validate base branch if provided
-    if let Some(ref base) = args.base {
-        validate_name(base, "Base branch")?;
-        validate_base_branch_exists(context, base)?;
+    // A `set` writes `hitch-metadata` and therefore can owe a push, so it asks
+    // for confirmation on exactly the same condition every other mutation does
+    // — see `ConfirmationRequirement::for_metadata_edit`.
+    if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+        return Ok(());
     }
 
-    // Validate min_approvals if provided
-    if let Some(min_approvals) = args.min_approvals {
-        if min_approvals == 0 {
-            return Err(anyhow::anyhow!("Minimum approvals must be at least 1"));
-        }
-    }
-
-    // Validate approver email formats
-    for email in &args.add_approver {
-        if !email.contains('@') || !email.contains('.') {
-            return Err(anyhow::anyhow!(
-                "Invalid email format for approver: {}",
-                email
-            ));
-        }
-    }
-    for email in &args.set_approvers {
-        if !email.contains('@') || !email.contains('.') {
-            return Err(anyhow::anyhow!(
-                "Invalid email format for approver: {}",
-                email
-            ));
-        }
-    }
-
-    context.log_verbose(&format!("✓ Set validation passed for '{}'", env_name));
-    Ok(())
-}
-
-/// Show what changes will be made and confirm with user.
-///
-/// Returns `Ok(true)` if the user confirmed, `Ok(false)` if they declined.
-fn show_changes(context: &GlobalContext, env_name: &str, args: &SetCommand) -> Result<bool> {
-    let config =
-        crate::utils::prelude::access_metadata_read_only(context, |config| Ok(config.clone()))?;
-    let environment = &config.environments[env_name];
-
-    context.log_info("📋 Environment Update Preview");
-    context.log_info(&format!("Environment: {}", env_name));
-    context.log_info(&format!("  Current base: {}", environment.base));
-    context.log_info(&format!(
-        "  Current requires_approval: {}",
-        environment.requires_approval
-    ));
-    context.log_info(&format!(
-        "  Current min_approvals: {}",
-        environment.min_approvals
-    ));
-    context.log_info(&format!(
-        "  Current approvers: {}",
-        if environment.approvers.is_empty() {
-            "(none)".to_string()
-        } else {
-            environment.approvers.join(", ")
-        }
-    ));
-    context.log_info(&format!(
-        "  Current on_conflict: {:?}",
-        environment.on_conflict
-    ));
-
-    context.log_info("\n📝 Changes:");
-
-    if let Some(ref base) = args.base {
-        context.log_info(&format!("  • Base branch: {} → {}", environment.base, base));
-    }
-
-    if let Some(requires_approval) = args.requires_approval {
-        context.log_info(&format!(
-            "  • Requires approval: {} → {}",
-            environment.requires_approval, requires_approval
-        ));
-    }
-
-    if let Some(min_approvals) = args.min_approvals {
-        context.log_info(&format!(
-            "  • Min approvals: {} → {}",
-            environment.min_approvals, min_approvals
-        ));
-    }
-
-    if !args.add_approver.is_empty() {
-        context.log_info(&format!(
-            "  • Add approvers: +{}",
-            args.add_approver.join(", +")
-        ));
-    }
-
-    if !args.remove_approver.is_empty() {
-        context.log_info(&format!(
-            "  • Remove approvers: -{}",
-            args.remove_approver.join(", -")
-        ));
-    }
-
-    if !args.set_approvers.is_empty() {
-        context.log_info(&format!(
-            "  • Set approvers: [{}]",
-            args.set_approvers.join(", ")
-        ));
-    }
-
-    if let Some(on_conflict) = args.on_conflict {
-        context.log_info(&format!(
-            "  • on_conflict: {:?} → {:?}",
-            environment.on_conflict, on_conflict
-        ));
-    }
-
-    // Check if environment is locked
-    if environment.is_locked() {
-        context.log_warning(&format!(
-            "  • Environment is currently locked by {}",
-            get_locked_by_user(context, env_name)?
-        ));
-    }
-
-    // Prompt for confirmation
-    if !context.confirm("Do you want to apply these changes?")? {
-        return Ok(false);
-    }
-
-    context.log_info("User confirmed update - proceeding...");
-    Ok(true)
-}
-
-/// Apply the changes to the environment
-fn apply_changes(context: &GlobalContext, args: &SetCommand) -> Result<()> {
-    context.log_verbose(&format!(
-        "Applying changes to environment '{}'...",
-        args.env_name
-    ));
-
-    crate::utils::prelude::modify_metadata(context, |config| {
-        // Warn if the approval policy is being changed while requests are in flight.
-        // Approver-list changes take effect immediately (a removed approver's prior
-        // approval still counts; a newly-added approver can approve), while each
-        // request keeps the min-approvals threshold it was created with.
-        let changing_approval_policy = args.min_approvals.is_some()
-            || args.requires_approval.is_some()
-            || !args.add_approver.is_empty()
-            || !args.remove_approver.is_empty()
-            || !args.set_approvers.is_empty();
-        if changing_approval_policy {
-            let pending = config
-                .get_approval_requests_for_env(&args.env_name)
-                .into_iter()
-                .filter(|r| r.status == crate::types::ApprovalStatus::Pending)
-                .count();
-            if pending > 0 {
-                context.log_warning(&format!(
-                    "{} pending approval request(s) exist for '{}'. Approver-list changes apply \
-                     immediately, but each request keeps the approval threshold it was created \
-                     with. Review them with: hitch approvals list --status pending",
-                    pending, args.env_name
-                ));
-            }
-        }
-
-        let environment = config
-            .get_environment_mut(&args.env_name)
-            .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", args.env_name))?;
-
-        // Update base branch
-        if let Some(ref base) = args.base {
-            // If the new base branch is in the promoted branches list, remove it
-            if environment.branches.contains(base) {
-                environment.branches.retain(|b| b != base);
-                context.log_verbose(&format!(
-                    "  ✓ Removed '{}' from promoted branches (now base)",
-                    base
-                ));
-            }
-            environment.base = base.clone();
-            context.log_verbose(&format!("  ✓ Updated base branch to '{}'", base));
-        }
-
-        // Update requires_approval
-        if let Some(requires_approval) = args.requires_approval {
-            environment.requires_approval = requires_approval;
-            context.log_verbose(&format!(
-                "  ✓ Updated requires_approval to {}",
-                requires_approval
-            ));
-        }
-
-        // Update min_approvals
-        if let Some(min_approvals) = args.min_approvals {
-            environment.min_approvals = min_approvals;
-            context.log_verbose(&format!("  ✓ Updated min_approvals to {}", min_approvals));
-        }
-
-        // Add approvers
-        for email in &args.add_approver {
-            if !environment.approvers.contains(email) {
-                environment.approvers.push(email.clone());
-                context.log_verbose(&format!("  ✓ Added approver '{}'", email));
-            }
-        }
-
-        // Remove approvers
-        environment
-            .approvers
-            .retain(|e| !args.remove_approver.contains(e));
-        if !args.remove_approver.is_empty() {
-            context.log_verbose(&format!(
-                "  ✓ Removed {} approver(s)",
-                args.remove_approver.len()
-            ));
-        }
-
-        // Set complete approver list (replaces existing)
-        if !args.set_approvers.is_empty() {
-            environment.approvers = args.set_approvers.clone();
-            context.log_verbose(&format!(
-                "  ✓ Set approvers to [{}]",
-                environment.approvers.join(", ")
-            ));
-        }
-
-        // Update on_conflict policy
-        if let Some(on_conflict) = args.on_conflict {
-            environment.on_conflict = on_conflict;
-            context.log_verbose(&format!("  ✓ Updated on_conflict to {:?}", on_conflict));
-        }
-
-        // Validate the updated environment AFTER all changes are applied
-        // This allows atomic updates like enabling approval and adding approvers in one command
-        if environment.requires_approval {
-            // Auto-set min_approvals to 1 if not set and we're enabling approval
-            if environment.min_approvals == 0 {
-                environment.min_approvals = 1;
-            }
-
-            environment
-                .validate_approval_config()
-                .map_err(|e| anyhow::anyhow!("Invalid approval configuration: {}", e))?;
-        }
-
-        Ok(())
-    })?;
-
-    context.log_verbose(&format!(
-        "✓ Environment '{}' updated successfully",
-        args.env_name
-    ));
+    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    emit_receipt(context, &plan, &receipt)?;
     Ok(())
 }

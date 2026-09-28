@@ -237,10 +237,7 @@ pub fn plan_headline<I>(plan: &OperationPlan<I>) -> String {
         crate::operations::model::OperationIntent::SetEnvironment {
             environment,
             changes,
-        } => format!(
-            "Set {environment} · {} setting",
-            count(changes.len(), "setting")
-        ),
+        } => format!("Set {environment} · {}", count(changes.len(), "setting")),
         crate::operations::model::OperationIntent::AddEnvironment { environment, base } => {
             format!("Add {environment} on {base}")
         }

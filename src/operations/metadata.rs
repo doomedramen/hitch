@@ -72,6 +72,25 @@ pub struct EnvironmentSet {
     pub on_conflict: Option<crate::types::OnConflict>,
 }
 
+impl EnvironmentSet {
+    /// Whether the user named no field at all.
+    ///
+    /// Distinct from "the resolved edit is empty", which is what
+    /// `MetadataPlanDetail::writes_anything` answers. `hitch set dev
+    /// --add-approver a@b.c` where `a@b.c` is already an approver names a
+    /// field and changes nothing; `hitch set dev` names nothing and is a usage
+    /// error, not a no-op. Collapsing the two would make the second silent.
+    pub fn is_empty(&self) -> bool {
+        self.base.is_none()
+            && self.requires_approval.is_none()
+            && self.min_approvals.is_none()
+            && self.add_approver.is_empty()
+            && self.remove_approver.is_empty()
+            && self.set_approvers.is_empty()
+            && self.on_conflict.is_none()
+    }
+}
+
 /// Create or destroy — the add/remove direction, mirroring
 /// [`crate::operations::declaration::DeclarationChange`].
 ///
@@ -399,6 +418,21 @@ pub fn plan_set_environment(
             environment
         )));
     }
+    // A locked environment is a *human-facing* signal that someone else is
+    // working in here, so `hitch set` advises rather than refuses — which is
+    // what it did before, as a `log_warning` bolted onto the end of a preview
+    // block. In the plan it is a fact the reader weighs before confirming,
+    // rather than a line printed after a preview they were already being asked
+    // about.
+    if let Some(holder) = declared
+        .locked_by
+        .as_deref()
+        .filter(|_| declared.is_locked())
+    {
+        warnings.push(PlanWarning::advisory(format!(
+            "Environment '{environment}' is locked by '{holder}'"
+        )));
+    }
 
     let blocked = warnings.iter().any(PlanWarning::is_blocking);
     // A blocked plan proposes nothing that will not happen, so its proposed side
@@ -439,11 +473,29 @@ pub fn plan_set_environment(
         } else {
             vec![PlannedEffect::MetadataChange {
                 refname: METADATA_REF.to_string(),
-                description: describe_set(environment, &changes),
+                description: describe_set(
+                    environment,
+                    &changes,
+                    branch_absorbed_by_base.as_deref(),
+                ),
             }]
         },
         unaffected: Vec::new(),
-        confirmation: ConfirmationRequirement::not_required(),
+        // `should_push` and `writes_anything`, not `not_required` — and both
+        // halves are load-bearing. `modify_metadata` pushes `hitch-metadata`,
+        // so a `set` *can* owe a push, and a plan that claimed otherwise would
+        // let `--json` reach an apply the user never saw a question about. But a
+        // resolved edit of nothing writes no commit, so there is nothing to
+        // push and nothing to confirm: asking there would be a prompt whose
+        // answer decides nothing, which is the one thing a confirmation must
+        // never be.
+        confirmation: if context.should_push() && !changes.is_empty() {
+            ConfirmationRequirement::required(
+                "write the updated declaration and push hitch-metadata to origin",
+            )
+        } else {
+            ConfirmationRequirement::not_required()
+        },
         warnings,
         detail: MetadataPlanDetail {
             environment: environment.to_string(),
@@ -451,7 +503,7 @@ pub fn plan_set_environment(
             edit: MetadataEdit::Settings,
             changes,
             branch_absorbed_by_base,
-            locked_by: None,
+            locked_by: declared.locked_by.clone().filter(|_| declared.is_locked()),
             base: None,
         },
     };
@@ -1032,7 +1084,23 @@ fn has_pending_request(context: &GlobalContext, environment: &str) -> bool {
 /// naming itself, in the same way `apply_declaration_plan` does and for the same
 /// reason: there is no structure here for a renderer to work from, so a plan
 /// that carried one would be a model holding prose.
-fn describe_set(environment: &str, changes: &[EnvironmentFieldChange]) -> String {
+fn describe_set(
+    environment: &str,
+    changes: &[EnvironmentFieldChange],
+    absorbed: Option<&str>,
+) -> String {
+    // The absorbed branch is not a *field* change and no flag names it, so it
+    // cannot come out of `changed_fields` — but it is the one thing a reader of
+    // a base change most needs to know, because a promoted branch that becomes
+    // the base has silently stopped being promoted. Saying it here rather than
+    // leaving it to the `Result` block is the difference between the reader
+    // finding it and the reader being shown it.
+    if let Some(branch) = absorbed {
+        return format!(
+            "update base of '{}' to '{}', absorbing promoted branch '{}'",
+            environment, branch, branch
+        );
+    }
     if changes.is_empty() {
         return format!("no settings change to '{}'", environment);
     }
@@ -1071,13 +1139,22 @@ fn describe_applied(
             format!("remove environment '{}' from the declaration", environment)
         }
         MetadataEdit::Settings => {
-            if plan.detail.changes.is_empty() {
+            // The absorbed branch is the one value the receipt copies rather
+            // than re-reads, and the reason is that the write *erases* the
+            // evidence: after the edit the branch is no longer in `branches`,
+            // so there is nothing on the far side of the transaction to observe
+            // it from. It is not a prediction — the planner decided it from the
+            // pre-edit declaration and the apply wrote exactly that edit, so
+            // there is no interval in which the two could disagree. Everything
+            // else here is read back, because everything else is still
+            // observable.
+            if plan.detail.branch_absorbed_by_base.is_none() && plan.detail.changes.is_empty() {
                 return format!("no settings change to '{}'", environment);
             }
-            format!(
-                "update {} of '{}'",
-                changed_fields(&plan.detail.changes).join(", "),
-                environment
+            describe_set(
+                environment,
+                &plan.detail.changes,
+                plan.detail.branch_absorbed_by_base.as_deref(),
             )
         }
     }

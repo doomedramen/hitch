@@ -27,9 +27,10 @@ mod tests {
                 .run()
                 .args(&["set", "dev", "--base", "develop"])
                 .execute()?;
+            // The receipt names the field it wrote, not just the environment.
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'dev'");
+                .assert_stdout_contains("update base of 'dev'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -69,7 +70,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'production'");
+                .assert_stdout_contains("update approval requirement, approvers of 'production'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -117,7 +118,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'production'");
+                .assert_stdout_contains("update approval threshold of 'production'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -169,7 +170,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'production'");
+                .assert_stdout_contains("update approvers of 'production'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -223,7 +224,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'production'");
+                .assert_stdout_contains("update approvers of 'production'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -281,7 +282,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'production'");
+                .assert_stdout_contains("update approvers of 'production'");
 
             // Verify environment was updated
             let config = env.read_hitch_config()?;
@@ -465,7 +466,7 @@ mod tests {
                 .execute()?;
             result
                 .assert_success()
-                .assert_stdout_contains("Successfully updated environment 'dev'");
+                .assert_stdout_contains("update base, approval requirement, approvers of 'dev'");
 
             // Verify all changes were applied
             let config = env.read_hitch_config()?;
@@ -519,6 +520,281 @@ mod tests {
             assert_eq!(prod_env.min_approvals, 2);
             assert_eq!(prod_env.approvers.len(), 2);
 
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    // ── plan → apply → receipt ──────────────────────────────────────────
+    //
+    // `hitch set` is the widest metadata edit: seven flags resolving to four
+    // fields, and — uniquely among P8's commands — an edit whose *resolution* is
+    // not its inputs. `--add-approver` for someone already on the list, and
+    // `--base` for a branch already promoted, both name a flag and move
+    // nothing. These four tests are about that gap: what a plan says when the
+    // flags are not the changes, and what a commit is worth.
+
+    #[test]
+    fn a_set_shows_the_resolved_edit_and_its_collateral_not_the_flags() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            // Promote a real feature branch before re-basing onto it, so the
+            // base change has collateral the user did not ask for and no flag
+            // names.
+            env.git.run(&["checkout", "-b", "feature"])?;
+            env.fs.write_file("feature.txt", "x")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feature"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature", "dev"])
+                .execute()?
+                .assert_success();
+            let before = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // The collateral is the branch that just stopped being promoted
+            // because it became the base. It is in the *plan*, not only in the
+            // receipt: a reader who does not see it will think they promoted a
+            // branch into a base and lost it. Checked on a dry run so the two
+            // halves are separable — a plan that only ever appears alongside its
+            // own receipt cannot be shown to be write-free.
+            let preview = env
+                .hitch
+                .run()
+                .args(&["set", "dev", "--base", "feature", "--dry-run"])
+                .execute()?;
+            let plan = preview.stdout();
+            preview
+                .assert_success()
+                .assert_stdout_contains("absorbing promoted branch 'feature'");
+            assert!(
+                !plan.contains("Applied"),
+                "a preview has no receipt half — there was no apply to record: {plan}"
+            );
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "hitch-metadata"])?
+                    .stdout()
+                    .trim(),
+                before,
+                "a plan is a decision, not a recipe: previewing it wrote nothing"
+            );
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["set", "dev", "--base", "feature"])
+                .execute()?;
+            let out = result.stdout();
+            result
+                .assert_success()
+                .assert_stdout_contains("absorbing promoted branch 'feature'");
+            // Both documents name the absorbed branch and the plan says it once.
+            // Three mentions would be the plan and the receipt plus a third
+            // voice, and one would be a receipt that forgot the fact the plan
+            // was careful to state.
+            assert_eq!(
+                out.matches("absorbing promoted branch 'feature'").count(),
+                2,
+                "once in the plan and once in the receipt: {out}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_set_that_resolves_to_nothing_spends_no_metadata_commit() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["set", "dev", "--min-approvals", "2"])
+                .execute()?
+                .assert_success();
+            let before = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Names a flag. Changes nothing.
+            let result = env
+                .hitch
+                .run()
+                .args(&["set", "dev", "--min-approvals", "2"])
+                .execute()?;
+            let out = result.stdout();
+            result
+                .assert_success()
+                .assert_stdout_contains("Already up to date");
+            assert!(
+                !out.contains("Will change\n  hitch-metadata   update"),
+                "and proposes no effect it will not make: {out}"
+            );
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "hitch-metadata"])?
+                    .stdout()
+                    .trim(),
+                before,
+                "a commit recording that hitch did nothing would make the *next* \
+                 plan stale for a reason no reader could see"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_dry_run_previews_a_set_and_writes_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            let before = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["set", "dev", "--min-approvals", "3", "--dry-run"])
+                .execute()?;
+            let out = result.stdout();
+            result
+                .assert_success()
+                .assert_stdout_contains("update approval threshold of 'dev'");
+            assert!(
+                !out.contains("Applied"),
+                "a preview has no receipt half — there was no apply to record: {out}"
+            );
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "hitch-metadata"])?
+                    .stdout()
+                    .trim(),
+                before
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn an_invalid_approval_combination_is_refused_in_a_plan() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&[
+                    "set",
+                    "dev",
+                    "--requires-approval",
+                    "true",
+                    "--add-approver",
+                    "a@x.com",
+                ])
+                .execute()?
+                .assert_success();
+            let before = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            // Two approvers on the list, a threshold of one, so this is valid —
+            // except the threshold is being raised past the approver count.
+            env.hitch
+                .run()
+                .args(&["set", "dev", "--add-approver", "b@x.com"])
+                .execute()?
+                .assert_success();
+            let armed = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&[
+                    "set",
+                    "dev",
+                    "--remove-approver",
+                    "a@x.com",
+                    "--min-approvals",
+                    "2",
+                ])
+                .execute()?;
+            let out = result.stdout();
+            let err = result.stderr();
+            result.assert_failure();
+            assert!(
+                out.contains("Why this cannot apply"),
+                "the refusal is in a plan, so the reader sees the edit it refused: {out}"
+            );
+            assert!(
+                !out.contains("Will change"),
+                "and that plan proposes nothing it will not do: {out}"
+            );
+            assert!(
+                err.contains("cannot be greater than number of approvers"),
+                "and says which of the two settings disagrees with the other: {err}"
+            );
+            assert!(
+                err.contains("hitch set dev --add-approver"),
+                "and names the move that unblocks it, rather than the command that \
+                 just failed: {err}"
+            );
+            assert_eq!(
+                env.git
+                    .run(&["rev-parse", "hitch-metadata"])?
+                    .stdout()
+                    .trim(),
+                armed,
+                "a refused set must not spend a metadata commit"
+            );
+            let _ = before;
             Ok::<(), anyhow::Error>(())
         });
 
