@@ -1072,8 +1072,20 @@ mod tests {
                 .assert_stdout_contains("Approval threshold met")
                 .assert_stdout_contains("approved and operation executed successfully");
 
-            // Verify branch is now demoted from production
-            let status_after = env.hitch.run().args(&["status"]).execute()?;
+            // Verify branch is now demoted from production.
+            //
+            // `--environments` because P7 gave `hitch status` a matrix default
+            // and moved the per-environment branch list behind this flag. The
+            // matrix would not answer this anyway: it upper-cases environment
+            // names in the column header, so `split("production")` finds
+            // nothing there, and "is this branch still declared in that
+            // environment" is a per-environment question the grid does not
+            // answer by name.
+            let status_after = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
             let status_output = status_after.stdout();
 
             // Check that feature/to-demote is no longer in production's branches

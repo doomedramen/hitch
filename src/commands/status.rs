@@ -1,8 +1,12 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{
+    emit_json, render_environment_summaries, render_matrix, render_matrix_at,
+};
 use crate::core::state::{
     build_state_snapshot, ActualComposition, ApprovalPolicy, DeclaredBranch, DesiredComposition,
     EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
 };
+use crate::core::status::{build_matrix_model, build_status_model};
 use crate::types::{Environment, HitchConfig};
 use crate::utils::prelude::access_metadata_read_only;
 use crate::utils::setup;
@@ -20,6 +24,17 @@ pub struct StatusCommand {
     /// Show changes compared to the last commit
     #[arg(long)]
     pub diff: bool,
+
+    /// Show the per-environment, per-branch view that predates the matrix.
+    ///
+    /// The value is optional: `--environments` alone shows every environment,
+    /// `--environments dev` shows one. clap has no optional-value form for an
+    /// `Option<T>`, so the flag is declared as taking 0-or-1 arguments and
+    /// `default_missing_value` turns the bare form into `Some("")` — which
+    /// `run` reads back as "no name given" rather than as an environment
+    /// literally called `""`.
+    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
+    pub environments: Option<String>,
 }
 
 pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
@@ -49,8 +64,25 @@ pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
         snapshot.features.len(),
     ));
 
-    // Display status
-    display_status(&context, &config, &snapshot)?;
+    // The matrix and the per-environment view are two renderings of *one*
+    // snapshot and *one* model, so the choice between them is made here and
+    // both read from the same values. `--json` follows the same rule the four
+    // mutating commands do: stdout is a document and nothing else, so the
+    // prose is not printed at all rather than printed and then made
+    // unparseable.
+    if context.json {
+        emit_status_json(&snapshot)?;
+    } else if let Some(only) = args.environments.as_deref() {
+        display_status(
+            &context,
+            &config,
+            &snapshot,
+            // The bare `--environments` form. See the field's doc comment.
+            (!only.is_empty()).then_some(only),
+        )?;
+    } else {
+        display_matrix(&context, &config, &snapshot)?;
+    }
 
     // Show diff if requested
     if args.diff {
@@ -61,18 +93,166 @@ pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
     Ok(())
 }
 
-/// Display formatted status information
-fn display_status(
+/// The `--json` document for `hitch status`.
+///
+/// `{"schema_version", "status"}` rather than P6's `{plan, receipt}`, and the
+/// reason is in the P7 plan: a two-key envelope exists because a *mutation*
+/// has two halves — what was true before and what is true after. A read-only
+/// view has one, and forcing it into two keys would mean either a `null`
+/// receipt (which says "nothing happened" — true, and useless) or a second
+/// envelope shape anyway.
+///
+/// It carries the matrix model and the environment models rather than the
+/// whole snapshot, because the snapshot is an internal shape with
+/// `BTreeMap`-ordering already imposed and no stability promise, whereas
+/// `build_status_model`'s output is what `hitch status` actually displays.
+#[derive(serde::Serialize)]
+struct StatusDocument {
+    captured_at: DateTime<Utc>,
+    current_branch: Option<String>,
+    matrix: crate::core::status::MatrixModel,
+    environments: Vec<crate::core::status::EnvironmentStatusModel>,
+}
+
+fn emit_status_json(snapshot: &RepositoryStateSnapshot) -> Result<()> {
+    // `MatrixModel`/`EnvironmentStatusModel` are projections of the snapshot
+    // and are not `Serialize` yet; the document builds them here so the JSON
+    // and the prose are rendered from the same two values.
+    #[derive(serde::Serialize)]
+    struct Envelope {
+        schema_version: u32,
+        status: StatusDocument,
+    }
+    let envelope = Envelope {
+        schema_version: crate::core::render::JSON_SCHEMA_VERSION,
+        status: StatusDocument {
+            captured_at: snapshot.captured_at,
+            current_branch: snapshot.current_branch.clone(),
+            matrix: crate::core::status::build_matrix_model(snapshot),
+            environments: build_status_model(snapshot).environments,
+        },
+    };
+    emit_json(&envelope)
+}
+
+/// The default view: the matrix, the per-environment summary lines, and the
+/// pending work — in that order, so the grid is the first thing a reader sees
+/// and the suggestions sit directly beneath the thing they are about.
+fn display_matrix(
     context: &GlobalContext,
     config: &HitchConfig,
     snapshot: &RepositoryStateSnapshot,
 ) -> Result<()> {
-    // Display overall summary
-    display_overall_summary(context, config, snapshot)?;
+    display_headline(context)?;
 
     if config.environments.is_empty() {
         context.log_info("No environments configured.");
         context.log_info("Use 'hitch add <environment>' to create your first environment.");
+        return Ok(());
+    }
+
+    let matrix = build_matrix_model(snapshot);
+    match column_budget() {
+        // No width to report — a pipe, a CI log, a redirect. That is not "narrow",
+        // it is unbounded, and inventing a budget from a guess would make a
+        // caller decide something about the reader's terminal that it cannot see.
+        None => println!("{}", render_matrix(&matrix)),
+        Some(budget) => println!("{}", render_matrix_at(&matrix, budget)),
+    }
+    println!();
+
+    if !matrix.summaries.is_empty() {
+        println!(
+            "{}",
+            render_environment_summaries(&matrix.summaries).trim_end()
+        );
+        println!();
+    }
+
+    // Suggested actions, moved up from the bottom of the screen. The
+    // suggestions themselves are unchanged — the same `match` on
+    // `EnvironmentHealth`, the same commands, the same deliberate silence for
+    // `LegacyUnknown` — so this is a move and not a rewrite.
+    display_suggested_actions(snapshot);
+
+    println!("{}", "🔧 Quick commands:".bright_blue());
+    println!("  • Explain a branch: 'hitch why <branch> [environment]'");
+    println!("  • List branches: 'git branch -a'");
+    println!("  • Promote branch: 'hitch promote <branch> <environment>'");
+    println!("  • Rebuild env: 'hitch rebuild <environment>'");
+    println!("  • Lock env: 'hitch lock <environment>'");
+    println!();
+
+    display_protection_status(context, config);
+
+    Ok(())
+}
+
+/// The reader's terminal width, if there is one to report.
+///
+/// `COLUMNS` only, deliberately. There is no `terminal_size` dependency here and
+/// adding one to learn a number the shell already exports is a real cost — in
+/// the dependency tree, in build time, and in a second way for the value to be
+/// wrong. So:
+///
+/// - unset, or set to something that is not a number: unbounded. Every
+///   non-interactive caller lands here, and every one of them wants the full
+///   grid.
+/// - set: used as the budget, so [`render_matrix_at`] can decline to print a
+///   table that would wrap into nonsense.
+///
+/// A width of zero is treated as *no* width rather than as "zero columns",
+/// because `COLUMNS=0` is what some shells export for "unknown" and a budget of
+/// zero would print the fallback for a reader with a perfectly wide terminal.
+fn column_budget() -> Option<usize> {
+    match std::env::var("COLUMNS") {
+        Ok(raw) => raw.trim().parse::<usize>().ok().filter(|w| *w > 0),
+        Err(_) => None,
+    }
+}
+
+/// The per-environment, per-branch view that predates the matrix.
+///
+/// Unchanged in wording on purpose. It is a genuinely different view — it
+/// carries the per-branch *prediction* ("would be held on the next rebuild"),
+/// the approval policy and the cleanup notes, none of which belong in a grid —
+/// so it survives as `--environments` rather than being reworded into the new
+/// shape. What a reader wants to know about one environment is now
+/// `hitch why <environment>`.
+fn display_status(
+    context: &GlobalContext,
+    config: &HitchConfig,
+    snapshot: &RepositoryStateSnapshot,
+    only_environment: Option<&str>,
+) -> Result<()> {
+    // Display overall summary
+    display_headline(context)?;
+
+    if config.environments.is_empty() {
+        context.log_info("No environments configured.");
+        context.log_info("Use 'hitch add <environment>' to create your first environment.");
+        return Ok(());
+    }
+
+    if let Some(name) = only_environment {
+        // A typo'd environment name is worth an error rather than an empty
+        // screen: `--environments devv` printing nothing at all reads as "dev is
+        // fine", which is the opposite of the truth.
+        if !config.environments.contains_key(name) {
+            let mut known: Vec<&str> = config.environments.keys().map(|k| k.as_str()).collect();
+            known.sort_unstable();
+            anyhow::bail!(
+                "No environment named '{}'. Configured environments: {}",
+                name,
+                if known.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    known.join(", ")
+                }
+            );
+        }
+        let env = &config.environments[name];
+        display_environment_status(context, name, env, config, snapshot)?;
         return Ok(());
     }
 
@@ -93,42 +273,18 @@ fn display_status(
     Ok(())
 }
 
-/// Display overall project summary
-fn display_overall_summary(
-    context: &GlobalContext,
-    config: &HitchConfig,
-    snapshot: &RepositoryStateSnapshot,
-) -> Result<()> {
+/// The headline: what command this is, and which branch the reader is on.
+///
+/// Deliberately *not* a rollup. The `📊 N environments: … total, locked, need
+/// rebuild, never rebuilt` line that used to live here is gone, and each of its
+/// four facts has somewhere better to live: the per-environment summary row
+/// under the matrix carries the counts and the verdict, and the lock is
+/// rendered on that same row. A second pass over the configuration producing a
+/// second set of totals is exactly the drift P3 removed from this command, and
+/// nothing about deleting it costs a fact.
+fn display_headline(context: &GlobalContext) -> Result<()> {
     println!("{}", "🚀 Hitch Environment Status".bright_green().bold());
     println!("{}", "─".repeat(50).dimmed());
-
-    // Count different states
-    let total_envs = config.environments.len();
-    let locked_envs = config
-        .environments
-        .values()
-        .filter(|e| e.is_locked())
-        .count();
-    let needs_rebuild = snapshot
-        .environments
-        .iter()
-        .filter(|e| e.health.is_actionable())
-        .count();
-    let never_rebuilt = snapshot
-        .environments
-        .iter()
-        .filter(|e| matches!(e.health, EnvironmentHealth::NeverBuilt))
-        .count();
-
-    // Display summary line
-    println!(
-        "📊 {} environments: {} total, {} locked, {} need rebuild, {} never rebuilt",
-        total_envs,
-        total_envs.to_string().bright_cyan(),
-        locked_envs.to_string().bright_yellow(),
-        needs_rebuild.to_string().bright_yellow(),
-        never_rebuilt.to_string().bright_red()
-    );
     println!();
 
     // Show current git branch info
@@ -144,16 +300,16 @@ fn display_overall_summary(
     Ok(())
 }
 
-/// Display status summary at the end
-fn display_status_summary(snapshot: &RepositoryStateSnapshot) -> Result<()> {
-    println!("{}", "─".repeat(50).dimmed());
-
-    // Quick action suggestions
+/// The environments with work outstanding, as commands to run.
+///
+/// Read from [`EnvironmentHealth`] and nowhere else, so it cannot disagree
+/// with the matrix cell or the summary row above it — the same rule the rest of
+/// this command follows. `LegacyUnknown` gets no suggestion on purpose: there
+/// is nothing obviously wrong to fix, and nudging a rebuild on every
+/// environment last published by `hitch release` would be noise.
+fn display_suggested_actions(snapshot: &RepositoryStateSnapshot) {
     let mut suggestions = Vec::new();
 
-    // Check for environments that need rebuilding. `LegacyUnknown` gets no
-    // suggestion: there is nothing obviously wrong to fix, and nudging a
-    // rebuild on every `hitch release`-published environment would be noise.
     for state in &snapshot.environments {
         let env_name = &state.name;
         match &state.health {
@@ -184,6 +340,13 @@ fn display_status_summary(snapshot: &RepositoryStateSnapshot) -> Result<()> {
         }
         println!();
     }
+}
+
+/// Display status summary at the end
+fn display_status_summary(snapshot: &RepositoryStateSnapshot) -> Result<()> {
+    println!("{}", "─".repeat(50).dimmed());
+
+    display_suggested_actions(snapshot);
 
     // Quick help
     println!("{}", "🔧 Quick commands:".bright_blue());

@@ -463,14 +463,18 @@ mod tests {
     /// same `compose_environment` over the same pinned SHAs.
     ///
     /// This checks the **verdict**, not the prose: for each path, which branch
-    /// was held and against which neighbour, plus how many. Deliberately
-    /// tolerant of wording, because the two paths legitimately render the same
-    /// event differently (the real build additionally emits compose's
-    /// per-branch `⛔ Held …` warning, which a preview that never composed
-    /// would not have). A test that compared rendered lines would fail on
-    /// cosmetics while staying silent about an actual verdict divergence — the
-    /// bug this phase exists to prevent. The sharper case, where the two paths
-    /// disagreed about *whether* replay resolves a conflict, is covered by
+    /// was held and against which neighbour, plus how many. A test that compared
+    /// rendered lines would fail on cosmetics while staying silent about an
+    /// actual verdict divergence — the bug this phase exists to prevent.
+    ///
+    /// It used to have to be word-tolerant, because the real build additionally
+    /// emitted compose's per-branch `⛔ Held …` warning, which a preview that
+    /// never composed would not have. That warning is gone: the plan's
+    /// Composition section already names the branch, the partner, the files and
+    /// the remedy, so the two paths now render the hold identically and the
+    /// `held_verdict` scan below is a straightforward comparison. The sharper
+    /// case, where the two paths disagreed about *whether* replay resolves a
+    /// conflict, is covered by
     /// `resolve_tests::test_dry_run_agrees_with_real_build_about_replayed_resolutions`.
     #[test]
     fn test_dry_run_and_real_build_agree_on_held_branches() -> anyhow::Result<()> {

@@ -694,6 +694,252 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // One voice between the plan and the receipt
+    // -------------------------------------------------------------------------
+
+    /// Write branches into `hitch.json` without going through `promote`, which
+    /// is what lets a genuinely conflicting pair reach the *build* — `promote`
+    /// itself refuses a branch that conflicts with a sibling, so a hold inside a
+    /// nested rebuild can only be staged this way.
+    fn inject_branches_into_metadata(
+        env: &TestEnvironment,
+        env_name: &str,
+        branches: &[&str],
+    ) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let config_str = env.fs.read_file("hitch.json")?;
+        let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
+        config["environments"][env_name]["branches"] = serde_json::Value::Array(
+            branches
+                .iter()
+                .map(|b| serde_json::Value::String(b.to_string()))
+                .collect(),
+        );
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git
+            .run(&["commit", "-m", "test: inject branches into metadata"])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    /// Three branches editing the same file incompatibly, so any build that
+    /// composes more than one of them must hold the rest. Declaration order
+    /// decides the merge order, so `branch-b` and `branch-c` each conflict with
+    /// `branch-a` and are held in turn.
+    fn three_conflicting_branches(env: &TestEnvironment) -> anyhow::Result<()> {
+        for name in ["branch-a", "branch-b", "branch-c"] {
+            env.git.run(&["checkout", "-b", name])?;
+            env.fs.write_file("shared.txt", &format!("from {name}\n"))?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git
+                .run(&["commit", "-m", &format!("{name} changes shared.txt")])?;
+            env.git.run(&["checkout", "main"])?;
+        }
+        Ok(())
+    }
+
+    /// The nested build used to print a `StepLogger` transcript —
+    /// `[1/3] Rebuilding environment 'dev' - Synchronizing branches`, `Merging
+    /// 'branch-a'`, `Publishing 'dev'` — between the plan and the receipt, in a
+    /// vocabulary the plan had already superseded. Three renderings of one
+    /// operation, and the reader had to work out which was the plan.
+    ///
+    /// `demote` rather than `promote`, because `promote` refuses a branch whose
+    /// environment already holds an incompatible pair — the hold has to come
+    /// from the *nested* build, and a promote cannot reach one.
+    #[test]
+    fn test_demote_narrates_the_nested_rebuild_only_once() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            three_conflicting_branches(env)?;
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev"])
+                .execute()?
+                .assert_success();
+            inject_branches_into_metadata(env, "dev", &["branch-a", "branch-b", "branch-c"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["demote", "branch-c", "dev"])
+                .execute()?;
+            let stdout = result.stdout();
+
+            // The plan's own line for the nested rebuild is still there…
+            assert!(
+                stdout.contains("rebuild dev"),
+                "the plan must still say it will rebuild dev:\n{stdout}"
+            );
+            // …and the transcript that repeated it in another vocabulary is not.
+            for transcript in [
+                "Synchronizing branches",
+                "Publishing 'dev'",
+                "Rebuilding environment",
+                "Triggering rebuild",
+            ] {
+                assert!(
+                    !stdout.contains(transcript),
+                    "the nested build narrated {transcript:?} between the plan and the \
+                     receipt:\n{stdout}"
+                );
+            }
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A hold inside a nested rebuild used to be reported *nowhere* once the
+    /// transcript was gone: the nested build's own receipt — which is where
+    /// `DependentRebuildOutcome::Rebuilt`'s doc said the holds were recorded —
+    /// is thrown away by `rebuild_environment_opts`, and the caller bound
+    /// `Ok(_)`. So a demote whose build silently held a branch reported a clean
+    /// `✓ rebuild dev`, and only the `Result` block hinted at it.
+    ///
+    /// The receipt must now name the hold, *and* name the partner: a hold with
+    /// no partner is indistinguishable from a base that moved underneath the
+    /// branch, and those have different remedies.
+    #[test]
+    fn test_a_hold_inside_a_nested_rebuild_reaches_the_receipt() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            three_conflicting_branches(env)?;
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev"])
+                .execute()?
+                .assert_success();
+            inject_branches_into_metadata(env, "dev", &["branch-a", "branch-b", "branch-c"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["demote", "branch-c", "dev"])
+                .execute()?;
+            let stdout = result.stdout();
+
+            assert!(
+                stdout.contains("branch held: branch-b (conflicts with branch-a)"),
+                "the receipt must name the held branch and its partner:\n{stdout}"
+            );
+            // Not owed, and not clean: both of those would be lies about a build
+            // that left a declared branch out.
+            assert!(
+                !stdout.contains("✓ rebuild dev"),
+                "a build that held a branch must not render as a clean rebuild:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("⧗ rebuild dev"),
+                "a hold is not owed work:\n{stdout}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A demote's `Result` block names the removed branch once, and every detail
+    /// line says what happened. `removed ⊆ changed_inputs` holds by
+    /// construction — `health_from_record` walks the *recorded* pins, and a
+    /// branch that has left the declaration resolves to no current SHA — so
+    /// rendering both lists said the same branch twice, and the SHA line is the
+    /// one carrying no action.
+    ///
+    /// `--no-rebuild`, because that is the only way a removal reaches
+    /// `NeedsRebuild` at all: a demote that rebuilds leaves the environment
+    /// `realised`, and there is nothing to report. `main` is moved so the block
+    /// has a genuine `moved` line too, and the two must not read alike.
+    #[test]
+    fn test_a_demoted_branch_is_named_once_in_the_result() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            for name in ["feature-1", "feature-2"] {
+                env.git.run(&["checkout", "-b", name])?;
+                env.fs.write_file(&format!("{name}.txt"), name)?;
+                env.git.run(&["add", "."])?;
+                env.git.run(&["commit", "-m", &format!("add {name}")])?;
+                env.git.run(&["checkout", "main"])?;
+                env.hitch
+                    .run()
+                    .args(&["promote", name, "dev"])
+                    .execute()?
+                    .assert_success();
+            }
+
+            // Revise the branch about to be demoted, so its demotion is a
+            // *changed* input as well as a removal — the overlap being asserted.
+            env.git.run(&["checkout", "feature-2"])?;
+            env.fs.write_file("feature-2.txt", "revised\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "revise feature-2"])?;
+            env.git.run(&["checkout", "main"])?;
+            // And move the base, so there is a `moved` line to render beside it.
+            env.git
+                .run(&["commit", "--allow-empty", "-m", "main moves"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["demote", "feature-2", "dev", "--no-rebuild"])
+                .execute()?;
+            let stdout = result.stdout();
+
+            assert!(
+                stdout.contains("feature-2 removed from the declaration"),
+                "the removal must be named:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("main moved"),
+                "a moved base must say so rather than render a bare arrow:\n{stdout}"
+            );
+            // Scoped to the `Result` block: the plan legitimately names the
+            // branch three more times above (Current, Proposed, the effect), and
+            // the assertion is about the one place that used to say it twice.
+            let result_block = stdout
+                .split_once("Result")
+                .expect("the receipt must render a Result block")
+                .1;
+            assert_eq!(
+                result_block.matches("feature-2").count(),
+                1,
+                "the demoted branch is reported more than once in Result:\n{result_block}"
+            );
+            assert!(
+                !result_block.contains("feature-2 moved"),
+                "a removal must not also render as a moved input:\n{result_block}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
     // Item 5: --no-rebuild flag for batching promotes/demotes
     // -------------------------------------------------------------------------
 

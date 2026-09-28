@@ -253,13 +253,20 @@ fn perform_release_core(
         return Ok(None);
     }
 
+    // Narrated to stdout on neither arm. The dry-run already went quiet here
+    // (`log_verbose`) and the apply went quiet at its own call site; the plan's
+    // Composition section says `✓ <branch> at <sha>` for each merge, in
+    // declaration order, which is the same list these lines carried in a second
+    // vocabulary. The one thing that genuinely needed saying before the plan —
+    // which environment is releasing to which target — is the plan's title,
+    // printed immediately below.
     let plan = plan_release(
         context,
         env_name,
         target_branch,
         options,
         PlanPurpose::Confirm,
-        &mut |step| context.log_info(step),
+        &mut |step| context.log_verbose(step),
     )?;
 
     // The discard precedes the return on *both* non-applying arms. Writing it as
@@ -279,6 +286,10 @@ fn perform_release_core(
         return Ok(None);
     }
 
-    let receipt = apply_release_plan(context, &plan, &mut |step| context.log_info(step))?;
+    // No narration here, exactly as in `promote::run` / `demote::run`. Every
+    // step the apply would narrate — tagging, publishing, updating metadata,
+    // pruning, rebuilding dependents — is a line in the receipt printed a few
+    // lines below, in the same vocabulary as the plan the user just read.
+    let receipt = apply_release_plan(context, &plan, &mut |_| {})?;
     Ok(Some(ReleaseRun { plan, receipt }))
 }

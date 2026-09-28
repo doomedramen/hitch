@@ -36,16 +36,18 @@ pub struct Cli {
     /// Print a machine-readable document on stdout and nothing else; send all
     /// progress, warnings, and errors to stderr
     ///
-    /// Honours this today: `rebuild`, `promote`, `demote`, `release`. A
-    /// command that does not support it says so rather than printing prose into
-    /// a stream the caller is about to parse. `status` gains it alongside the
-    /// status matrix; the mutating commands are the ones an agent drives.
+    /// Honours this today: `rebuild`, `promote`, `demote`, `release`, `status`,
+    /// `why`. A command that does not support it says so rather than printing
+    /// prose into a stream the caller is about to parse.
     ///
     /// For a mutating command the document is `{"schema_version", "plan",
-    /// "receipt"}`, and `receipt` is `null` for a `--dry-run`. A mutating
-    /// command that needs confirmation but was not given `--yes` fails rather
-    /// than prompting: a program that blocks on a terminal read is the failure
-    /// this flag exists to remove.
+    /// "receipt"}`, and `receipt` is `null` for a `--dry-run`. For a read-only
+    /// command it is `{"schema_version", "<view>"}` — `status` and `why` have
+    /// no "after" half, and a `null` receipt would say "nothing happened", which
+    /// is true and useless. Enum values are `snake_case` in the read-only
+    /// documents. A mutating command that needs confirmation but was not given
+    /// `--yes` fails rather than prompting: a program that blocks on a terminal
+    /// read is the failure this flag exists to remove.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -75,6 +77,16 @@ pub enum Commands {
     Status(commands::status::StatusCommand),
     /// Show hierarchy of branches and environments
     Tree(commands::tree::TreeCommand),
+    /// Explain why a branch or environment is in its current state
+    ///
+    /// Three forms, and nothing else:
+    ///   hitch why <branch>                     the branch, in every environment
+    ///   hitch why <branch> <environment>       the branch, in that one
+    ///   hitch why <environment>                the environment, desired vs actual
+    ///
+    /// A name that is both an environment and a promoted branch is an error
+    /// naming both readings rather than a guess.
+    Why(commands::why::WhyCommand),
     /// Lock environment to prevent deployments
     Lock(commands::lock::LockCommand),
     /// Unlock environment to allow deployments

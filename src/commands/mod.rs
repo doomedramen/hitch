@@ -25,3 +25,4 @@ pub mod setup;
 pub mod status;
 pub mod tree;
 pub mod unlock;
+pub mod why;

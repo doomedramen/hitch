@@ -666,6 +666,29 @@ impl OperationOutcome {
     }
 }
 
+/// A branch a build held out, and the neighbour it conflicts with.
+///
+/// The two halves are both load-bearing and neither is derivable from the
+/// other: `branch` is what the user has to go fix, and `conflicts_with` is what
+/// they have to fix it *against*. A hold reported without the partner is
+/// indistinguishable from a base that moved underneath the branch — which is a
+/// different remedy entirely (`git rebase <base>` rather than reordering the
+/// branch list).
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct HoldPair {
+    pub branch: String,
+    pub conflicts_with: String,
+}
+
+impl From<&crate::utils::prelude::CompatibilityConflict> for HoldPair {
+    fn from(conflict: &crate::utils::prelude::CompatibilityConflict) -> Self {
+        HoldPair {
+            branch: conflict.branch.clone(),
+            conflicts_with: conflict.conflicts_with.clone(),
+        }
+    }
+}
+
 /// A change that actually happened.
 ///
 /// Mirrors [`PlannedEffect`] and is read back from the repository *after* the
@@ -696,6 +719,18 @@ pub enum AppliedEffect {
     DependentEnvironmentRebuild {
         environment: String,
         outcome: DependentRebuildOutcome,
+        /// The branches the build held out, with the neighbour each conflicts
+        /// with, as `held by → against` pairs.
+        ///
+        /// A field rather than a fourth `DependentRebuildOutcome` variant
+        /// because a hold is not a different *outcome* — the rebuild landed, and
+        /// `owes_effect`/`as_str`/`reason` must keep meaning what they say. But
+        /// it was genuinely being lost: the nested rebuild's own receipt, where
+        /// the holds used to be "recorded", is thrown away by
+        /// `rebuild_environment_opts`, so with the `StepLogger` transcript
+        /// suppressed there was nowhere at all for a hold to appear except this.
+        /// A fact with no reader is a fact the model is not really tracking.
+        held: Vec<HoldPair>,
         refname: String,
     },
     /// The branches actually removed. An observation: the plan predicted a
@@ -719,7 +754,11 @@ pub enum AppliedEffect {
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum DependentRebuildOutcome {
     /// Rebuilt. Holds are not folded in here: a rebuild that landed with
-    /// branches held still rebuilt, and the holds are in its own receipt.
+    /// branches held still rebuilt, so the holds ride on the enclosing
+    /// `AppliedEffect::DependentEnvironmentRebuild`'s `held` field rather than
+    /// changing what the *outcome* was. (This doc used to point at the nested
+    /// build's own receipt, which `rebuild_environment_opts` throws away — so
+    /// the holds were recorded nowhere at all.)
     Rebuilt,
     /// Deliberately not done, and why. A skip is neither success nor failure.
     Skipped(String),

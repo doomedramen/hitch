@@ -1,9 +1,67 @@
-//! Integration tests for hitch status command
+//! Integration tests for the `hitch status` command.
+//!
+//! # Two views, and saying which one a test is reading
+//!
+//! `hitch status` has two views. The default is the **matrix** — a
+//! feature × environment grid plus one summary line per environment — and the
+//! per-environment, per-branch detail that predates it moved behind
+//! `--environments` with its wording untouched.
+//!
+//! So every assertion below says which of the two it reads, and a test that
+//! wants the detail view puts `--environments` on the command line. Getting
+//! that wrong fails loudly rather than silently (an assertion on
+//! `Branches (3 promoted)` is simply not present in the matrix output), but
+//! there is one class that does *not*: a summary count. `desired 3 · actual 3`
+//! reads the same in both, so an assertion on it passes against either view and
+//! tests neither. That is why the matrix's own claims are asserted against the
+//! matrix, and the detail view's claims against the detail view, in separate
+//! tests.
+//!
+//! # Why the summary assertions collapse whitespace
+//!
+//! `render_environment_summaries` sizes its name column to the widest
+//! environment name rather than to a constant, so `DEV  desired 3` and
+//! `DEV      desired 0` are both correct — for different sets of environments.
+//! Hardcoding the padding would mean every test that adds an environment
+//! silently starts asserting a layout bug, and would be asserting the constant
+//! rather than the content. [`assert_summary`] normalises runs of spaces for
+//! that reason, and says so where the next reader will see it.
 
 #[cfg(test)]
 mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
+
+    /// Collapse runs of horizontal whitespace to a single space and trim, so an
+    /// assertion about a summary line is about its *content* — the name, the
+    /// two counts, the lock marker — and not about the name column's width,
+    /// which is a layout decision the matrix is free to make from the data.
+    fn normalise(line: &str) -> String {
+        line.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Assert that `name`'s summary line reads `desired D · actual A`, optionally
+    /// with the lock marker.
+    ///
+    /// Whole-output on failure, because a wrong count is nearly always a
+    /// misread view: a detail-view line and a matrix line differ in everything
+    /// except the numbers, so the surrounding output is what tells the two
+    /// apart.
+    fn assert_summary(stdout: &str, name: &str, desired: usize, actual: usize, locked: bool) {
+        let prefix = normalise(&format!(
+            "{} desired {desired} · actual {actual}",
+            name.to_uppercase()
+        ));
+        let expected = if locked {
+            format!("{prefix} 🔒")
+        } else {
+            prefix
+        };
+        assert!(
+            stdout.lines().any(|line| normalise(line) == expected),
+            "expected the summary line {expected:?}.\n--- full output ---\n{stdout}"
+        );
+    }
 
     #[test]
     fn test_hitch_status_without_init() -> anyhow::Result<()> {
@@ -45,6 +103,13 @@ mod tests {
         Ok(())
     }
 
+    /// The default view is a grid, and an environment is a **column**.
+    ///
+    /// This is the assertion the deleted `📊 1 environments: 1 total, …` rollup
+    /// used to make, restated: one column named `DEV`, one summary row, and a
+    /// verdict. The rollup's *absence* is asserted too, because a line coming
+    /// back would be a second set of totals derived by a second pass — the P3
+    /// drift the summary rows exist to prevent.
     #[test]
     fn test_hitch_status_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -58,16 +123,114 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Get basic status
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
                 .assert_stdout_contains("Hitch Environment Status")
-                .assert_stdout_contains("1 environments")
-                .assert_stdout_contains("dev")
+                // The grid's header row: `Feature`, then the environment as a
+                // column, upper-cased by the renderer.
+                .assert_stdout_contains("Feature")
+                .assert_stdout_contains("DEV")
+                .stdout()
+                .to_string();
+
+            assert_summary(&stdout, "dev", 0, 0, false);
+            // `hitch add` declares an environment without building it, so the
+            // environment branch itself does not exist yet. The verdict says
+            // that rather than reporting a stale "up to date".
+            assert!(
+                stdout.contains("branch missing"),
+                "a declared-but-unbuilt environment has no branch. Got:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("environments:"),
+                "the rollup line should be gone; the summary rows replace it. Got:\n{stdout}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// The detail view keeps its own wording, unchanged.
+    ///
+    /// Deliberately a separate test from `test_hitch_status_basic`: the two
+    /// views are allowed to drift apart from here on, and a single test checking
+    /// both would pass on either one's output alone.
+    #[test]
+    fn test_hitch_status_environments_detail_view_is_unchanged() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            result
+                .assert_success()
                 .assert_stdout_contains("base:")
                 .assert_stdout_contains("Branches (0 promoted)")
                 .assert_stdout_contains("Environment is unlocked");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `--environments <NAME>` narrows the detail view to one environment, and a
+    /// name hitch does not have is an error that lists the ones it does.
+    ///
+    /// `--environments [NAME]` takes an *optional* value because clap has no
+    /// optional-value form for `Option<T>`, so `hitch status --environments qa`
+    /// is the only way a name can arrive, and the test that would catch a
+    /// mis-parse is this one.
+    #[test]
+    fn test_hitch_status_environments_scopes_to_one_name() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            for name in ["dev", "qa"] {
+                env.hitch
+                    .run()
+                    .args(&["add", name])
+                    .execute()?
+                    .assert_success();
+            }
+
+            let scoped = env
+                .hitch
+                .run()
+                .args(&["status", "--environments", "qa"])
+                .execute()?;
+            let stdout = scoped
+                .assert_success()
+                .assert_stdout_contains("base:")
+                .stdout()
+                .to_string();
+            assert!(
+                !stdout.contains("┌─ dev"),
+                "`--environments qa` must show qa only. Got:\n{stdout}"
+            );
+
+            let missing = env
+                .hitch
+                .run()
+                .args(&["status", "--environments", "nope"])
+                .execute()?;
+            missing
+                .assert_failure()
+                .assert_stderr_contains("nope")
+                .assert_stderr_contains("dev")
+                .assert_stderr_contains("qa");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -107,16 +270,29 @@ mod tests {
                 result.assert_success();
             }
 
-            // Get status with promoted branches
+            // The matrix: three feature rows under one environment column, each
+            // included, and the summary counting them.
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
-                .assert_stdout_contains("1 environments")
-                .assert_stdout_contains("dev")
-                .assert_stdout_contains("Branches (3 promoted)")
                 .assert_stdout_contains("feature-1")
                 .assert_stdout_contains("feature-2")
-                .assert_stdout_contains("feature-3");
+                .assert_stdout_contains("feature-3")
+                .assert_stdout_contains("● included")
+                .assert_stdout_contains("realised")
+                .stdout()
+                .to_string();
+            assert_summary(&stdout, "dev", 3, 3, false);
+
+            // The detail view still reports the promoted-branch count.
+            let detail = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            detail
+                .assert_success()
+                .assert_stdout_contains("Branches (3 promoted)");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -124,6 +300,10 @@ mod tests {
         Ok(())
     }
 
+    /// A lock is not a composition fact, so it has no cell. It rides the
+    /// environment's summary row instead — on that row rather than in a
+    /// repository-wide total, because a total cannot say *which* environment
+    /// is locked, and a lock is the one fact here that is per-environment.
     #[test]
     fn test_hitch_status_with_locked_environment() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -144,10 +324,16 @@ mod tests {
 
             // Get status with locked environment
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
-                .assert_success()
-                .assert_stdout_contains("dev")
-                .assert_stdout_contains("Locked");
+            let stdout = result.assert_success().stdout().to_string();
+            assert_summary(&stdout, "dev", 0, 0, true);
+            // And only that row carries it: with one environment, a lock
+            // anywhere else in the block would show up in the same assertion, so
+            // this pins the count rather than the presence.
+            assert_eq!(
+                stdout.matches('🔒').count(),
+                1,
+                "the lock marker belongs on dev's summary row and nowhere else. Got:\n{stdout}"
+            );
 
             Ok::<(), anyhow::Error>(())
         });
@@ -184,12 +370,25 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result.assert_success();
 
-            // Get status with rebuilt environment
+            // The matrix says "realised" and counts the branch. The rebuild
+            // *timestamp* is a detail-view fact — the matrix deliberately shows
+            // no clock, because no verdict in it depends on one.
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
-                .assert_stdout_contains("dev")
-                .assert_stdout_contains("Rebuilt:");
+                .assert_stdout_contains("feature-1")
+                .assert_stdout_contains("● included")
+                .assert_stdout_contains("realised")
+                .stdout()
+                .to_string();
+            assert_summary(&stdout, "dev", 1, 1, false);
+
+            let detail = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            detail.assert_success().assert_stdout_contains("Rebuilt:");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -197,6 +396,12 @@ mod tests {
         Ok(())
     }
 
+    /// Three environments are three **columns**, which is the shape the whole
+    /// view exists for: one promoted feature read across every place it is
+    /// declared, in a single block. The old view asserted
+    /// `Branches (1 promoted)`, `Branches (0 promoted)`, `Branches (0 promoted)`
+    /// in sequence and let the reader infer the grid from three separate
+    /// sections.
     #[test]
     fn test_hitch_status_multiple_environments() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -213,7 +418,6 @@ mod tests {
                     .assert_success();
             }
 
-            // Add different configurations to each environment
             // Add branches to dev
             env.git.run(&["checkout", "-b", "feature-dev"])?;
             env.fs.write_file("dev.txt", "dev content")?;
@@ -235,17 +439,32 @@ mod tests {
                 .execute()?
                 .assert_success();
 
-            // Get status for multiple environments
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
-                .assert_stdout_contains("3 environments")
-                .assert_stdout_contains("dev")
-                .assert_stdout_contains("qa")
-                .assert_stdout_contains("staging")
-                .assert_stdout_contains("Branches (1 promoted)") // dev has 1 branch
-                .assert_stdout_contains("Branches (0 promoted)") // qa has 0 branches
-                .assert_stdout_contains("Branches (0 promoted)"); // staging has 0 branches
+                .assert_stdout_contains("Feature")
+                .assert_stdout_contains("DEV")
+                .assert_stdout_contains("QA")
+                .assert_stdout_contains("STAGING")
+                .assert_stdout_contains("feature-dev")
+                .stdout()
+                .to_string();
+
+            assert_summary(&stdout, "dev", 1, 1, false);
+            assert_summary(&stdout, "qa", 0, 0, true);
+            assert_summary(&stdout, "staging", 0, 0, false);
+            assert!(
+                !stdout.contains("environments:"),
+                "the rollup line should be gone. Got:\n{stdout}"
+            );
+            // The lock is on qa's row and no other row's, so exactly one
+            // marker: the same count assertion as the single-environment test,
+            // here with two unlocked rows to be wrong about.
+            assert_eq!(
+                stdout.matches('🔒').count(),
+                1,
+                "only qa is locked. Got:\n{stdout}"
+            );
 
             Ok::<(), anyhow::Error>(())
         });
@@ -357,20 +576,33 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result.assert_success();
 
-            // Get comprehensive status
+            // The grid, and each environment's own counts on its own row.
+            // `staging` is based on `qa` rather than `main`, and its base does
+            // not exist as a *promoted* branch, so it is the one environment
+            // that stays `branch missing` — which is why this test also pins
+            // that verdict rather than only counting.
             let result = env.hitch.run().args(&["status"]).execute()?;
-            result
+            let stdout = result
                 .assert_success()
-                .assert_stdout_contains("3 environments")
-                .assert_stdout_contains("dev")
+                .assert_stdout_contains("Feature")
+                .stdout()
+                .to_string();
+            assert_summary(&stdout, "dev", 2, 2, false);
+            assert_summary(&stdout, "qa", 1, 1, false);
+            assert_summary(&stdout, "staging", 0, 0, true);
+
+            // The detail view keeps the bases and the rebuild stamp.
+            let detail = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            detail
+                .assert_success()
                 .assert_stdout_contains("base:")
                 .assert_stdout_contains("main")
                 .assert_stdout_contains("Branches (2 promoted)")
-                .assert_stdout_contains("qa")
-                .assert_stdout_contains("base:")
                 .assert_stdout_contains("Branches (1 promoted)")
-                .assert_stdout_contains("staging")
-                .assert_stdout_contains("qa")
                 .assert_stdout_contains("Branches (0 promoted)")
                 .assert_stdout_contains("Rebuilt:");
 
@@ -402,7 +634,7 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Hitch Environment Status")
-                .assert_stdout_contains("dev");
+                .assert_stdout_contains("DEV");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -415,8 +647,13 @@ mod tests {
     /// verdict used to come from comparing a commit's date against a wall-clock
     /// `rebuilt_at`, so a test could only pass by sleeping long enough for the
     /// clock to tick. The verdict is now a SHA comparison against the build
-    /// record, so the assertion below needs no clock at all, and neither does
-    /// the test (the `sleep(2)` that bought a second is gone).
+    /// record, so neither the assertion nor the test needs a clock, and the
+    /// `sleep(2)` that bought a second is gone.
+    ///
+    /// Split across the two views deliberately. The matrix carries the *verdict*
+    /// and the detail view carries the *name* of the input that moved; naming
+    /// what moved is a fact about one environment, and the grid is a fact about
+    /// the shape of the repository.
     #[test]
     fn test_hitch_status_detects_base_branch_changes() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -438,27 +675,38 @@ mod tests {
             env.git.run(&["add", "-f", "external.txt"])?;
             env.git.run(&["commit", "-m", "External change to main"])?;
 
-            // Run hitch status - should detect that main has moved
+            // The matrix: the verdict, and no clock.
             let result = env.hitch.run().args(&["status"]).execute()?;
-            let stdout = result.stdout();
+            let stdout = result
+                .assert_success()
+                .assert_stdout_contains("needs rebuild")
+                .stdout()
+                .to_string();
+            assert_summary(&stdout, "dev", 0, 0, false);
 
-            result.assert_success();
-            assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
-
-            // The summary of *which* input moved, in the form spec §11.2 asks
-            // for: an explicit before → after rather than a bare verdict. This
-            // is a stronger assertion than the one it replaces — the old one
-            // accepted any of two loosely-related strings and would have passed
-            // against an output that named the wrong branch.
+            // The name of what moved, in the form spec §11.2 asks for: an
+            // explicit before → after rather than a bare verdict. This is a
+            // stronger assertion than the one it replaces — the old one accepted
+            // any of two loosely-related strings and would have passed against
+            // output naming the wrong branch.
+            let result = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            let stdout = result
+                .assert_success()
+                .assert_stdout_contains("has new commits")
+                .stdout()
+                .to_string();
             assert!(
-                stdout.contains("has new commits") && stdout.contains("main"),
-                "Expected status to say main has new commits. Got:\n{}",
-                stdout
+                stdout.contains("main"),
+                "Expected status to name main. Got:\n{stdout}"
             );
-            assert!(
-                stdout.contains('\u{2192}'),
-                "Expected a from \u{2192} to SHA arrow for the changed input. Got:\n{}",
-                stdout
+            assert_eq!(
+                stdout.matches('\u{2192}').count(),
+                1,
+                "Exactly one input moved, so exactly one from \u{2192} to arrow. Got:\n{stdout}"
             );
 
             Ok::<(), anyhow::Error>(())
@@ -470,6 +718,11 @@ mod tests {
     /// Un-ignored for the same reason as
     /// `test_hitch_status_detects_base_branch_changes`: the clock dependency
     /// was the defect, not an environmental hazard.
+    ///
+    /// The matrix is where the repository-wide claim lives — *two* environments
+    /// are behind — and it is made from the rows rather than from a second pass,
+    /// so counting the verdicts is a real check that the two columns and the two
+    /// rows agree.
     #[test]
     fn test_hitch_status_multiple_envs_with_changed_base() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -498,36 +751,45 @@ mod tests {
             env.git.run(&["add", "-f", "external.txt"])?;
             env.git.run(&["commit", "-m", "External change to main"])?;
 
-            // Run hitch status
             let result = env.hitch.run().args(&["status"]).execute()?;
-            let stdout = result.stdout();
-
-            result.assert_success();
-            assert!(stdout.contains("dev"), "Expected status to contain 'dev'");
-            assert!(stdout.contains("qa"), "Expected status to contain 'qa'");
-            // Both environments should show rebuild needed, each naming the
-            // input that moved and by how much. Counting the arrows is what
-            // makes this a two-environment assertion rather than a one: the old
-            // `contains("main has newer commits")` was satisfied by whichever
-            // environment rendered first.
-            let arrows = stdout.matches('\u{2192}').count();
+            let stdout = result.assert_success().stdout().to_string();
+            assert_summary(&stdout, "dev", 0, 0, false);
+            assert_summary(&stdout, "qa", 0, 0, false);
+            // Once per summary row's verdict line, and nowhere else: the
+            // suggested-actions block prompts with commands (`hitch rebuild dev`)
+            // rather than repeating the verdict, so this counts verdicts.
             assert_eq!(
-                arrows, 2,
-                "both dev and qa share main as a base, so both must report it moved. Got:\n{}",
-                stdout
-            );
-            assert!(
-                stdout.contains("has new commits") && stdout.contains("main"),
-                "Expected status to say main has new commits. Got:\n{}",
-                stdout
+                stdout.matches("needs rebuild").count(),
+                2,
+                "both dev and qa share main as a base, so both must read needs rebuild. Got:\n{stdout}"
             );
             // Assert the command hints, not the labels: the suggestion list
             // colourises the environment name with ANSI escapes, so the literal
             // text "Rebuild dev" never appears even though the row does.
             assert!(
                 stdout.contains("hitch rebuild dev") && stdout.contains("hitch rebuild qa"),
-                "and both environments should get a rebuild hint. Got:\n{}",
-                stdout
+                "and both environments should get a rebuild hint. Got:\n{stdout}"
+            );
+
+            // The detail view names the input, once per environment.
+            let result = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            let stdout = result
+                .assert_success()
+                .assert_stdout_contains("has new commits")
+                .stdout()
+                .to_string();
+            assert!(
+                stdout.contains("main"),
+                "Expected status to name main. Got:\n{stdout}"
+            );
+            assert_eq!(
+                stdout.matches('\u{2192}').count(),
+                2,
+                "both dev and qa share main as a base, so both must report it moved. Got:\n{stdout}"
             );
 
             Ok::<(), anyhow::Error>(())
@@ -536,8 +798,19 @@ mod tests {
         Ok(())
     }
 
-    /// After promoting a branch, adding new commits to it, and checking status,
-    /// the branch list should show a staleness indicator ("new commits since last rebuild").
+    /// After promoting a branch and then committing to it, the detail view
+    /// should show a staleness indicator ("new commits since last rebuild").
+    ///
+    /// Asserted against the **detail view**, and the reason is worth recording
+    /// because the matrix assertion at the end of this test looks like it
+    /// contradicts it. In the matrix this branch's cell reads `included` — it
+    /// genuinely *is* in the last build — while the row beneath reads `needs
+    /// rebuild`, because that build predates these commits. A cell answers "what
+    /// is in the build"; a row answers "is the build current". The
+    /// reconciliation is the summary row, and `hitch why <branch> <environment>`
+    /// is the form that names the moving commit. Asserting the branch-level
+    /// staleness wording against the matrix would assert that a cell re-derives a
+    /// verdict it deliberately does not carry.
     #[test]
     fn test_status_shows_per_branch_staleness() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -567,11 +840,11 @@ mod tests {
             //
             // This used to carry an explicit future author-date
             // (`--date 2099-01-01T00:00:00+00:00`) so the commit's timestamp
-            // would outrank the rebuild's `rebuilt_at` however fast the test
-            // ran. That hack is exactly the bug: a staleness check that needs a
-            // faked clock to notice a *content* change is not reading content.
-            // The record pins the branch's SHA, so an ordinary commit is now
-            // enough and the faked date is gone.
+            // would outrank the rebuild's `rebuilt_at` however fast the test ran.
+            // That hack is exactly the bug: a staleness check that needs a faked
+            // clock to notice a *content* change is not reading content. The
+            // record pins the branch's SHA, so an ordinary commit is now enough
+            // and the faked date is gone.
             env.git.run(&["checkout", "stale-feature"])?;
             env.fs.write_file("stale.txt", "v2 - new content")?;
             env.git.run(&["add", "-f", "stale.txt"])?;
@@ -580,15 +853,28 @@ mod tests {
                 .assert_success();
             env.git.run(&["checkout", "main"])?;
 
-            // Status should now show the branch as stale
-            let result = env.hitch.run().args(&["status"]).execute()?;
+            // The detail view: the branch-level staleness wording.
+            let result = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
             let stdout = result.assert_success().stdout().to_string();
 
             assert!(
                 stdout.contains("new commits since last rebuild"),
-                "Expected staleness indicator for stale-feature. Got:\n{}",
-                stdout
+                "Expected staleness indicator for stale-feature. Got:\n{stdout}"
             );
+
+            // The matrix: the environment is behind, without naming the commit.
+            // Both halves of the cell/row distinction, asserted together so the
+            // pair cannot drift.
+            let matrix = env.hitch.run().args(&["status"]).execute()?;
+            matrix
+                .assert_success()
+                .assert_stdout_contains("stale-feature")
+                .assert_stdout_contains("● included")
+                .assert_stdout_contains("needs rebuild");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -596,15 +882,23 @@ mod tests {
         Ok(())
     }
 
-    /// `hitch status` should flag a branch that *would* be held on the next
-    /// rebuild (⛔), without fetching or building anything.
+    /// `hitch status --environments` should flag a branch that *would* be held
+    /// on the next rebuild (⛔), without fetching or building anything.
     ///
     /// This repo has never been built, so there is no record and the ⛔ comes
     /// from the local preflight — a prediction. It is worded as one: "would be
     /// held on the next rebuild". See
-    /// `test_status_distinguishes_a_held_branch_from_one_that_would_be_held`
-    /// in `state_model_tests.rs` for the record-backed (fact) wording, which
-    /// used to be conflated with this one.
+    /// `test_status_distinguishes_a_held_branch_from_one_that_would_be_held` in
+    /// `state_model_tests.rs` for the record-backed (fact) wording, which used
+    /// to be conflated with this one.
+    ///
+    /// The matrix deliberately has no such column, and the last assertion is the
+    /// one holding that line. A prediction has no business in a grid of facts:
+    /// a cell that could read "would be held" would put a `⛔` beside a `⛔`
+    /// meaning "was held", with nothing to tell them apart, and it would be a
+    /// third caller of `preflight_compatibility_report_local` — the call site
+    /// count that P7's Global Constraints fix at two (`status --environments`
+    /// and `tree`).
     #[test]
     fn test_status_shows_held_branch_glyph() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -639,14 +933,19 @@ mod tests {
             env.git.run(&["checkout", "hitch-metadata"])?;
             let config_str = env.fs.read_file("hitch.json")?;
             let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
-            config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+            config["environments"]["dev"]["branches"] =
+                serde_json::json!(["branch-a", "branch-b"]);
             env.fs
                 .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
             env.git.run(&["add", "hitch.json"])?;
             env.git.run(&["commit", "-m", "test: inject branches"])?;
             env.git.run(&["checkout", "main"])?;
 
-            let result = env.hitch.run().args(&["status"]).execute()?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
             let stdout = result
                 .assert_success()
                 .assert_stdout_contains("⛔")
@@ -660,8 +959,147 @@ mod tests {
             // No build has happened, so nothing may claim a past one.
             assert!(
                 !stdout.contains("held in the last build"),
-                "nothing was built, so no branch can have been held in a build. Got:\n{}",
-                stdout
+                "nothing was built, so no branch can have been held in a build. Got:\n{stdout}"
+            );
+
+            // The matrix shows the two branches as *not built yet* — which is
+            // the fact — and carries no prediction at all.
+            let matrix = env.hitch.run().args(&["status"]).execute()?;
+            let matrix_stdout = matrix
+                .assert_success()
+                .assert_stdout_contains("branch-a")
+                .assert_stdout_contains("branch-b")
+                .assert_stdout_contains("needs rebuild")
+                .stdout()
+                .to_string();
+            assert!(
+                !matrix_stdout.contains("would be held"),
+                "the matrix carries facts only, so it must not predict a hold. Got:\n{matrix_stdout}"
+            );
+            assert!(
+                !matrix_stdout.contains('⛔'),
+                "and so it must not show a hold glyph for a build that has not run. Got:\n{matrix_stdout}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `--json` emits one envelope carrying the matrix and the per-environment
+    /// models, and nothing else. A JSON consumer is a program, and a value it has
+    /// to parse a sentence out of is a value whose wording it has to pin.
+    /// Every string *value* and every object key under `value` that looks like
+    /// a Rust type or variant name.
+    ///
+    /// Recursive on purpose. The claim being tested is about the whole envelope,
+    /// so a shallow scan would pass while the one enum that actually needed the
+    /// rename kept its default. Deliberately over-eager about the pattern — a
+    /// false positive costs one extra rename, a false negative costs a silent
+    /// break for a consumer.
+    fn collect_pascal_case_tokens(value: &serde_json::Value, into: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) => {
+                if s.chars().next().is_some_and(char::is_uppercase)
+                    && s.contains(char::is_alphabetic)
+                {
+                    into.push(s.clone());
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, inner) in map {
+                    if key.chars().next().is_some_and(char::is_uppercase) {
+                        into.push(key.clone());
+                    }
+                    collect_pascal_case_tokens(inner, into);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_pascal_case_tokens(item, into);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_hitch_status_json_is_a_document_not_prose() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env.hitch.run().args(&["status", "--json"]).execute()?;
+            let document: serde_json::Value = result
+                .assert_success()
+                .stdout()
+                .parse()
+                .map_err(|e| anyhow::anyhow!("status --json was not JSON: {e}"))?;
+
+            assert_eq!(
+                document["schema_version"], 1,
+                "the envelope's version is the only sanctioned way to change its shape. Got:\n{document}"
+            );
+            let status = &document["status"];
+            assert!(
+                status["matrix"]["columns"].is_array(),
+                "the matrix is part of the document. Got:\n{document}"
+            );
+            assert!(
+                status["environments"].is_array(),
+                "so is the per-environment model. Got:\n{document}"
+            );
+            // Columns are the environments, in the snapshot's own (name-sorted)
+            // order, as bare names. Asserted here because a column set that
+            // reordered between runs would make the document non-reproducible,
+            // and this is the only place a consumer can see the order.
+            assert_eq!(
+                status["matrix"]["columns"][0], "dev",
+                "columns are the environments, in snapshot order. Got:\n{document}"
+            );
+            assert_eq!(
+                status["matrix"]["columns"]
+                    .as_array()
+                    .expect("columns is an array")
+                    .len(),
+                1,
+                "one environment, one column. Got:\n{document}"
+            );
+
+            // Every enum in the envelope is `snake_case`. This is a wire
+            // contract, so a Rust variant name must not leak into it: a
+            // consumer that matched on `"ActualUnknown"` would break silently
+            // the first time the variant was renamed, and `serde`'s default
+            // derives exactly that. Asserted by scanning the whole document
+            // rather than by naming one field, because the point is that *no*
+            // enum in here is PascalCase — including the ones that reached the
+            // envelope by accident (`ActualComposition`,
+            // `EnvironmentHealth`), which are the ones that would be missed.
+            let mut pascal = Vec::new();
+            collect_pascal_case_tokens(&document, &mut pascal);
+            assert!(
+                pascal.is_empty(),
+                "a Rust type name leaked into the JSON contract: {pascal:?}\nGot:\n{document}"
+            );
+
+            // And the one enum a consumer will match on most, spelled out, so
+            // the rename itself is pinned rather than only its absence of
+            // capital letters. `missing_branch` and not `MissingBranch`,
+            // because `hitch add` declares an environment without building it —
+            // the same reason the matrix test above expects a missing branch.
+            assert_eq!(
+                status["matrix"]["summaries"][0]["health"], "missing_branch",
+                "Got:\n{document}"
+            );
+            assert_eq!(
+                status["environments"][0]["state"]["actual"], "legacy_unknown",
+                "and the composition is named the same way. Got:\n{document}"
             );
 
             Ok::<(), anyhow::Error>(())

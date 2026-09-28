@@ -376,7 +376,17 @@ fn apply_declaration_change(
 fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Result<()> {
     context.log_info("");
     context.log_info("  ⏳ Rebuilding environment...");
-    match crate::utils::prelude::rebuild_environment(context, environment_name) {
+    // `Log`, unlike every other caller. `hitch approve` is the one command that
+    // still reaches a rebuild without a plan of its own, so the `StepLogger`
+    // transcript is the only account of the composition it can show. That is a
+    // gap in `approve`, not a property of the transcript — the fix is for
+    // `approve` to plan, and the honest route is a `plan_declaration_change` for
+    // the approved request's change, applied *after* the approval commits.
+    match crate::utils::prelude::rebuild_environment(
+        context,
+        environment_name,
+        crate::utils::prelude::StepNarration::Log(context.output.clone()),
+    ) {
         Ok(outcome) => {
             if !outcome.held.is_empty() {
                 context.log_warning(&format!(

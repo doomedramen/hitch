@@ -37,6 +37,11 @@
 
 use crate::commands::global_context::GlobalContext;
 use crate::core::state::{EnvironmentHealth, RepositoryStateSnapshot};
+use crate::core::status::{MatrixModel, MatrixSummaryRow};
+use crate::core::why::{
+    NextAction, WhatHitchDid, WhyEnvironmentExplanation, WhyExplanation, WhyFeatureExplanation,
+    WhyFeatureInEnvironment, WhyMembership, WhyReason,
+};
 use crate::operations::model::{
     AppliedEffect, ConfirmationRequirement, EnvironmentProjection, ExecutionReceipt,
     OperationOutcome, OperationPlan, PlannedBranch, PlannedBranchState, PlannedEffect,
@@ -302,6 +307,260 @@ fn render_planned_branch(out: &mut String, branch: &PlannedBranch) {
     }
 }
 
+// ── The environment equation (spec §13) ───────────────────────────────────
+
+/// One environment's composition, reduced to the minimum any renderer needs.
+///
+/// §13 asks for `dev = main + auth + payments` to be spelled the *same way*
+/// wherever hitch shows a composition — in a plan, in `hitch status`, in
+/// `hitch why`, in `hitch tree` — and the way to guarantee that is to make the
+/// equation a value rather than a format string. A display path that
+/// hand-formats its own version is a display path that will eventually say
+/// `dev: main, auth, payments`, and §13's whole point is that it does not.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentEquation {
+    pub environment: String,
+    pub base: String,
+    /// In **composition order**. Never sorted: sorting this list describes a
+    /// different build than the one the caller observed.
+    pub terms: Vec<EquationTerm>,
+    /// Branches that are declared but deliberately *not* a term — held, or
+    /// unaccounted for. Rendered indented beneath the equation rather than as
+    /// terms, because an excluded branch is not part of the sum.
+    pub excluded: Vec<ExcludedTerm>,
+}
+
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct EquationTerm {
+    pub branch: String,
+    /// A term can be annotated when "in the equation" and "actually changing
+    /// anything" differ — a branch already reachable from the base is in the
+    /// declaration but not a separate commit.
+    pub state: EquationTermState,
+}
+
+/// Whether a term is an ordinary term or one already reachable from the base.
+///
+/// `snake_case` for the reason every other enum in a `--json` envelope has it:
+/// the equation is embedded in both `hitch status --json` and `hitch why
+/// --json`, so `"Plain"` is a Rust type name in a wire contract.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EquationTermState {
+    Plain,
+    InBase,
+}
+
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ExcludedTerm {
+    pub branch: String,
+    pub reason: ExclusionReason,
+}
+
+/// Why a declared branch is not a term in the equation.
+///
+/// `snake_case`, as on [`EquationTermState`] — an externally-tagged enum puts
+/// the variant name in the document, so this one is `"Held"` in the JSON unless
+/// it is renamed.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionReason {
+    /// Excluded from the last build because it conflicted. The partner is
+    /// carried because the remedy differs depending on whether it was the base
+    /// or a specific peer, and a reason that cannot be acted on is not a
+    /// reason.
+    Held {
+        conflicts_with: String,
+        files: Vec<String>,
+    },
+    /// Declared, but hitch cannot say where it stands.
+    Unknown,
+}
+
+/// Render an environment equation: `dev = main + auth + payments`.
+///
+/// The `excluded` list is rendered underneath, indented, one per line — so a
+/// held branch appears in both the plan's `Composition` section (per-branch,
+/// with a remedy) and here (as an absence). That is not duplication: one names
+/// the branch's own state and what to do about it, the other makes the
+/// *arithmetic* honest. A reader who saw only `dev = main + auth + payments`
+/// would not know a fourth declared branch was involved.
+pub fn render_equation(equation: &EnvironmentEquation) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{} = {}", equation.environment, equation.base));
+    // An environment with no promoted branches still *has* a composition, and
+    // `dev = main` is that composition in full — not a truncated one needing an
+    // apology. The "base only" wording lives in `render_plan`'s Composition
+    // section, which is about what a build did with branches, and having both
+    // would print the same remark twice.
+    if !equation.terms.is_empty() {
+        for term in &equation.terms {
+            out.push_str(" + ");
+            out.push_str(&term.branch);
+            if term.state == EquationTermState::InBase {
+                out.push_str(" (already in base)");
+            }
+        }
+    }
+
+    for excluded in &equation.excluded {
+        out.push('\n');
+        match &excluded.reason {
+            ExclusionReason::Held {
+                conflicts_with,
+                files,
+            } => {
+                out.push_str(&format!(
+                    "    {} ⛔ held — conflicts with {}",
+                    excluded.branch, conflicts_with
+                ));
+                for file in files {
+                    out.push_str(&format!("\n        {file}"));
+                }
+            }
+            ExclusionReason::Unknown => {
+                out.push_str(&format!("    {} ◌ not accounted for", excluded.branch));
+            }
+        }
+    }
+
+    out
+}
+
+impl EnvironmentEquation {
+    /// The environment's **declaration**, as an equation.
+    ///
+    /// Every term is plain, and nothing is excluded, because a declaration has
+    /// no excluded terms: a branch is declared whether or not the last build
+    /// managed to take it. This is the `Desired` half of `hitch why` and what
+    /// `hitch tree` shows.
+    pub fn from_declaration(state: &crate::core::state::EnvironmentState) -> EnvironmentEquation {
+        Self::from_parts(
+            &state.name,
+            &state.base,
+            state.desired.branches.iter().map(|b| b.name.as_str()),
+        )
+    }
+
+    /// The same declaration equation, read straight off `hitch.json`.
+    ///
+    /// A second constructor because `hitch tree` reads the config directly
+    /// rather than building a snapshot: the tree is a view of *declarations*,
+    /// and making it pay for a snapshot — one `rev_parse_opt` per branch, a
+    /// build-record read per environment, a `merge-base` walk for the
+    /// `already in base` check — to then discard every field except `base` and
+    /// `branches` would buy nothing and cost a network round trip's worth of
+    /// latency. Both constructors delegate to [`Self::from_parts`], so there is
+    /// still exactly one place that knows what a declaration equation is.
+    pub fn from_config(name: &str, env: &crate::types::Environment) -> EnvironmentEquation {
+        Self::from_parts(name, &env.base, env.branches.iter().map(String::as_str))
+    }
+
+    /// The one definition of "a declaration, as an equation": every declared
+    /// branch is a plain term and nothing is excluded.
+    ///
+    /// Order is the caller's — never sorted. `hitch why` and `hitch status` read
+    /// `EnvironmentState::desired.branches`, which is already in declaration
+    /// order, and `hitch tree` reads `Environment.branches`, also declaration
+    /// order. Promotion order is the order the user composed the environment
+    /// in, and re-sorting it here would make a merge conflict depend on
+    /// alphabetical luck.
+    fn from_parts<'a>(
+        name: &str,
+        base: &str,
+        branches: impl Iterator<Item = &'a str>,
+    ) -> EnvironmentEquation {
+        EnvironmentEquation {
+            environment: name.to_string(),
+            base: base.to_string(),
+            terms: branches
+                .map(|branch| EquationTerm {
+                    branch: branch.to_string(),
+                    state: EquationTermState::Plain,
+                })
+                .collect(),
+            excluded: Vec::new(),
+        }
+    }
+
+    /// The environment's **last build**, as an equation, or `None` when there is
+    /// no build to describe.
+    ///
+    /// `None` is the honest answer for a `LegacyUnknown` environment, and it is
+    /// why this returns an `Option` rather than an equation with no terms: `dev
+    /// = main` as an *actual* composition would assert that the last build
+    /// contained nothing but its base, which is not what "hitch cannot say" means.
+    /// The caller renders no `Actual` section at all.
+    ///
+    /// `in_base` answers "does this branch contribute anything new to this
+    /// environment's build?" and is only consulted for branches the record says
+    /// were included. A branch that was already reachable from the base was in
+    /// the build and changed nothing, and saying so is the difference between
+    /// an equation and an accurate one.
+    pub fn from_build(
+        state: &crate::core::state::EnvironmentState,
+        in_base: &dyn Fn(&str) -> bool,
+    ) -> Option<EnvironmentEquation> {
+        let record = state.actual.actual()?;
+        Some(EnvironmentEquation {
+            environment: state.name.clone(),
+            // The record's own base name rather than the current declaration's:
+            // this equation describes a build, and that build consumed the base
+            // as it was then. Substituting today's base would describe a
+            // composition nobody performed — which is exactly what the
+            // `NeedsRebuild` verdict is about.
+            base: record.record.base_name.clone(),
+            terms: record
+                .included
+                .iter()
+                .map(|b| EquationTerm {
+                    branch: b.branch.clone(),
+                    state: if in_base(&b.branch) {
+                        EquationTermState::InBase
+                    } else {
+                        EquationTermState::Plain
+                    },
+                })
+                .collect(),
+            excluded: record
+                .held
+                .iter()
+                .map(|conflict| ExcludedTerm {
+                    branch: conflict.branch.clone(),
+                    reason: ExclusionReason::Held {
+                        conflicts_with: conflict.conflicts_with.clone(),
+                        files: conflict.conflicted_files.clone(),
+                    },
+                })
+                .collect(),
+        })
+    }
+
+    /// Build an equation from a plan's projection, with every term plain and
+    /// nothing excluded.
+    ///
+    /// The `excluded` list is deliberately empty here. A plan already lists
+    /// every branch and its state in its `Composition` section, with a remedy;
+    /// putting the held ones into the equation as well would print the same
+    /// fact twice in two vocabularies, which is the exact failure §13 is
+    /// arguing against.
+    pub fn from_projection(projection: &EnvironmentProjection) -> EnvironmentEquation {
+        EnvironmentEquation {
+            environment: projection.environment.clone(),
+            base: projection.base.clone(),
+            terms: projection
+                .branches
+                .iter()
+                .map(|b| EquationTerm {
+                    branch: b.branch.clone(),
+                    state: EquationTermState::Plain,
+                })
+                .collect(),
+            excluded: Vec::new(),
+        }
+    }
+}
+
 /// `dev = main + auth + search`, in declaration order.
 ///
 /// The order is composition order and is load-bearing
@@ -309,12 +568,7 @@ fn render_planned_branch(out: &mut String, branch: &PlannedBranch) {
 /// is and never sorts it. A renderer that alphabetised the list would be
 /// rendering a *different build* than the one it was handed.
 fn describe_projection(projection: &EnvironmentProjection) -> String {
-    let mut line = projection.base.clone();
-    for branch in &projection.branches {
-        line.push_str(" + ");
-        line.push_str(&branch.branch);
-    }
-    format!("{} = {line}", projection.environment)
+    render_equation(&EnvironmentEquation::from_projection(projection))
 }
 
 fn describe_planned_effect<I>(effect: &PlannedEffect, plan: &OperationPlan<I>) -> String {
@@ -399,6 +653,248 @@ fn branch_list(branches: &[String]) -> String {
 ///    An owed effect is neither a failure nor a success: the operation is done
 ///    and something is still outstanding. Filing it among the warnings with the
 ///    same glyph is how "the push did not land" gets read as a footnote.
+///
+/// The sections, in order, are applied work, owed work, and the resulting
+/// state. Nothing else is emitted — a fact that fits none of the three has to
+/// go into `effects`, `warnings` or `resulting_state`, and being made to choose
+/// is what keeps the receipt free of lines nobody can act on.
+///
+/// Render the feature × environment grid (spec §12).
+///
+/// The cell is **glyph + word**, never a glyph alone, and never colour. §12
+/// requires the view to be understandable without colour, and that
+/// requirement turns out to be the same as "readable in a pipe, in CI output,
+/// and by a screen reader" — a grid that only carries meaning in colour is a
+/// grid whose meaning is lost exactly where automation needs it.
+///
+/// No width budget. See [`render_matrix_at`] for the narrow case and
+/// [`MatrixLayout`] for why the fallback is prose rather than truncation.
+pub fn render_matrix(model: &MatrixModel) -> String {
+    let layout = MatrixLayout::measure(model);
+    render_matrix_within(model, &layout)
+}
+
+/// The grid's column widths, measured once.
+///
+/// Every width in the table comes from here, so `minimum_width` and the render
+/// cannot disagree about how wide the grid is — which is the whole content of a
+/// narrow-terminal check, and a second measurement is exactly how it would come
+/// to disagree.
+struct MatrixLayout {
+    feature_width: usize,
+    /// One per column, in column order.
+    cell_widths: Vec<usize>,
+}
+
+impl MatrixLayout {
+    fn measure(model: &MatrixModel) -> MatrixLayout {
+        let headers: Vec<String> = model.columns.iter().map(|c| c.to_uppercase()).collect();
+        let cells: Vec<Vec<String>> = model
+            .rows
+            .iter()
+            .map(|row| {
+                row.cells
+                    .iter()
+                    .map(|cell| format!("{} {}", cell.glyph(), cell.label()))
+                    .collect()
+            })
+            .collect();
+
+        // One width per column, from its header and every cell in it. Measured in
+        // *chars*, not bytes: `⛔` is three bytes and one character, and a
+        // byte-measured table puts the row containing it one glyph out of line —
+        // which reads as a slightly ragged table rather than as a bug.
+        let mut cell_widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+        for row in &cells {
+            for (i, cell) in row.iter().enumerate() {
+                if i < cell_widths.len() {
+                    cell_widths[i] = cell_widths[i].max(cell.chars().count());
+                }
+            }
+        }
+        let feature_width = model
+            .rows
+            .iter()
+            .map(|r| r.feature.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max("Feature".len());
+
+        MatrixLayout {
+            feature_width,
+            cell_widths,
+        }
+    }
+
+    /// The narrowest terminal the grid can be printed in without wrapping.
+    ///
+    /// `feature_width`, plus a two-space gutter in front of each column, plus
+    /// the column widths. The rule line is the same arithmetic.
+    fn minimum_width(&self, columns: usize) -> usize {
+        self.feature_width + 2 * columns + self.cell_widths.iter().sum::<usize>()
+    }
+}
+
+fn render_matrix_within(model: &MatrixModel, layout: &MatrixLayout) -> String {
+    let feature_header = "Feature";
+    let headers: Vec<String> = model.columns.iter().map(|c| c.to_uppercase()).collect();
+    let cells: Vec<Vec<String>> = model
+        .rows
+        .iter()
+        .map(|row| {
+            row.cells
+                .iter()
+                .map(|cell| format!("{} {}", cell.glyph(), cell.label()))
+                .collect()
+        })
+        .collect();
+    let widths = &layout.cell_widths;
+    let feature_width = layout.feature_width;
+
+    // Everything is **left**-aligned within its column, header included. This
+    // is the non-obvious half and the whole table depends on it: a
+    // right-aligned cell puts its first glyph at `width - len`, so two rows
+    // whose cells have different lengths have their glyphs at different
+    // columns — the definition of not being a table. The rule underneath spans
+    // the full computed width; the rows are trimmed back so they carry no
+    // trailing spaces, which are invisible in a terminal and visible in a diff.
+    let mut lines: Vec<String> = Vec::with_capacity(model.rows.len() + 2);
+
+    let mut header_line = pad_right(feature_header, feature_width);
+    for (i, header) in headers.iter().enumerate() {
+        header_line.push_str("  ");
+        header_line.push_str(&pad_right(header, widths[i]));
+    }
+    lines.push(header_line.trim_end().to_string());
+
+    lines.push("─".repeat(layout.minimum_width(model.columns.len())));
+
+    for (row, row_cells) in model.rows.iter().zip(&cells) {
+        let mut line = pad_right(&row.feature, feature_width);
+        for (i, cell) in row_cells.iter().enumerate() {
+            line.push_str("  ");
+            line.push_str(&pad_right(cell, widths[i]));
+        }
+        lines.push(line.trim_end().to_string());
+    }
+
+    lines.join("\n")
+}
+
+/// Render the grid into a column budget, or say the budget is too small.
+///
+/// # The fallback is prose, and that is the decision
+///
+/// A grid wider than the terminal does not degrade gracefully on its own: the
+/// terminal wraps it, and a wrapped table's cells stop lining up — which means
+/// the columns, the one thing a table *is*, are the first thing lost. Truncating
+/// branch names or dropping columns would keep a rectangle and lose the
+/// contents, and a `feature/pay…` that no branch is called is worse than no
+/// table: it is a wrong answer presented in the shape of a right one.
+///
+/// So below [`MatrixLayout::minimum_width`] the grid is replaced by the one thing
+/// that is *more* useful in a narrow terminal than a wrapped grid — the shape of
+/// the repository, and where to read it in full. §12.1's expansion is exactly
+/// that shape, so the fallback points at the flag that produces it rather than
+/// inventing a second expansion.
+///
+/// `render_matrix` is this with an unbounded budget, which is the right default
+/// for a caller with no width to report: a pipe, a CI log, a file. Those are not
+/// narrow, they are *unbounded*, and a budget invented from a guess would be
+/// exactly the kind of untruthful input this program keeps refusing to accept.
+pub fn render_matrix_at(model: &MatrixModel, budget: usize) -> String {
+    let layout = MatrixLayout::measure(model);
+    let needed = layout.minimum_width(model.columns.len());
+    if needed <= budget {
+        return render_matrix_within(model, &layout);
+    }
+
+    let count = model.columns.len();
+    let features = model.rows.len();
+    format!(
+        "{count} environment{plural} declared, {features} feature{feature_plural}.\n\
+         The matrix needs {needed} columns to line up, and this terminal has {budget}.\n\
+         Per-environment detail: 'hitch status --environments'",
+        plural = if count == 1 { "" } else { "s" },
+        feature_plural = if features == 1 { "" } else { "s" },
+    )
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    format!("{}{}", text, " ".repeat(width.saturating_sub(len)))
+}
+
+/// Render the per-environment lines beneath the grid.
+///
+/// The counts come from [`MatrixSummaryRow`], which counted them *from the
+/// cells*, so these lines cannot disagree with the grid above them. The health
+/// word is [`EnvironmentHealth::label`]'s — the same function `hitch status`
+/// already used — rather than a second vocabulary of health words.
+pub fn render_environment_summaries(summaries: &[MatrixSummaryRow]) -> String {
+    // The name column is as wide as the widest name, not a fixed four. A fixed
+    // width is fine right up until an environment is called `stage`, and then
+    // its counts sit one column right of everyone else's and the block stops
+    // being a table. Same rule as `render_matrix`, for the same reason.
+    let name_width = summaries
+        .iter()
+        .map(|s| s.environment.to_uppercase().chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(3);
+    let mut out = String::new();
+    for summary in summaries {
+        let name = pad_right(&summary.environment.to_uppercase(), name_width);
+        out.push_str(&format!(
+            "{name}  desired {} · actual {}",
+            summary.desired, summary.realised
+        ));
+        if summary.held > 0 {
+            out.push_str(&format!(
+                " · {}",
+                plural_count(summary.held, "held", "held")
+            ));
+        }
+        if summary.needs_rebuild > 0 {
+            out.push_str(&format!(
+                " · {}",
+                plural_count(summary.needs_rebuild, "needs rebuild", "need rebuild")
+            ));
+        }
+        if summary.missing > 0 {
+            out.push_str(&format!(
+                " · {}",
+                plural_count(summary.missing, "missing", "missing")
+            ));
+        }
+        if summary.actual_unknown > 0 {
+            out.push_str(&format!(
+                " · {}",
+                plural_count(summary.actual_unknown, "actual unknown", "actual unknown")
+            ));
+        }
+        if summary.locked {
+            // In the name's own field, not bolted on the front and not appended
+            // to the counts. Bolting it on the front was the first version and
+            // it pushed this row's name eleven columns right of every other
+            // row's, which is a table losing its own alignment over an
+            // annotation — so the annotation takes the padding the name
+            // already had, and the names stay in a column.
+            out.push_str(" 🔒");
+        }
+        out.push_str(&format!("\n    {}\n", summary.health.label()));
+    }
+    out
+}
+
+fn plural_count(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("{count} {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
 pub fn render_receipt(receipt: &crate::operations::model::ExecutionReceipt) -> String {
     let mut out = String::new();
 
@@ -484,14 +980,43 @@ fn render_applied_effect(out: &mut String, effect: &AppliedEffect) {
         AppliedEffect::DependentEnvironmentRebuild {
             environment,
             outcome,
+            held,
             ..
         } => {
-            let glyph = if outcome.owes_effect() { "⧗" } else { "✓" };
+            // Three glyphs, and the middle one is new: a rebuild that landed
+            // with branches held out did rebuild, so `✓` would be true and
+            // useless, and `⧗` is reserved for work the user is *owed* — which
+            // a hold is not. `⚠️` is the receipt's existing word for an
+            // anomaly that is not a failure, so the hold reads as one.
+            let glyph = if outcome.owes_effect() {
+                "⧗"
+            } else if held.is_empty() {
+                "✓"
+            } else {
+                "⚠️"
+            };
+            // The holds are named with the neighbour each conflicts against,
+            // because a hold without its partner is indistinguishable from a
+            // base that moved underneath the branch — and those have different
+            // remedies.
+            let held_note = if held.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " — {} branch{} held: {}",
+                    held.len(),
+                    if held.len() == 1 { "" } else { "es" },
+                    held.iter()
+                        .map(|h| format!("{} (conflicts with {})", h.branch, h.conflicts_with))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             match outcome.reason() {
-                Some(reason) => {
-                    out.push_str(&format!("  {glyph} rebuild {environment} — {reason}\n"))
-                }
-                None => out.push_str(&format!("  {glyph} rebuild {environment}\n")),
+                Some(reason) => out.push_str(&format!(
+                    "  {glyph} rebuild {environment} — {reason}{held_note}\n"
+                )),
+                None => out.push_str(&format!("  {glyph} rebuild {environment}{held_note}\n")),
             }
         }
         AppliedEffect::PromotionPrune {
@@ -514,6 +1039,17 @@ fn render_applied_effect(out: &mut String, effect: &AppliedEffect) {
 /// `LegacyUnknown` is spelled out rather than skipped, because a state that
 /// renders as silence reads as good news, and P3 made that case first-class for
 /// exactly this reason.
+///
+/// A different section from the effects above, and the heading is what keeps
+/// them apart. A release moves its target ref *and* leaves every environment
+/// based on that target behind, so the same `main 5e701ab → 7986a00` legitimately
+/// appears twice in one receipt: once as an effect (what this operation did) and
+/// once as `main moved` under `dev` (what that operation left behind). Those are
+/// two true facts about two different subjects, and the reader can only tell
+/// them apart because the second is a verdict read from the snapshot and the
+/// first is a ref edit read back from the object database. Collapsing the
+/// sections would lose the distinction; indenting the detail deeper than the
+/// effect lines is what keeps the two kinds from sharing a column.
 fn render_resulting_state(out: &mut String, snapshot: &RepositoryStateSnapshot) {
     out.push('\n');
     heading(out, "Result");
@@ -530,9 +1066,26 @@ fn render_resulting_state(out: &mut String, snapshot: &RepositoryStateSnapshot) 
             removed,
         } = &environment.health
         {
+            // A removed branch is *necessarily* also a changed input, not
+            // incidentally: `health_from_record` builds `changed_inputs` by
+            // walking the branches the record pinned, and a branch that has
+            // left the declaration resolves to no current SHA, so it fails that
+            // comparison too. Printing both lines therefore said the same thing
+            // twice, and the specific one ("removed from the declaration") is
+            // the actionable one — its SHA is irrelevant now that it is out.
+            //
+            // `added` needs no such guard: it is drawn from the *desired*
+            // branches and `changed_inputs` from the recorded ones, so the two
+            // are disjoint by construction rather than by coincidence.
             for input in changed_inputs {
+                if removed.contains(&input.branch) {
+                    continue;
+                }
+                // "moved" so the line states what happened, in the same grammar
+                // as the two declaration-change lines below it. Barely an
+                // `old → new` arrow reads as a ref update and is not one.
                 out.push_str(&format!(
-                    "      {}   {} → {}\n",
+                    "      {} moved   {} → {}\n",
                     input.branch,
                     input
                         .previous_sha
@@ -547,10 +1100,10 @@ fn render_resulting_state(out: &mut String, snapshot: &RepositoryStateSnapshot) 
                 ));
             }
             for branch in added {
-                out.push_str(&format!("      {branch}   added to the declaration\n"));
+                out.push_str(&format!("      {branch} added to the declaration\n"));
             }
             for branch in removed {
-                out.push_str(&format!("      {branch}   removed from the declaration\n"));
+                out.push_str(&format!("      {branch} removed from the declaration\n"));
             }
         }
         if let EnvironmentHealth::PartiallyRealised { held } = &environment.health {
@@ -588,6 +1141,372 @@ fn heading(out: &mut String, title: &str) {
 /// (`"'qa' will be left stale until it is rebuilt. To rebuild it:\n  hitch
 /// rebuild qa"`), and left alone the remedy lands one column left of the text
 /// it belongs to.
+///
+/// Render one `hitch why` explanation (spec §14).
+///
+/// Three forms, three shapes, and the shape is chosen by the *form* rather than
+/// by which fields happen to be populated: a section that is present-but-empty
+/// is worse than an absent one, and "present when there is something to say" is
+/// the only rule that gets that right without a per-section emptiness check.
+///
+/// The equations go through [`render_equation`] rather than a second format, so
+/// `hitch why dev` and a plan about `dev` cannot describe it differently —
+/// which is §13's requirement and the reason the equation is a value.
+pub fn render_why(explanation: &WhyExplanation) -> String {
+    match explanation {
+        WhyExplanation::FeatureInEnvironment(e) => render_why_feature_in(e),
+        WhyExplanation::Feature(e) => render_why_feature(e),
+        WhyExplanation::Environment(e) => render_why_environment(e),
+    }
+}
+
+fn render_why_feature(e: &WhyFeatureExplanation) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{}\n", e.branch));
+
+    if e.environments.is_empty() {
+        out.push_str("\n  Not promoted to any environment.\n");
+        out.push_str(&format!("\n{}\n", e.summary));
+        return out.trim_end().to_string();
+    }
+
+    out.push('\n');
+    let width = e
+        .environments
+        .iter()
+        .map(|m| m.environment.chars().count())
+        .max()
+        .unwrap_or(0);
+    for membership in &e.environments {
+        out.push_str(&format!(
+            "  {name:<width$}  {}\n",
+            why_membership_label(membership.membership),
+            name = membership.environment,
+            width = width
+        ));
+        if let Some(reason) = &membership.reason {
+            out.push_str(&format!(
+                "{}{}\n",
+                " ".repeat(width + 4),
+                why_reason_sentence(reason)
+            ));
+        }
+    }
+
+    out.push_str(&format!("\n{}\n", e.summary));
+    out.trim_end().to_string()
+}
+
+fn render_why_feature_in(e: &WhyFeatureInEnvironment) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{} → {}\n", e.branch, e.environment));
+
+    out.push('\n');
+    heading(&mut out, "Desired");
+    out.push_str(&format!("  {}\n", render_equation(&e.desired_equation)));
+
+    // Absent, not empty. An environment with no trustworthy build has no actual
+    // composition, and rendering `Actual\n  (nothing)` would be a claim hitch
+    // cannot make.
+    if let Some(actual) = &e.actual_equation {
+        out.push('\n');
+        heading(&mut out, "Actual");
+        out.push_str(&format!("  {}\n", render_equation(actual)));
+    }
+
+    out.push('\n');
+    heading(&mut out, "Membership");
+    out.push_str(&format!("  {}\n", why_membership_label(e.membership)));
+
+    // `Why?` appears only when there is a reason. A branch that is simply in the
+    // build has nothing to explain, and a section saying so would be noise on
+    // the most common query the command will ever answer.
+    if let Some(reason) = &e.reason {
+        out.push('\n');
+        heading(&mut out, "Why?");
+        out.push_str(&format!("  {}\n", why_reason_sentence(reason)));
+        if let WhyReason::HeldAgainst { files, .. } = reason {
+            if !files.is_empty() {
+                out.push('\n');
+                heading(&mut out, "Files");
+                for file in files {
+                    out.push_str(&format!("  {file}\n"));
+                }
+            }
+        }
+    }
+
+    // Then the environment's own state, from the same function and in the same
+    // order the environment form uses. The material above is about the branch;
+    // this is about the environment the question was asked in, and a reader
+    // about to promote needs both — "● Included" means something different in a
+    // locked environment that is two rebuilds behind than in a current one.
+    environment_state_block(&mut out, &e.environment, &e.health, e.locked);
+
+    if !e.what_hitch_did.is_empty() {
+        out.push('\n');
+        heading(&mut out, "What Hitch did");
+        for did in &e.what_hitch_did {
+            match did {
+                WhatHitchDid::Included { branch } => {
+                    out.push_str(&format!("  Included {branch} in the build\n"))
+                }
+                WhatHitchDid::Held {
+                    branch,
+                    conflicts_with,
+                } => out.push_str(&format!(
+                    "  Excluded {branch} — it conflicts with {conflicts_with}\n"
+                )),
+                WhatHitchDid::ReplayedResolution { branch, key } => out.push_str(&format!(
+                    "  Replayed the recorded resolution for {branch} ({key})\n"
+                )),
+            }
+        }
+    }
+
+    if let Some(action) = &e.next_action {
+        out.push('\n');
+        heading(&mut out, "Next");
+        match next_action_command(action) {
+            NextStep::Command(command) => out.push_str(&format!("  {command}\n")),
+            NextStep::Advice(advice) => out.push_str(&format!("  {advice}\n")),
+            NextStep::Nothing => {}
+        }
+    }
+
+    out.trim_end().to_string()
+}
+
+fn render_why_environment(e: &WhyEnvironmentExplanation) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{}\n", e.environment));
+
+    out.push('\n');
+    heading(&mut out, "Desired");
+    out.push_str(&format!("  {}\n", render_equation(&e.desired_equation)));
+
+    if let Some(actual) = &e.actual_equation {
+        out.push('\n');
+        heading(&mut out, "Actual");
+        out.push_str(&format!("  {}\n", render_equation(actual)));
+    }
+
+    if !e.branches.is_empty() {
+        out.push('\n');
+        heading(&mut out, "Branches");
+        let width = e
+            .branches
+            .iter()
+            .map(|b| b.branch.chars().count())
+            .max()
+            .unwrap_or(0);
+        for branch in &e.branches {
+            out.push_str(&format!(
+                "  {name:<width$}  {}\n",
+                why_membership_label(branch.membership),
+                name = branch.branch,
+                width = width
+            ));
+            if let Some(reason) = &branch.reason {
+                out.push_str(&format!(
+                    "{}{}\n",
+                    " ".repeat(width + 4),
+                    why_reason_sentence(reason)
+                ));
+            }
+        }
+    }
+
+    // The verdict as a sentence, then the lock if there is one. `EnvironmentHealth::label`
+    // is a bare predicate and half of them do not fit "X is <label>": `needs rebuild`
+    // yields "dev is needs rebuild". The sentence form is a *display* choice, so it
+    // lives here and is derived from the same enum — which is what keeps the
+    // verdict itself computed in exactly one place.
+    environment_state_block(&mut out, &e.environment, &e.health, e.locked);
+
+    if let Some(action) = &e.next_action {
+        out.push('\n');
+        heading(&mut out, "Next");
+        match next_action_command(action) {
+            NextStep::Command(command) => out.push_str(&format!("  {command}\n")),
+            NextStep::Advice(advice) => out.push_str(&format!("  {advice}\n")),
+            NextStep::Nothing => {}
+        }
+    }
+
+    out.trim_end().to_string()
+}
+
+/// The environment's own state: one verdict sentence, plus what a human lock
+/// will refuse.
+///
+/// Shared by both renderers that display an environment, because the two forms
+/// are two views of the *same* snapshot and a reader running
+/// `hitch why <branch> <env>` must not learn something different about that
+/// environment than `hitch why <env>` tells them. One function rather than two
+/// call sites that each build the same two sentences, for the same reason
+/// `build_status_model` is a projection: two formatters can disagree, and here
+/// they would disagree about a verdict.
+fn environment_state_block(
+    out: &mut String,
+    environment: &str,
+    health: &crate::core::state::EnvironmentHealth,
+    locked: bool,
+) {
+    out.push_str(&format!("\n{}\n", health_sentence(environment, health)));
+    if locked {
+        out.push_str(&format!("{}\n", lock_sentence(environment)));
+    }
+}
+
+/// What a human lock will refuse, as one sentence.
+///
+/// Its own function only because it is a *sentence about a consequence* rather
+/// than a restatement of the flag, and the consequence has a command in it. The
+/// caller decides whether the environment is locked; this decides what that
+/// means.
+fn lock_sentence(environment: &str) -> String {
+    format!(
+        "{environment} is locked, so it will refuse a promote until 'hitch unlock {environment}'."
+    )
+}
+
+/// The one place that writes a `why` membership's words.
+///
+/// Same reasoning as the matrix: the glyph and the word both carry the state, so
+/// the text survives a terminal with colour disabled and a screen reader, and a
+/// pipe into `grep`. It is a *different* function from `MatrixCell::label` on
+/// purpose — §14 capitalises them (`Included`, `⛔ Held`) and the two are
+/// displayed at different sizes — but both are projections of the same
+/// classifier, so the states themselves cannot drift.
+pub fn why_membership_label(membership: WhyMembership) -> String {
+    let (glyph, word) = match membership {
+        WhyMembership::NotDesired => ("—", "Not desired"),
+        WhyMembership::Included => ("●", "Included"),
+        WhyMembership::Held => ("⛔", "Held"),
+        WhyMembership::InBase => ("=", "In base"),
+        WhyMembership::NeedsRebuild => ("↻", "Needs rebuild"),
+        WhyMembership::ActualUnknown => ("?", "Actual unknown"),
+        WhyMembership::Missing => ("!", "Missing"),
+    };
+    format!("{glyph} {word}")
+}
+
+/// A `Next` step, which is either a command to paste or a sentence, or nothing.
+///
+/// `Debug`/`PartialEq` because a `Next` step is a claim about what a user should
+/// run, and "the renderer maps this action to this command" is a testable
+/// property rather than something to check by eye. It was previously neither,
+/// which meant the mapping had no test at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NextStep {
+    Command(String),
+    Advice(String),
+    Nothing,
+}
+
+/// The one place that writes the words of a next action.
+///
+/// A table rather than a `match` inside three renderers, because the argument
+/// order of `hitch resolve` (`<env> --branch <branch>`, per
+/// `src/commands/resolve.rs`) is the kind of detail that has to be right in
+/// exactly one place. `NextAction::None` renders as advice, never as a command:
+/// "there is nothing to run" and "here is a command" are different claims, and
+/// printing a command for a state no command can fix would be the lie.
+pub fn next_action_command(action: &NextAction) -> NextStep {
+    match action {
+        NextAction::Rebuild(environment) => {
+            NextStep::Command(format!("hitch rebuild {environment}"))
+        }
+        NextAction::Resolve {
+            environment,
+            branch,
+        } => NextStep::Command(format!("hitch resolve {environment} --branch {branch}")),
+        NextAction::Demote {
+            environment,
+            branch,
+        } => NextStep::Command(format!("hitch demote {branch} {environment}")),
+        NextAction::Promote {
+            branch,
+            environment,
+        } => NextStep::Command(format!("hitch promote {branch} {environment}")),
+        NextAction::None { reason } => NextStep::Advice(reason.clone()),
+    }
+}
+
+/// An environment's health as one grammatical sentence.
+///
+/// Every arm is a `match` on [`EnvironmentHealth`] with no wildcard, for the
+/// same reason [`MatrixCell::classify`] has none: a new variant added to the
+/// model should fail to compile here rather than render as a sentence with an
+/// `{}` hole in it.
+fn health_sentence(environment: &str, health: &EnvironmentHealth) -> String {
+    match health {
+        EnvironmentHealth::Realised => {
+            format!("{environment} is realised: the build matches its declaration.")
+        }
+        EnvironmentHealth::PartiallyRealised { held } => {
+            format!(
+                "{environment} is partially realised: {} held out of the build.",
+                held.join(", ")
+            )
+        }
+        EnvironmentHealth::NeedsRebuild { .. } => {
+            format!("{environment} needs a rebuild: its inputs have moved since the last build.")
+        }
+        EnvironmentHealth::NeverBuilt => {
+            format!("{environment} has never been built.")
+        }
+        EnvironmentHealth::LegacyUnknown => {
+            format!("{environment} has a build hitch cannot describe.")
+        }
+        EnvironmentHealth::MissingBranch => {
+            format!("{environment}'s branch does not exist locally.")
+        }
+    }
+}
+
+/// One reason, as a sentence.
+///
+/// Every variant is a *fact* read from the snapshot. None of them mentions a
+/// branch that is not the subject, and none of them is hedged — a `why` that
+/// said "may be held" would be indistinguishable from the prediction-displayed
+/// call sites this program exists to separate from fact.
+fn why_reason_sentence(reason: &WhyReason) -> String {
+    match reason {
+        WhyReason::HeldAgainst { conflicts_with, .. } => {
+            format!("it conflicts with {conflicts_with}")
+        }
+        WhyReason::ChangedSinceBuild { from, to } => {
+            format!("it moved since the last build ({from} → {to})")
+        }
+        WhyReason::BaseMoved { from, to } => {
+            format!("the environment's base moved since the last build ({from} → {to})")
+        }
+        WhyReason::PromotedSinceBuild => {
+            "it was promoted after the last build ran".to_string()
+        }
+        WhyReason::DemotedSinceBuild => {
+            "it was demoted after the last build ran, so the build still contains it".to_string()
+        }
+        WhyReason::NoRef => "no branch ref resolves for it, locally or on the cached remote".to_string(),
+        WhyReason::NoBuildRecord => {
+            "hitch has no build record for this environment, so it cannot say what the last build contained".to_string()
+        }
+        WhyReason::EnvironmentBranchMissing => {
+            "the environment branch does not exist".to_string()
+        }
+        WhyReason::AlreadyInBase => {
+            "its tip is already reachable from the environment's base, so building it would fold in nothing"
+                .to_string()
+        }
+        WhyReason::EnvironmentBehind => {
+            "the environment is behind its declaration, for a reason that is not about this branch"
+                .to_string()
+        }
+    }
+}
+
 fn annotated(out: &mut String, glyph: &str, message: &str) {
     for (index, line) in message.lines().enumerate() {
         if index == 0 {
@@ -822,11 +1741,12 @@ mod tests {
     use super::*;
     use crate::core::state::{
         ActualComposition, ApprovalPolicy, ChangedInput, DeclaredBranch, DesiredComposition,
-        EnvironmentState,
+        EnvironmentHealth, EnvironmentState,
     };
+    use crate::core::status::{MatrixCell, MatrixRow};
     use crate::operations::model::{
         CompositionPlan, ConfirmationRequirement, DependentRebuildOutcome, ExecutionReceipt,
-        ExecutionWarning, OperationIntent, OperationKind, PlanFingerprint, PlanWarning,
+        ExecutionWarning, HoldPair, OperationIntent, OperationKind, PlanFingerprint, PlanWarning,
         PlanWarningKind, ResourceKind, UnaffectedResource,
     };
     use crate::utils::build_record::PinnedBranch;
@@ -1451,6 +2371,7 @@ mod tests {
         r.effects = vec![AppliedEffect::DependentEnvironmentRebuild {
             environment: "qa".into(),
             outcome: DependentRebuildOutcome::Failed("branch 'auth' no longer exists".into()),
+            held: Vec::new(),
             refname: "refs/heads/qa".into(),
         }];
         let rendered = render_receipt(&r);
@@ -1459,6 +2380,62 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("✓ rebuild qa"), "{rendered}");
+    }
+
+    /// A hold is an anomaly, not an owed effect and not a clean rebuild, so it
+    /// gets its own glyph and it names the neighbour — the partner is what
+    /// distinguishes "rebase this onto the base" from "reorder the list".
+    #[test]
+    fn a_rebuild_that_held_branches_is_not_rendered_as_a_clean_rebuild() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.effects = vec![AppliedEffect::DependentEnvironmentRebuild {
+            environment: "dev".into(),
+            outcome: DependentRebuildOutcome::Rebuilt,
+            held: vec![HoldPair {
+                branch: "feature/dashboard".into(),
+                conflicts_with: "feature/payments".into(),
+            }],
+            refname: "refs/heads/dev".into(),
+        }];
+        let rendered = render_receipt(&r);
+        assert!(
+            has_line(
+                &rendered,
+                "  ⚠️ rebuild dev — 1 branch held: feature/dashboard (conflicts with feature/payments)"
+            ),
+            "{rendered}"
+        );
+        // Not owed: nothing is outstanding, the branch was deliberately held.
+        assert!(!rendered.contains("⧗ rebuild dev"), "{rendered}");
+        assert!(!rendered.contains("✓ rebuild dev"), "{rendered}");
+    }
+
+    #[test]
+    fn several_held_branches_are_counted_in_the_plural() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.effects = vec![AppliedEffect::DependentEnvironmentRebuild {
+            environment: "dev".into(),
+            outcome: DependentRebuildOutcome::Rebuilt,
+            held: vec![
+                HoldPair {
+                    branch: "a".into(),
+                    conflicts_with: "b".into(),
+                },
+                HoldPair {
+                    branch: "c".into(),
+                    conflicts_with: "d".into(),
+                },
+            ],
+            refname: "refs/heads/dev".into(),
+        }];
+        let rendered = render_receipt(&r);
+        assert!(
+            has_line(
+                &rendered,
+                "  ⚠️ rebuild dev — 2 branches held: a (conflicts with b), c (conflicts with d)"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -1528,11 +2505,11 @@ mod tests {
         let rendered = render_receipt(&r);
         assert!(has_line(&rendered, "  ⧗ dev   needs rebuild"), "{rendered}");
         assert!(
-            has_line(&rendered, "      auth   aaaaaaa → bbbbbbb"),
+            has_line(&rendered, "      auth moved   aaaaaaa → bbbbbbb"),
             "{rendered}"
         );
         assert!(
-            has_line(&rendered, "      login   added to the declaration"),
+            has_line(&rendered, "      login added to the declaration"),
             "{rendered}"
         );
     }
@@ -1551,8 +2528,71 @@ mod tests {
         }));
         let rendered = render_receipt(&r);
         assert!(
-            has_line(&rendered, "      auth   aaaaaaa → gone"),
+            has_line(&rendered, "      auth moved   aaaaaaa → gone"),
             "{rendered}"
+        );
+    }
+
+    /// The three detail lines used to be an `old → new` arrow, `added to the
+    /// declaration`, and `removed from the declaration` — so only two of three
+    /// said what had happened, and the arrow read as a ref update rather than as
+    /// "this environment's input moved". One grammar, three clauses.
+    #[test]
+    fn every_detail_line_states_what_happened_rather_than_only_showing_a_pair_of_shas() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.resulting_state = Some(snapshot(EnvironmentHealth::NeedsRebuild {
+            changed_inputs: vec![ChangedInput {
+                branch: "main".into(),
+                previous_sha: Some(sha('a')),
+                current_sha: Some(sha('b')),
+            }],
+            added: vec!["login".into()],
+            removed: vec!["auth".into()],
+        }));
+        let rendered = render_receipt(&r);
+        for line in [
+            "      main moved   aaaaaaa → bbbbbbb",
+            "      login added to the declaration",
+            "      auth removed from the declaration",
+        ] {
+            assert!(
+                has_line(&rendered, line),
+                "missing {line:?} in:\n{rendered}"
+            );
+        }
+    }
+
+    /// Not a cosmetic dedupe. `health_from_record` walks the *recorded* pins to
+    /// build `changed_inputs`, and a branch that has left the declaration
+    /// resolves to no current SHA — so it fails that comparison too, and
+    /// `removed ⊆ changed_inputs` holds by construction. Printing both said the
+    /// same branch twice, and the specific line is the actionable one.
+    #[test]
+    fn a_removed_branch_is_reported_once_not_twice() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.resulting_state = Some(snapshot(EnvironmentHealth::NeedsRebuild {
+            // Exactly what `health_from_record` produces for a demoted branch.
+            changed_inputs: vec![ChangedInput {
+                branch: "auth".into(),
+                previous_sha: Some(sha('a')),
+                current_sha: None,
+            }],
+            added: Vec::new(),
+            removed: vec!["auth".into()],
+        }));
+        let rendered = render_receipt(&r);
+        assert!(
+            has_line(&rendered, "      auth removed from the declaration"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("auth moved"),
+            "the removal was also rendered as a moved input:\n{rendered}"
+        );
+        assert_eq!(
+            rendered.matches("auth").count(),
+            1,
+            "auth appears more than once:\n{rendered}"
         );
     }
 
@@ -1802,5 +2842,315 @@ mod tests {
         }];
         let rendered = render_plan(&p);
         assert_eq!(rendered, rendered.trim_end(), "{rendered:?}");
+    }
+
+    // ── §13: the environment equation ─────────────────────────────────────
+
+    fn equation(
+        environment: &str,
+        base: &str,
+        branches: &[&str],
+        excluded: Vec<ExcludedTerm>,
+    ) -> EnvironmentEquation {
+        EnvironmentEquation {
+            environment: environment.to_string(),
+            base: base.to_string(),
+            terms: branches
+                .iter()
+                .map(|b| EquationTerm {
+                    branch: b.to_string(),
+                    state: EquationTermState::Plain,
+                })
+                .collect(),
+            excluded,
+        }
+    }
+
+    fn held(branch: &str, conflicts_with: &str, files: &[&str]) -> ExcludedTerm {
+        ExcludedTerm {
+            branch: branch.to_string(),
+            reason: ExclusionReason::Held {
+                conflicts_with: conflicts_with.to_string(),
+                files: files.iter().map(|f| f.to_string()).collect(),
+            },
+        }
+    }
+
+    #[test]
+    fn an_equation_with_no_branches_is_the_base_alone_and_says_only_that() {
+        // `dev = main` is the whole composition, not a truncated one, so it
+        // carries no apology. The "base only" wording is `render_plan`'s, in its
+        // Composition section — putting it here too would print the same remark
+        // twice in a plan that shows both.
+        assert_eq!(
+            render_equation(&equation("dev", "main", &[], vec![])),
+            "dev = main"
+        );
+    }
+
+    #[test]
+    fn an_equation_lists_its_branches_in_the_order_it_was_handed_them() {
+        assert_eq!(
+            render_equation(&equation(
+                "dev",
+                "main",
+                &["auth", "payments", "search"],
+                vec![]
+            )),
+            "dev = main + auth + payments + search"
+        );
+        // Declaration order is composition order, and a renderer that sorted it
+        // would be describing a different build. Reversed input, reversed
+        // output — asserted so a future `sort` fails here.
+        assert_eq!(
+            render_equation(&equation("dev", "main", &["search", "auth"], vec![])),
+            "dev = main + search + auth"
+        );
+    }
+
+    #[test]
+    fn a_term_already_in_the_base_says_so_on_the_same_line() {
+        let mut eq = equation("dev", "main", &["auth"], vec![]);
+        eq.terms[0].state = EquationTermState::InBase;
+        assert_eq!(render_equation(&eq), "dev = main + auth (already in base)");
+    }
+
+    #[test]
+    fn an_excluded_branch_is_listed_beneath_the_equation_not_summed_into_it() {
+        let rendered = render_equation(&equation(
+            "dev",
+            "main",
+            &["auth", "payments"],
+            vec![held("dashboard", "payments", &["src/ui.rs", "src/api.rs"])],
+        ));
+        assert_eq!(
+            rendered,
+            "dev = main + auth + payments\n    dashboard ⛔ held — conflicts with payments\n        src/ui.rs\n        src/api.rs"
+        );
+    }
+
+    #[test]
+    fn an_unaccounted_branch_reads_as_absent_from_the_build_not_as_held() {
+        // "Held" is a claim about a conflict, and an excluded branch with no
+        // conflict behind it has not been held by anything.
+        let rendered = render_equation(&equation(
+            "dev",
+            "main",
+            &["auth"],
+            vec![ExcludedTerm {
+                branch: "mystery".to_string(),
+                reason: ExclusionReason::Unknown,
+            }],
+        ));
+        assert!(rendered.starts_with("dev = main + auth\n"), "{rendered:?}");
+        assert!(
+            has_line(&rendered, "    mystery ◌ not accounted for"),
+            "{rendered:?}"
+        );
+    }
+
+    /// §13's regression test, and deliberately a *string* comparison rather
+    /// than a "both mention the branch" assertion: the requirement is that
+    /// these are the same characters, not that they agree about which branches
+    /// exist. A substring test would pass against two different vocabularies.
+    #[test]
+    fn the_plan_and_the_status_equation_are_the_same_characters() {
+        let branches = [("auth", &sha('1')[..]), ("payments", &sha('2')[..])];
+        let from_plan = render_equation(&EnvironmentEquation::from_projection(&projection(
+            "dev", "main", &branches,
+        )));
+        let from_status = render_equation(&equation("dev", "main", &["auth", "payments"], vec![]));
+        assert_eq!(from_plan, from_status);
+        assert_eq!(from_plan, "dev = main + auth + payments");
+    }
+
+    #[test]
+    fn a_plans_equation_never_repeats_its_held_branches() {
+        // A plan lists every branch, with a remedy, in its Composition section.
+        // Re-listing the held ones inside the equation would print the same fact
+        // twice in two vocabularies, which is what §13 argues against.
+        let mut p = plan(OperationIntent::RebuildEnvironment {
+            environment: "dev".into(),
+        });
+        p.proposed = projection("dev", "main", &[("auth", &sha('1')[..])]);
+        p.compositions = vec![CompositionPlan {
+            environment: "dev".into(),
+            base: pinned("main", &sha('9')),
+            branches: vec![planned("auth", &sha('1'), PlannedBranchState::Included)],
+            result_sha: sha('f'),
+            holds: Vec::new(),
+        }];
+        let rendered = render_plan(&p);
+        let proposed = rendered
+            .lines()
+            .find(|l| l.contains("dev = main + auth"))
+            .expect("a Proposed line");
+        assert_eq!(proposed.trim(), "dev = main + auth");
+    }
+
+    // ── §12: the status matrix ────────────────────────────────────────────
+
+    fn cell_model(rows: &[(&str, &[MatrixCell])], columns: &[&str]) -> MatrixModel {
+        MatrixModel {
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            rows: rows
+                .iter()
+                .map(|(feature, cells)| MatrixRow {
+                    feature: feature.to_string(),
+                    cells: cells.to_vec(),
+                })
+                .collect(),
+            summaries: Vec::new(),
+        }
+    }
+
+    fn summary(environment: &str, health: EnvironmentHealth) -> MatrixSummaryRow {
+        MatrixSummaryRow {
+            environment: environment.to_string(),
+            base: "main".to_string(),
+            desired: 3,
+            realised: 2,
+            held: 1,
+            needs_rebuild: 0,
+            missing: 0,
+            actual_unknown: 0,
+            locked: false,
+            health,
+        }
+    }
+
+    #[test]
+    fn every_cell_state_renders_as_a_glyph_and_a_word() {
+        // §12 requires the grid to be understandable without colour, which
+        // means the state cannot live in a glyph alone. All seven here, so a new
+        // variant added to `MatrixCell` without a label fails this test rather
+        // than rendering as an empty cell.
+        let cells = [
+            MatrixCell::NotDesired,
+            MatrixCell::Included,
+            MatrixCell::Held,
+            MatrixCell::InBase,
+            MatrixCell::NeedsRebuild,
+            MatrixCell::ActualUnknown,
+            MatrixCell::Missing,
+        ];
+        for cell in cells {
+            let model = cell_model(&[("a", &[cell])], &["dev"]);
+            let rendered = render_matrix(&model);
+            let line = rendered
+                .lines()
+                .nth(2)
+                .unwrap_or_else(|| panic!("no row for {cell:?} in {rendered:?}"));
+            assert!(
+                line.contains(cell.label()),
+                "{cell:?} rendered without its word: {rendered:?}"
+            );
+            assert!(
+                line.contains(cell.glyph()),
+                "{cell:?} rendered without its glyph: {rendered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_matrix_is_rectangular_when_one_name_is_far_longer_than_another() {
+        // A naive `{:width$}` renderer puts the short names in the wide column
+        // and the long name's cell ends up a column to the left, which still
+        // *looks* plausible. Checking the shape of every line catches it.
+        let model = cell_model(
+            &[
+                ("a", &[MatrixCell::Included, MatrixCell::NotDesired]),
+                (
+                    "feature/with/a/very/long/name",
+                    &[MatrixCell::Held, MatrixCell::NeedsRebuild],
+                ),
+            ],
+            &["dev", "qa"],
+        );
+        let rendered = render_matrix(&model);
+        // The two header lines are not rows, so they are skipped by index
+        // rather than by pattern — a name-based filter is exactly the kind of
+        // predicate that quietly stops matching when the format changes.
+        let glyphs = ['●', '—', '⛔', '↻', '◌', '=', '!'];
+        let rows: Vec<Vec<usize>> = rendered
+            .lines()
+            .skip(2)
+            .map(|l| {
+                // Sorted by *position*, not by glyph: sorting the pair orders it
+                // by codepoint, which happens to look like a misalignment and
+                // is none.
+                let mut found: Vec<usize> = l
+                    .char_indices()
+                    .filter(|(_, c)| glyphs.contains(c))
+                    .map(|(i, _)| i)
+                    .collect();
+                found.sort_unstable();
+                found
+            })
+            .collect();
+        assert_eq!(rows.len(), 2, "{rendered:?}");
+        assert_eq!(rows[0].len(), 2, "row has a cell per column: {rendered:?}");
+        assert_eq!(rows[0], rows[1], "cell columns misaligned: {rendered:?}");
+    }
+
+    #[test]
+    fn a_matrix_with_no_rows_still_renders_its_header() {
+        // "No features are promoted" is an answer; an empty screen is not.
+        let rendered = render_matrix(&cell_model(&[], &["dev", "qa"]));
+        assert!(has_line(&rendered, "Feature  DEV  QA"), "{rendered:?}");
+    }
+
+    #[test]
+    fn no_matrix_line_has_trailing_whitespace() {
+        // Trailing spaces are invisible in a terminal and noisy in a diff, and
+        // `pad_left` on a cell that already fills its column is exactly how
+        // they get introduced.
+        let model = cell_model(
+            &[
+                ("a", &[MatrixCell::Included]),
+                ("feature/with/a/very/long/name", &[MatrixCell::NeedsRebuild]),
+            ],
+            &["dev"],
+        );
+        for line in render_matrix(&model).lines() {
+            assert_eq!(line, line.trim_end(), "trailing whitespace: {line:?}");
+        }
+    }
+
+    #[test]
+    fn environment_summaries_reuse_the_health_label() {
+        // One vocabulary of health words, taken from `EnvironmentHealth::label`
+        // — the same function the rest of the CLI reads — rather than a second
+        // set of words written next to it.
+        let rendered = render_environment_summaries(&[
+            summary("dev", EnvironmentHealth::PartiallyRealised { held: vec![] }),
+            summary("qa", EnvironmentHealth::Realised),
+        ]);
+        assert!(
+            has_line(&rendered, "    partially realised"),
+            "{rendered:?}"
+        );
+        assert!(has_line(&rendered, "    realised"), "{rendered:?}");
+        assert!(
+            has_line(&rendered, "DEV  desired 3 · actual 2 · 1 held"),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn a_summary_only_mentions_a_count_that_is_non_zero() {
+        // A summary listing "· 0 held · 0 needs rebuild" on every healthy
+        // environment is noise that trains a reader to skip the line.
+        let mut clean = summary("qa", EnvironmentHealth::Realised);
+        clean.held = 0;
+        let rendered = render_environment_summaries(&[clean]);
+        assert!(!rendered.contains("held"), "{rendered:?}");
+        // Two spaces, because `dev`/`qa` are both three characters and the
+        // name column is sized to the widest of them — not a fixed four, which
+        // is what a longer environment name like `stage` exposes.
+        assert!(
+            rendered.contains("QA   desired 3 · actual 2"),
+            "{rendered:?}"
+        );
     }
 }

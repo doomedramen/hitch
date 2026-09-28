@@ -15,10 +15,13 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::commands::global_context::{GlobalContext, GlobalFlags};
+    use hitch::core::render::why_membership_label;
     use hitch::core::state::{
         build_state_snapshot, ActualComposition, ActualMembership, ChangedInput, EnvironmentHealth,
         RepositoryStateSnapshot,
     };
+    use hitch::core::status::{build_matrix_model, MatrixCell};
+    use hitch::core::why::{build_why, WhyExplanation, WhyMembership, WhySubject};
     use hitch::utils::logging::Logger;
     use std::sync::Arc;
 
@@ -978,6 +981,15 @@ mod tests {
     /// distinct, so a renderer that re-derived its own verdict — or that
     /// collapsed a variant into "up to date" — fails here rather than quietly
     /// lying to a user.
+    ///
+    /// P7 gave `hitch status` a second view, so this runs the command twice and
+    /// checks each against the vocabulary that view actually speaks. That is the
+    /// point of running it twice rather than once: the guarantee is *both* views
+    /// read the snapshot's verdict, and a test that picked one of them would
+    /// leave the other free to invent one. The matrix's vocabulary is
+    /// `EnvironmentHealth::label` — the same function the rest of the CLI reads,
+    /// reached through the snapshot rather than through a second match — and the
+    /// detail view's is its own pre-existing wording.
     #[test]
     fn test_hitch_status_renders_exactly_what_the_snapshot_reports() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -986,10 +998,42 @@ mod tests {
             four_state_repo(env)?;
 
             let snap = snapshot_for(env)?;
-            let stdout = env
+
+            // The matrix: one verdict line per environment, carrying the
+            // snapshot's own label.
+            let matrix = env
                 .hitch
                 .run()
                 .args(&["status"])
+                .execute()?
+                .assert_success()
+                .stdout()
+                .to_string();
+            for state in &snap.environments {
+                let label = state.health.label();
+                assert!(
+                    matrix
+                        .lines()
+                        .any(|line| line.trim() == label),
+                    "the snapshot says {} is {:?}, whose label is {label:?}, so a matrix row must carry exactly that. Got:\n{matrix}",
+                    state.name,
+                    state.health,
+                );
+            }
+            // And the matrix carries no SHA arrows: a changed input is a
+            // per-environment fact, and the grid is a fact about shape. Asserted
+            // here so that the "the arrow lives in the detail view" claim below
+            // cannot be satisfied by both views printing one.
+            assert!(
+                !matrix.contains('\u{2192}'),
+                "the matrix names no individual input, so it shows no SHA arrow. Got:\n{matrix}"
+            );
+
+            // The detail view: its own wording, one marker per health variant.
+            let stdout = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
                 .execute()?
                 .assert_success()
                 .stdout()
@@ -1072,18 +1116,54 @@ mod tests {
                 .assert_success();
 
             let result = env.hitch.run().args(&["status"]).execute()?;
-            let stdout = result.assert_success().stdout().to_string();
+            let matrix = result.assert_success().stdout().to_string();
 
+            // The matrix states it as a cell and a row: `? actual unknown` for
+            // the branch, and `actual unknown` as the environment's verdict. The
+            // second is the snapshot's own `EnvironmentHealth::label`, so this
+            // arm is the same guarantee the four-state test makes for all six
+            // variants, reached through the default view.
+            assert!(
+                matrix.contains("? actual unknown"),
+                "a missing record must render as unknown. Got:\n{matrix}"
+            );
+            assert!(
+                matrix
+                    .lines()
+                    .any(|line| line.trim() == "actual unknown"),
+                "and the environment's verdict line must say so. Got:\n{matrix}"
+            );
+
+            // The detail view keeps its own capitalised phrasing.
+            let detail = env
+                .hitch
+                .run()
+                .args(&["status", "--environments"])
+                .execute()?;
+            let stdout = detail.assert_success().stdout().to_string();
             assert!(
                 stdout.contains("Actual unknown"),
-                "a missing record must render as unknown. Got:\n{}",
-                stdout
+                "a missing record must render as unknown. Got:\n{stdout}"
             );
             assert!(
                 !stdout.contains("Up to date"),
-                "and must not be described as up to date. Got:\n{}",
-                stdout
+                "and must not be described as up to date. Got:\n{stdout}"
             );
+            // And in neither view: a record hitch cannot read is not a licence to
+            // claim a rebuild is needed, so neither may offer one. This is the
+            // P3 rule — `LegacyUnknown` is not actionable — stated about the
+            // output rather than about `is_actionable()`. Scoped to the
+            // suggested-actions block rather than the whole output because the
+            // quick-commands block always carries a `'hitch rebuild
+            // <environment>'` *template*, which is a different claim: it says
+            // the command exists, not that it is needed here.
+            for (view, output) in [("matrix", &matrix), ("detail", &stdout)] {
+                assert!(
+                    !output.contains("Suggested actions"),
+                    "LegacyUnknown is not actionable, so the {view} view must not suggest any. Got:\n{output}"
+                );
+            }
+
             Ok::<(), anyhow::Error>(())
         });
 
@@ -1124,10 +1204,17 @@ mod tests {
             // available is a prediction.
             declare_branches(env, "dev", &["branch-a", "branch-b"])?;
 
+            // The detail view, which is where the ⛔ lives: the glyph is
+            // ambiguous on its own, so the two wordings that disambiguate it are
+            // the thing under test. `--environments` because P7 moved this view
+            // behind the flag and left the wording alone — the matrix carries no
+            // prediction at all, which
+            // `test_status_shows_held_branch_glyph` in `status_tests.rs`
+            // asserts from the other side.
             let before = env
                 .hitch
                 .run()
-                .args(&["status"])
+                .args(&["status", "--environments"])
                 .execute()?
                 .assert_success()
                 .stdout()
@@ -1156,7 +1243,7 @@ mod tests {
             let after = env
                 .hitch
                 .run()
-                .args(&["status"])
+                .args(&["status", "--environments"])
                 .execute()?
                 .assert_success()
                 .stdout()
@@ -1180,5 +1267,218 @@ mod tests {
         });
 
         Ok(())
+    }
+
+    /// Every cell the matrix produces, asked about as a `why`, comes back as the
+    /// same state — over *real* history rather than a hand-built snapshot.
+    ///
+    /// `tests/unit/why_tests.rs` holds the exhaustive version over hand-built
+    /// snapshots. This one is the version a fixture that agrees with itself
+    /// cannot satisfy: every cell here is read out of the snapshot hitch itself
+    /// computed from a repository that genuinely got into that state, and two of
+    /// them (`missing` and `in base`) are *only* reachable through history that a
+    /// hand-built snapshot would have to assert rather than reproduce.
+    ///
+    /// The `(cell, why)` pairs are asserted through the two commands' own
+    /// vocabularies, because that is the form the property takes for a user: one
+    /// glyph-word in the grid, the same glyph-word in the explanation.
+    #[test]
+    fn the_matrix_cell_and_the_why_membership_never_disagree() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            // A conflicting pair, so the record can name a hold *and* an
+            // inclusion in the same build. Both branches rewrite the same line
+            // from the same base, so one composes and the other is ejected.
+            for branch in ["feature/payments", "feature/dashboard"] {
+                env.git.run(&["checkout", "-b", branch])?;
+                env.fs.write_file("src/shared.txt", branch)?;
+                env.git.run(&["add", "-f", "src/shared.txt"])?;
+                env.git.run(&["commit", "-m", branch])?;
+                env.git.run(&["checkout", "main"])?;
+            }
+            // And a branch already merged into the base, which is the only way
+            // `in base` is reachable: it is a live reachability fact, not a
+            // record fact, and a fixture that asserted the cell without
+            // producing the ancestry would be testing nothing.
+            env.git.run(&["checkout", "-b", "feature/already-merged"])?;
+            env.fs.write_file("merged.txt", "v1")?;
+            env.git.run(&["add", "-f", "merged.txt"])?;
+            env.git.run(&["commit", "-m", "merged into the base"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.git
+                .run(&["merge", "--no-ff", "feature/already-merged"])?;
+            // Two more that are declared but never built, for the pending-work
+            // cell, and one whose ref is about to vanish, for the missing cell.
+            for branch in ["feature/alpha", "feature/gamma"] {
+                make_feature(env, branch)?;
+            }
+
+            // The build that produces the record: `payments` composes,
+            // `dashboard` is held. Exit 2 is the CI contract for "rebuilt, but
+            // held branches"; see the gotcha in AGENTS.md.
+            declare_branches(env, "dev", &["feature/payments", "feature/dashboard"])?;
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_exit_code(2);
+
+            // Widen the declaration *after* that build, so these four are
+            // declared and the record is silent about them — which is the only
+            // way to a `needs rebuild` cell, and why this is a second declaration
+            // rather than a first one.
+            declare_branches(
+                env,
+                "dev",
+                &[
+                    "feature/payments",
+                    "feature/dashboard",
+                    "feature/already-merged",
+                    "feature/alpha",
+                    "feature/gamma",
+                ],
+            )?;
+            // And then the ref goes away. `missing` needs the record to be silent
+            // *and* the declaration to resolve to nothing: a record that names the
+            // branch settles it as `included`, because a build that consumed the
+            // commit contained it and "the branch is gone" is a separate fact.
+            env.git
+                .run(&["update-ref", "-d", "refs/heads/feature/gamma"])?;
+
+            let with_record = assert_cells_agree(
+                env,
+                &[
+                    ("feature/payments", "● included"),
+                    ("feature/dashboard", "⛔ held"),
+                    ("feature/alpha", "↻ needs rebuild"),
+                    ("feature/gamma", "! missing"),
+                    ("feature/already-merged", "= in base"),
+                ],
+            )?;
+
+            // Now delete the build record outright — what a repository last built
+            // by a pre-P2 hitch looks like — and read every cell again. Four of
+            // the five become `actual unknown`, which is the whole point of that
+            // cell: hitch says what it does not know instead of guessing. The two
+            // that do *not* change are the two that were never record facts, and
+            // that is not an accident of this fixture — `in base` is reachability
+            // and `missing` is an unresolvable ref, both knowable with no record
+            // at all.
+            env.git.run(&["update-ref", "-d", "refs/hitch/state/dev"])?;
+            assert_cells_agree(
+                env,
+                &[
+                    ("feature/payments", "? actual unknown"),
+                    ("feature/dashboard", "? actual unknown"),
+                    ("feature/alpha", "? actual unknown"),
+                    ("feature/gamma", "! missing"),
+                    ("feature/already-merged", "= in base"),
+                ],
+            )?;
+
+            // And the reason the record's disappearance is a *display*
+            // difference rather than a different question: both readings above
+            // asked `why` the same thing and got the same answer as the grid.
+            let snapshot = snapshot_for(env)?;
+            assert_eq!(
+                with_record
+                    .iter()
+                    .filter(|(_, cell)| *cell == MatrixCell::NeedsRebuild)
+                    .count(),
+                1,
+                "before the record went, exactly one branch was pending"
+            );
+            assert!(
+                snapshot
+                    .environments
+                    .iter()
+                    .any(|e| matches!(e.health, EnvironmentHealth::LegacyUnknown)),
+                "and afterwards hitch says it cannot describe the build"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Assert that the matrix cell and the `why` membership agree, in value and
+    /// in words, for each `(feature, "glyph label")` pair — and return the cells
+    /// so a caller can make a claim across calls.
+    fn assert_cells_agree(
+        env: &TestEnvironment,
+        expected: &[(&str, &str)],
+    ) -> anyhow::Result<Vec<(String, MatrixCell)>> {
+        let snapshot = snapshot_for(env)?;
+        let matrix = build_matrix_model(&snapshot);
+        let mut cells = Vec::new();
+
+        for (feature, wanted) in expected {
+            // The cell, as the grid shows it.
+            let cell = matrix
+                .rows
+                .iter()
+                .find(|r| r.feature == *feature)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{feature} has no row in the matrix.\nrows: {:?}",
+                        matrix.rows.iter().map(|r| &r.feature).collect::<Vec<_>>()
+                    )
+                })
+                .cells
+                .first()
+                .copied()
+                .expect("a row has a cell per column");
+            let rendered = format!("{} {}", cell.glyph(), cell.label());
+            assert_eq!(rendered, *wanted, "the cell for {feature} in `dev`");
+
+            // The membership, as `why` reports it. Asserted on the *value* so a
+            // wording change cannot fail it, and then through
+            // `why_membership_label` — the renderer's own function — so a
+            // divergence in the words is caught too. Case-insensitively, because
+            // the two renderers deliberately differ there: the matrix is a table
+            // of cells and the explanation is prose, and `Included` in the middle
+            // of a sentence is not the same typography as a table entry. The
+            // *word* agreeing is the property; the capitalisation is each
+            // renderer's business.
+            let membership = membership_in(&build_why(
+                &snapshot,
+                &WhySubject::FeatureIn((*feature).to_string(), "dev".to_string()),
+            )?)?;
+            assert_eq!(
+                membership,
+                WhyMembership::from(cell),
+                "{feature}: the matrix says {cell:?} and the why says {membership:?}"
+            );
+            assert_eq!(
+                why_membership_label(membership).to_lowercase(),
+                *wanted,
+                "{feature}: the same membership in the same words in both commands"
+            );
+
+            cells.push(((*feature).to_string(), cell));
+        }
+        Ok(cells)
+    }
+
+    /// The membership out of a `FeatureIn` explanation, refusing either of the
+    /// other two forms.
+    ///
+    /// A `match` that `bail!`s rather than a helper on `WhyExplanation`, because a
+    /// future form should fail this at the *call site* that assumed the question
+    /// was about a branch in an environment — not silently answer a different
+    /// question than the one being asked.
+    fn membership_in(explanation: &WhyExplanation) -> anyhow::Result<WhyMembership> {
+        match explanation {
+            WhyExplanation::FeatureInEnvironment(e) => Ok(e.membership),
+            other => anyhow::bail!("expected the feature-in-environment form, got {other:?}"),
+        }
     }
 }

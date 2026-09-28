@@ -39,7 +39,7 @@ use crate::commands::global_context::GlobalContext;
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
     changed_inputs, AppliedEffect, CompositionPlan, ConfirmationRequirement,
-    DependentRebuildOutcome, EnvironmentProjection, ExecutionReceipt, ExecutionWarning,
+    DependentRebuildOutcome, EnvironmentProjection, ExecutionReceipt, ExecutionWarning, HoldPair,
     OperationIntent, OperationKind, OperationOutcome, OperationPlan, PlanApplyError,
     PlanFingerprint, PlanWarning, PlannedBranch, PlannedBranchState, PlannedEffect, ResourceKind,
     UnaffectedResource,
@@ -51,7 +51,7 @@ use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{
     access_metadata_read_only, modify_metadata, preflight_compatibility_merge_tree, publish_branch,
     push_branch_with_deploy_key_if_configured, rebuild_environment, with_locked_env,
-    PublishOutcome, PushOutcome,
+    CompatibilityConflict, PublishOutcome, PushOutcome, StepNarration,
 };
 
 /// The per-operation options a caller chose. Not a clap type, for the same
@@ -1086,13 +1086,18 @@ fn apply_validated_plan(
     //    `backup_timestamp: None` below — so it has to exist before the ref
     //    moves, not after.
     on_step(&format!("Tagging '{}'", target));
+    // Not narrated. The tag's *name* is the one thing here that the plan may
+    // have got wrong — `create_release_tag` disambiguates a second-granularity
+    // collision — so the effect line below is allowed to disagree with the
+    // plan, and printing the same name twice in two vocabularies invited
+    // reading the two as a conflict. A failure here returns `Err`, so the error
+    // path never relied on this line for feedback either.
     let tag_name = create_release_tag(
         context.git(),
         &plan.detail.tag_name,
         &plan.detail.tag_message,
         &plan.detail.result_sha,
     )?;
-    context.log_info(&format!("✓ Created release tag '{}'", tag_name));
 
     // 2. The publish. `extras: &[]` and `backup_timestamp: None` are both
     //    load-bearing and stay: a release has no truthful input for a build
@@ -1191,9 +1196,6 @@ fn apply_validated_plan(
     on_step("Updating release metadata");
     context.log_verbose("Updating release metadata...");
     let prunes = plan.detail.prunes.clone();
-    if !prunes.is_empty() {
-        context.log_info("Post-release: pruning promoted branches now in their base...");
-    }
     modify_metadata(context, |config| {
         let env = config
             .get_environment_mut(env)
@@ -1209,25 +1211,31 @@ fn apply_validated_plan(
         }
         Ok(())
     })?;
-    if !prunes.is_empty() {
-        context.log_info(&format!(
-            "Post-release: pruned promoted branches from {} environment(s): {}",
-            prunes.len(),
-            prunes
-                .iter()
-                .map(|p| p.environment.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
 
-    // 5. The dependent rebuilds, in the order the plan fixed.
-    let rebuilt: HashMap<String, DependentRebuildOutcome> =
-        rebuild_dependents(context, plan, on_step);
+    // 5. The dependent rebuilds, in the order the plan fixed. Silent: the
+    //    receipt's `pruned … from …` and `rebuild …` effect lines say all of
+    //    this, and saying it here too meant each one appeared twice.
+    let rebuilt = rebuild_dependents(context, plan);
 
     assemble_receipt(
         context, plan, &tag_name, publish, rebuilt, warnings, started_at,
     )
+}
+
+/// What one dependent rebuild came to, with the branches it held.
+///
+/// The apply-time counterpart to the plan's [`DependentRebuild`], and named
+/// apart from it so the two cannot be confused at a call site: one says what the
+/// release *intends*, the other what it *achieved*.
+///
+/// A struct rather than a tuple because the pair is read at three sites and
+/// `outcome.0` says nothing at any of them. The `held` half is here for the same
+/// reason it is on the effect: the nested build's own receipt is thrown away,
+/// so without this a hold in a post-release rebuild has nowhere to be reported.
+#[derive(Debug, Clone)]
+struct DependentRebuildAttempt {
+    outcome: DependentRebuildOutcome,
+    held: Vec<HoldPair>,
 }
 
 /// Rebuild each dependent the plan named, in the plan's order, recording what
@@ -1237,23 +1245,23 @@ fn apply_validated_plan(
 /// the time this runs, so a failure here is reported and owed rather than
 /// propagated. Failing the release would send the user to re-run a release that
 /// succeeded, and the re-run would collide on the target's already-advanced tip.
+///
+/// Silent by construction, for the same reason `apply_declaration_plan` is: the
+/// receipt's effect list says `rebuild <env>` with the outcome and the holds,
+/// and a failure additionally gets an `ExecutionWarning` under "Still owed".
+/// Logging here as well meant every post-release rebuild announced itself three
+/// times — `on_step`, then a `log_success`/`log_warning`, then the receipt.
 fn rebuild_dependents(
     context: &GlobalContext,
     plan: &OperationPlan<ReleasePlanDetail>,
-    on_step: &mut dyn FnMut(&str),
-) -> HashMap<String, DependentRebuildOutcome> {
+) -> HashMap<String, DependentRebuildAttempt> {
+    let mut rebuilt: HashMap<String, DependentRebuildAttempt> = HashMap::new();
     if plan.detail.dependents.is_empty() {
-        return HashMap::new();
+        return rebuilt;
     }
-    context.log_info(&format!(
-        "Post-release: rebuilding {} affected environment(s)...",
-        plan.detail.dependents.len()
-    ));
 
-    let mut rebuilt: HashMap<String, DependentRebuildOutcome> = HashMap::new();
     for dependent in &plan.detail.dependents {
         let name = dependent.environment.as_str();
-        on_step(&format!("Rebuilding '{}' — {}", name, dependent.because));
 
         // An environment standing on another one in the closure is skipped if
         // that one did not land, because rebuilding now would compose from a
@@ -1261,33 +1269,31 @@ fn rebuild_dependents(
         // attempted set, so an excluded base (locked, preflight-conflicting)
         // skips its dependents exactly as the old loop's `rebuild_set` did.
         if let Some(base_env) = &dependent.base_environment {
-            if rebuilt.get(base_env) != Some(&DependentRebuildOutcome::Rebuilt) {
+            if rebuilt.get(base_env).map(|d| &d.outcome) != Some(&DependentRebuildOutcome::Rebuilt)
+            {
                 let reason = format!(
                     "its base environment '{}' was not rebuilt successfully",
                     base_env
                 );
-                context.log_warning(&format!(
-                    "Skipping rebuild of '{}' because {}",
-                    name, reason
-                ));
-                rebuilt.insert(name.to_string(), DependentRebuildOutcome::Skipped(reason));
+                rebuilt.insert(
+                    name.to_string(),
+                    DependentRebuildAttempt {
+                        outcome: DependentRebuildOutcome::Skipped(reason),
+                        held: Vec::new(),
+                    },
+                );
                 continue;
             }
         }
 
-        let outcome = rebuild_dependent(context, name, name == plan.detail.environment);
-        match &outcome {
-            DependentRebuildOutcome::Rebuilt => {
-                context.log_success(&format!("✓ Rebuilt '{}'", name));
-            }
-            DependentRebuildOutcome::Skipped(reason) => {
-                context.log_warning(&format!("Skipping rebuild of '{}': {}", name, reason));
-            }
-            DependentRebuildOutcome::Failed(error) => {
-                context.log_warning(&format!("Failed to rebuild '{}': {}", name, error));
-            }
-        }
-        rebuilt.insert(name.to_string(), outcome);
+        let (outcome, held) = rebuild_dependent(context, name, name == plan.detail.environment);
+        rebuilt.insert(
+            name.to_string(),
+            DependentRebuildAttempt {
+                outcome,
+                held: held.iter().map(HoldPair::from).collect(),
+            },
+        );
     }
     rebuilt
 }
@@ -1302,38 +1308,22 @@ fn rebuild_dependent(
     context: &GlobalContext,
     environment: &str,
     is_released_env: bool,
-) -> DependentRebuildOutcome {
+) -> (DependentRebuildOutcome, Vec<CompatibilityConflict>) {
     let result = if is_released_env {
-        rebuild_environment(context, environment)
+        rebuild_environment(context, environment, StepNarration::Suppressed)
     } else {
         with_locked_env(context, environment, || {
-            rebuild_environment(context, environment)
+            rebuild_environment(context, environment, StepNarration::Suppressed)
         })
     };
 
+    // A rebuild that landed with branches held still rebuilt, so the holds do
+    // not change the outcome — they ride alongside it into the receipt. This arm
+    // used to log them, which was the only place they appeared anywhere; the
+    // receipt is now the one place, and it has the partner to go with them.
     match result {
-        Ok(outcome) => {
-            if outcome.held.is_empty() {
-                DependentRebuildOutcome::Rebuilt
-            } else {
-                context.log_warning(&format!(
-                    "✓ Rebuilt '{}' with {} branch{} held: {}",
-                    environment,
-                    outcome.held.len(),
-                    if outcome.held.len() == 1 { "" } else { "es" },
-                    outcome
-                        .held
-                        .iter()
-                        .map(|c| c.branch.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                // A rebuild that landed with branches held still rebuilt, and
-                // the holds are in its own receipt.
-                DependentRebuildOutcome::Rebuilt
-            }
-        }
-        Err(e) => DependentRebuildOutcome::Failed(e.to_string()),
+        Ok(outcome) => (DependentRebuildOutcome::Rebuilt, outcome.held),
+        Err(e) => (DependentRebuildOutcome::Failed(e.to_string()), Vec::new()),
     }
 }
 
@@ -1343,7 +1333,7 @@ fn assemble_receipt(
     plan: &OperationPlan<ReleasePlanDetail>,
     tag_name: &str,
     publish: PublishOutcome,
-    rebuilt: HashMap<String, DependentRebuildOutcome>,
+    rebuilt: HashMap<String, DependentRebuildAttempt>,
     mut warnings: Vec<ExecutionWarning>,
     started_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ExecutionReceipt> {
@@ -1464,10 +1454,14 @@ fn assemble_receipt(
         // A missing entry is not reachable — every loop exit inserts one — but
         // the receipt has no "unknown" variant, so it is reported as the skip it
         // most resembles rather than fabricated as a success.
-        let outcome = rebuilt
+        let rebuild = rebuilt
             .get(name)
             .cloned()
-            .unwrap_or_else(|| DependentRebuildOutcome::Skipped("not attempted".to_string()));
+            .unwrap_or_else(|| DependentRebuildAttempt {
+                outcome: DependentRebuildOutcome::Skipped("not attempted".to_string()),
+                held: Vec::new(),
+            });
+        let DependentRebuildAttempt { outcome, held } = rebuild;
         if outcome.owes_effect() {
             let DependentRebuildOutcome::Failed(error) = &outcome else {
                 unreachable!("owes_effect() is only true for Failed")
@@ -1484,6 +1478,7 @@ fn assemble_receipt(
         effects.push(AppliedEffect::DependentEnvironmentRebuild {
             environment: dependent.environment.clone(),
             outcome,
+            held,
             refname: format!("refs/heads/{}", dependent.environment),
         });
     }

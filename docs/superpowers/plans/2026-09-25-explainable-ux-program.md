@@ -16,7 +16,7 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Seven commits, so far:
+Twelve commits, so far:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
@@ -27,16 +27,20 @@ Seven commits, so far:
 - `335517c` — P5: `src/operations/{declaration,release}.rs`, `promote`/`demote`/`release` rewired, the approve path's pre-edit-rebuild fix, and the failure contract change (a failed dependent rebuild is an owed effect, not a rollback).
 - `9247a46` — the P5 plan's "As executed" / "What P6 inherits" sections, and the master plan's P5 status.
 - `1b6ad19` — P6: `src/core/render.rs`, the shared plan and receipt renderers; a global `--json`; `--dry-run` on all four mutating commands; `GlobalFlags` and `DiagnosticOutputSink`; and the one gated plan-then-apply sequence (`rebuild_environment_gated`).
+- `da81531` — the P6 plan's "Execution notes", and the master plan's P6 status.
+- `6f9e261` — the P7 plan (9 tasks, 11 global constraints, 8 recorded deviations).
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
-**P0–P6 are complete. P7 is next.** All four of the plan-having mutating commands now *show* their plan before applying and their receipt after, in one vocabulary, and each has a `--dry-run` that is the same planner with `PlanPurpose::Preview` — so a preview and the build it previews are the same composition by construction rather than by agreement between two implementations. Three things are now true of the architecture that were not before P6, and all three are things the *next* phase has to respect:
+**P0–P7 are complete. P8 is next.** A mutating command shows its plan before applying and its receipt after, in one vocabulary; a read-only command shows one view of a snapshot, in the same vocabulary; and the two halves cannot disagree, because the renderer is pure and the models are projections. Five things are now true of the architecture that were not before P7, and all five are things the *next* phase has to respect:
 
-- **One renderer, `src/core/render.rs`, is the only place in the codebase allowed to choose words.** It is pure and total: a plan or a receipt in, a `String` out, no context and no repository. P7's status matrix and `hitch why` must render through it (or through a sibling that takes the same inputs) rather than growing a second set of words.
-- **`--json` serialises the model directly, with `schema_version: 1`, and the document is `{schema_version, plan, receipt}`** where `receipt` is `null` for a preview rather than omitted. The four commands that honour it are named in the flag's own doc comment; `status` is P7's.
+- **One renderer, `src/core/render.rs`, is the only place in the codebase allowed to choose words.** It is pure and total: a plan or a receipt in, a `String` out, no context and no repository — and it now also renders the status matrix and `hitch why`, so the first renderer consumer with no `OperationPlan` behind it is covered by the same rule the four mutations are.
+- **A display reads a verdict; it never re-derives one.** `core/state.rs` answers "does this need a rebuild and what moved", `core/status.rs` projects that into a model, and `core/why.rs` projects it into an explanation. `commands/status.rs` and `commands/why.rs` format and nothing else. P8's metadata-only receipts take the same shape, and a new display path takes a model rather than a `GlobalContext`.
+- **A read-only `--json` envelope is `{schema_version, "<view>"}`, not `{schema_version, plan, receipt}`.** A mutation has two halves and a read-only view has one; every enum in the read-only envelopes is `snake_case`. Six commands honour `--json` now, named in the flag's own doc comment.
 - **`rebuild_environment_gated` is the one plan-then-apply sequence**, and it takes a caller-supplied gate over the finished plan. A fifth operation should reach for it rather than write its own.
+- **A nested operation narrates nothing.** `StepNarration::Suppressed` is the default posture for `rebuild_environment_opts`, because every command that reaches it has a plan above it and a receipt below it. `Log` is taken by exactly one caller — `approvals/approve.rs` — and P8 is expected to delete it by giving `hitch approve` a receipt.
 
-Still true from P5 and still owned: **`hitch approve` is the one mutating command with no plan** (deliberate for now — see P5's "What P6 inherits"), and `src/commands/resolve.rs` is the one mutating path still choosing a mode from a second merge opinion (`preflight_compatibility_report`). `rollback_metadata_changes` can also restore a `locked: true` it captured inside `with_locked_env` and thereby undo the unlock that ran after it; found during P6's manual check, recorded, deliberately unfixed there.
+Still true from P5 and still owned: **`hitch approve` is the one mutating command with no plan** (deliberate for now — see P5's "What P6 inherits"), and `src/commands/resolve.rs` is the one mutating path still choosing a mode from a second merge opinion (`preflight_compatibility_report`). `rollback_metadata_changes` can also restore a `locked: true` it captured inside `with_locked_env` and thereby undo the unlock that ran after it; found during P6's manual check, recorded, deliberately unfixed there and in P7, and P8 owns it because it is a metadata-mutation transaction-ordering bug.
 
 ---
 
@@ -115,7 +119,7 @@ P0  scenario inventory
      P10 docs + legacy removal ─────────┘
 ```
 
-**Authoring note:** P0–P5 are authored and **all six are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, `2026-09-25-explainable-ux-P2-build-provenance.md`, `2026-09-25-explainable-ux-P3-state-model.md`, `2026-09-25-explainable-ux-P4-plan-apply.md`, and `2026-09-25-explainable-ux-P5-plan-apply.md`. Each carries an "As executed" / "Implementation status" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P6's task steps are authored next, because P5 changed what a plan and a receipt can say — four commands now produce both, and the `ExecutionWarning { owes_effect }` / `OperationOutcome` distinctions P6 has to render did not exist before it. P6–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
+**Authoring note:** P0–P7 are authored and **all eight are executed**, as `2026-09-25-explainable-ux-P0-scenario-inventory.md`, `2026-09-25-explainable-ux-P1-shared-composition.md`, `2026-09-25-explainable-ux-P2-build-provenance.md`, `2026-09-25-explainable-ux-P3-state-model.md`, `2026-09-25-explainable-ux-P4-plan-apply.md`, `2026-09-25-explainable-ux-P5-plan-apply.md`, `2026-09-25-explainable-ux-P6-cli-renderers.md`, and `2026-09-25-explainable-ux-P7-status-and-why.md`. Each carries an "As executed" / "Implementation status" / "Execution notes" section recording what actually landed, the deviations from its plan, and anything the next phase inherits. P8's task steps are authored next, because P7 established the two things P8 needs and neither existed before it: **a plan shape for an operation that composes nothing** (a metadata-only mutation has no `CompositionPlan`, no holds, and no fingerprint over composition inputs, and the closest existing shape — `plan_declaration_change` — is the model) and **a receipt renderer that is not a mutation's** (P7's matrix and `why` proved the renderer works with no `OperationPlan` behind it). P8–P10 follow the same naming convention and are authored as their phase approaches. The Goal/Architecture/Interfaces/Constraints for all ten phases are recorded below and contain no line references, so they do not go stale.
 
 **What P1 handed forward, beyond `compose_environment` and `PinnedInputs`:**
 
@@ -318,6 +322,17 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 
 **Exit criteria:** Golden-output tests for a clean repo, held branch, stale feature, changed base, missing feature, legacy no-build-record repo, released feature, and multiple environments — colour disabled, narrow terminal, long branch names, zero environments, many environments, many features. Every major matrix cell state has a useful `why`. All four gates green.
 
+**Status: COMPLETE** (2026-09-28). The P7 plan's "As executed" section is the authoritative record. `just test` is 160 lib + 507 integration + 1 `no_args_help`, zero ignored, all three gates green; P7's own 120 tests live in `tests/unit/{why,matrix_render}_tests.rs` and `tests/integration/{why,status,state_model,tree}_tests.rs`. Six findings worth carrying forward, each a shape rather than a bug:
+
+- **A cell and its row answer different questions.** A cell is *what is in the last build*; the row under the environment name is *whether that build is still current*. Rendering one verdict for both is what produces a status line that says "3 desired, 3 actual, up to date" for an environment that is holding a branch.
+- **`MatrixCell` is seven states, and the order of `classify`'s arms is the order of authority.** Not eight — the plan said eight and was wrong. Not-declared comes first (a branch nobody declared has no membership story), then missing, then held, then already-in-base, then included, then the two `Unknown` arms split on whether a record exists. `ActualMembership::Unknown` is never rendered as a fact, and `has_record` is *derived* (`⟺ !LegacyUnknown`) rather than read from a second place.
+- **An explanation's reasons come in a fixed order, and a `NotDesired` cell returns early.** The branch itself, then the environment-level condition, then this branch's staleness, then the **base's** staleness, then a catch-all. Letting a `NotDesired` cell reach the environment-level arms lets a stale *environment* explain a branch that was never in it, so the early return is a bug class rather than a style choice.
+- **A read-only view gets a one-half envelope and `snake_case` enums.** `{schema_version, "<view>"}`, because a read-only view has no "after" and a `null` receipt would say "nothing happened" — true and useless. A collector in `tests/integration/why_tests.rs` walks the whole document and fails on any PascalCase token, so a new enum cannot forget the rename.
+- **The narrow-terminal fallback is prose, not truncation, and the width budget is `COLUMNS` alone.** Truncating drops the environment name, and a cell without its column header is a cell nobody can read — which is the one thing §12's "understandable in a pipe" forbids. Unset/unparseable/`0` means unbounded, the safe direction.
+- **Ambiguity is an error that names both readings.** A branch and an environment sharing a name is not resolvable from the snapshot, so `hitch why` refuses and prints the two commands that would each answer one of them. Guessing is indistinguishable from guessing right.
+
+P7 also carried a **tail**: a manual walkthrough of `status`/`promote`/`demote`/`release` found two display defects in P6's surfaces (a nested rebuild narrating itself between plan and receipt, and a `Result` block that neither grouped nor deduplicated) and a third where a hold inside a nested rebuild never reached the receipt at all. All three are fixed in the P7 commit rather than deferred to P8, because the third is a correctness bug in a *fact* and the first two make the plan and the receipt describe the same operation in two vocabularies. A **fourth** duplicate — `hitch rebuild` printing the same hold sentence in the plan and again as a receipt advisory — was found and **deliberately left alone**: the plan is a prediction and the advisory is a fact, so fixing it is a question about which of the two should carry the hold, not a display bug. It is recorded in the P7 plan's "As executed".
+
 ---
 
 ### P8 — Metadata-only mutations
@@ -327,8 +342,13 @@ One scope fact, because P3's snapshot builder has to know which publishes leave 
 **Architecture:** add/remove environment, lock/unlock, `set`, `cleanup`, and approval apply/execute mutate metadata but compose nothing — so they share a plan shape with no `CompositionPlan`, no holds, and no fingerprint over composition inputs. `push` gets a receipt if its effects benefit from one.
 
 **Interfaces:**
-- Consumes: P4's plan/receipt types, minus composition.
+- Consumes: P4's plan/receipt types, minus composition. P7's renderer, for the receipt side, and its proof that a renderer needs no `OperationPlan` behind it.
 - Produces: metadata-only planners for the above; the `OperationKind` variants the source spec §7.1 lists.
+
+**What P7 hands P8, specifically:**
+- **`hitch approve` is the only caller of `StepNarration::Log`** (`src/commands/approvals/approve.rs:379`), because it is the only mutating command with no plan and therefore no receipt. Giving it a `plan_declaration_change` for the approved request's change, applied *after* the approval commits, both makes it explainable and deletes the last reason a nested rebuild narrates. That is the shape of the work, not a bonus.
+- **The `rollback_metadata_changes` / `with_locked_env` ordering bug lives here.** `capture_config_state` is called inside the lock, `rollback_metadata_changes` outside it, so restoring the snapshot restores `locked: true` and undoes the unlock that ran in between. It needs a decision about the snapshot's shape — re-clear the lock after restoring, versus capture before the lock and keep the current ordering — and both of those are metadata-transaction questions, which is why two prior phases recorded it and left it. Reproduce with `hitch promote` into an approval-gated environment as the sole approver, then promote the same branch again.
+- **A nested operation that narrates is a smell worth routing out.** `StepNarration` exists because P7 had to mute four commands individually; P8's new metadata planners should take `Suppressed` by omission, the way `rebuild_environment_opts` now does, rather than being passed a flag.
 
 **Exit criteria:** All significant mutations return structured receipts. Read-only commands are left alone. All four gates green.
 

@@ -38,9 +38,9 @@ use crate::commands::global_context::GlobalContext;
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
     changed_inputs, AppliedEffect, ConfirmationRequirement, DependentRebuildOutcome,
-    EnvironmentProjection, ExecutionReceipt, ExecutionWarning, OperationIntent, OperationKind,
-    OperationOutcome, OperationPlan, PlanApplyError, PlanFingerprint, PlanWarning, PlannedEffect,
-    UnaffectedResource,
+    EnvironmentProjection, ExecutionReceipt, ExecutionWarning, HoldPair, OperationIntent,
+    OperationKind, OperationOutcome, OperationPlan, PlanApplyError, PlanFingerprint, PlanWarning,
+    PlannedEffect, UnaffectedResource,
 };
 use crate::types::Operation;
 use crate::utils::build_record::PinnedBranch;
@@ -48,7 +48,7 @@ use crate::utils::command_helpers::{ensure_environment_exists, validate_branch_f
 use crate::utils::prelude::{
     access_metadata_read_only, create_approval_requests_for_operation,
     display_approval_request_created, modify_metadata, pre_promote_conflict_reason,
-    rebuild_environment,
+    rebuild_environment, StepNarration,
 };
 use crate::utils::validation::validate_name;
 
@@ -699,17 +699,15 @@ pub fn apply_declaration_plan(
             environment, environment
         ));
     } else {
-        on_step(&format!("Rebuilding '{}'", environment));
-        context.log_info(&format!(
-            "Triggering rebuild for environment '{}'...",
-            environment
-        ));
-        // The nested rebuild plans and applies internally, so it gets a plan
-        // and a receipt of its own — and that receipt is what says whether the
-        // build held branches. Going through the wrapper rather than
-        // re-implementing plan-then-apply here is what keeps that true.
-        match rebuild_environment(context, environment) {
-            Ok(_) => {
+        // The nested rebuild goes quiet. Its plan said `rebuild {env} — …`
+        // above, the receipt below says what became of it, and the
+        // `RebuildOutcome` carries the one fact neither of those can derive —
+        // which branches the build held. A `StepLogger` transcript here would
+        // be a second and older vocabulary narrating work the reader has
+        // already been told about, sitting between the two halves that
+        // actually account for it.
+        match rebuild_environment(context, environment, StepNarration::Suppressed) {
+            Ok(outcome) => {
                 context.log_verbose(&format!(
                     "✓ Environment '{}' rebuilt successfully",
                     environment
@@ -717,6 +715,7 @@ pub fn apply_declaration_plan(
                 effects.push(AppliedEffect::DependentEnvironmentRebuild {
                     environment: environment.to_string(),
                     outcome: DependentRebuildOutcome::Rebuilt,
+                    held: outcome.held.iter().map(HoldPair::from).collect(),
                     refname: format!("refs/heads/{}", environment),
                 });
             }
@@ -726,14 +725,16 @@ pub fn apply_declaration_plan(
                 // reporting failure here would tell the user to re-run a command
                 // whose first half is already applied, and re-running a promote
                 // fails with "already promoted".
-                context.log_warning(&format!(
-                    "'{}' was updated, but rebuilding it failed:\n  {}\n  \
-                     The declaration is saved. To rebuild it:\n  hitch rebuild {}",
-                    environment, e, environment
-                ));
+                //
+                // One `log_warning` here, not two. The `ExecutionWarning` below
+                // renders under the receipt's "Still owed" heading carrying the
+                // same remedy, and the effect above it already says `failed`;
+                // a third copy on stdout in the middle of the apply is the same
+                // duplication this whole function is being cleaned up for.
                 effects.push(AppliedEffect::DependentEnvironmentRebuild {
                     environment: environment.to_string(),
                     outcome: DependentRebuildOutcome::Failed(e.to_string()),
+                    held: Vec::new(),
                     refname: format!("refs/heads/{}", environment),
                 });
                 warnings.push(ExecutionWarning {

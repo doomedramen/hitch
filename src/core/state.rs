@@ -155,6 +155,7 @@ pub struct DeclaredBranch {
 
 /// What the last published build record says is in this environment.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ActualComposition {
     /// A record was found and read.
     FromRecord(Box<RecordActual>),
@@ -169,8 +170,20 @@ pub enum ActualComposition {
 impl ActualComposition {
     /// The record, when there is a trustworthy one.
     pub fn record(&self) -> Option<&EnvironmentBuildRecord> {
+        self.actual().map(|a| &a.record)
+    }
+
+    /// The read record's derived contents, when there is a trustworthy one.
+    ///
+    /// Distinct from [`Self::record`] because the two answer different
+    /// questions: the *declared* facts (what was declared, what base, what
+    /// metadata commit) live on `EnvironmentBuildRecord`, and the *resolved*
+    /// ones (which branches actually made it in, which conflicted, which
+    /// resolutions were replayed) live on `RecordActual`. A caller that wanted
+    /// the second and reached for the first would silently see empty lists.
+    pub fn actual(&self) -> Option<&RecordActual> {
         match self {
-            ActualComposition::FromRecord(a) => Some(&a.record),
+            ActualComposition::FromRecord(a) => Some(a),
             _ => None,
         }
     }
@@ -211,6 +224,7 @@ impl RecordActual {
 
 /// Where one branch stands in one environment.
 #[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ActualMembership {
     /// In the last build's composition.
     Included,
@@ -267,6 +281,7 @@ impl ChangedInput {
 /// build whose inputs have since moved would state something true about
 /// history while implying something false about now.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvironmentHealth {
     /// The build is current with the declaration and included everything.
     Realised,

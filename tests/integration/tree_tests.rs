@@ -60,8 +60,12 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("Branch Hierarchy")
                 .assert_stdout_contains("main")
-                .assert_stdout_contains("dev")
-                .assert_stdout_contains("base:")
+                // P7: the environment node carries the shared equation
+                // (`dev = main`) rather than a `(base: main, 0 promoted)`
+                // parenthetical. The base is still named — it is the left-hand
+                // side's operand — but the label "base:" went with the count, and
+                // so did the colour it was coloured in.
+                .assert_stdout_contains("dev = main")
                 .assert_stdout_contains("[env]");
 
             Ok::<(), anyhow::Error>(())
@@ -140,7 +144,12 @@ mod tests {
                 .assert_stdout_contains("main")
                 .assert_stdout_contains("dev")
                 .assert_stdout_contains("b2b-dev")
-                .assert_stdout_contains("base:");
+                // P7: the environment node carries the shared equation
+                // (`dev = main`) rather than a `(base: main, 0 promoted)`
+                // parenthetical. The base is still named — it is the left-hand
+                // side's operand — but the label "base:" went with the count, and
+                // so did the colour it was coloured in.
+                .assert_stdout_contains("b2b-dev = dev");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -237,7 +246,11 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("Branch Hierarchy")
                 .assert_stdout_contains("dev")
-                .assert_stdout_contains("promoted")
+                // The count is gone and the *names* are here instead, which is
+                // the whole point of the equation: a node that said "3 promoted"
+                // made the reader look at the children to learn which three, and
+                // the children are what the count was standing in for.
+                .assert_stdout_contains("dev = main + feature-auth")
                 .assert_stdout_contains("feature-auth");
 
             Ok::<(), anyhow::Error>(())
@@ -314,7 +327,12 @@ mod tests {
                 .assert_stdout_contains("Branch Hierarchy")
                 .assert_stdout_contains("dev")
                 .assert_stdout_contains("staging")
-                .assert_stdout_contains("base:");
+                // P7: the environment node carries the shared equation
+                // (`dev = main`) rather than a `(base: main, 0 promoted)`
+                // parenthetical. The base is still named — it is the left-hand
+                // side's operand — but the label "base:" went with the count, and
+                // so did the colour it was coloured in.
+                .assert_stdout_contains("staging = dev");
 
             Ok::<(), anyhow::Error>(())
         });

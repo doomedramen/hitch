@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P6 are authored and complete; P7 is
+independently of this program. P0–P7 are authored and complete; P8 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
@@ -121,11 +121,17 @@ covered.
   module), `src/cli.rs` (add the `Commands` variant), `src/main.rs` (add to
   both the `command_name` match and the dispatch match, and to
   `command_is_mutating` if it's read-only). The global flags live here too:
-  `--json` is `global = true` and its doc comment **names the four commands that
-  honour it** (`rebuild`, `promote`, `demote`, `release`) and says that a
-  command without support says so rather than printing prose. That list is
-  asserted in prose deliberately — it is the difference between a documented
-  partial and a silent one. `status --json` is P7's.
+  `--json` is `global = true` and its doc comment **names the six commands that
+  honour it** (`rebuild`, `promote`, `demote`, `release`, `status`, `why`) and
+  says that a command without support says so rather than printing prose. That
+  list is asserted in prose deliberately — it is the difference between a
+  documented partial and a silent one. The two read-only ones use a
+  **one-half envelope**, `{"schema_version": 1, "<view>": …}`, not the
+  mutations' `{"plan", "receipt"}` — a read-only view has no "after", and a
+  `null` receipt would say "nothing happened", which is true and useless. Every
+  enum in those two envelopes is `snake_case`, and a collector in
+  `tests/integration/why_tests.rs` walks the whole document and fails on any
+  `PascalCase` token, so a new enum cannot forget the rename.
 - `src/commands/*.rs` — one file per CLI command/subcommand, thin: arg
   parsing (`clap::Args` struct) + orchestration. Business logic belongs in
   `src/utils/prelude.rs` or a dedicated `src/utils/*.rs` module, not here.
@@ -226,21 +232,41 @@ covered.
     `build_status_model(&snapshot)` takes no context, opens no repo, and
     cannot disagree with the snapshot it was handed. `commands/status.rs`
     reads the same snapshot and only formats it.
+  - Since P7, `status.rs` also holds the **feature × environment matrix**:
+    `MatrixCell` (seven states, `classify` total over
+    `(desired, actual, has_record)`), `build_matrix_model`, and
+    `has_record_for` — which is *derived* (`has_record ⟺ !matches!(health,
+    LegacyUnknown)`) rather than read from a second place, because a second
+    read is a second thing that can disagree. Every cell is materialised and
+    the summary counts are computed *from* the cells, so a count and a row
+    cannot drift.
+  - `why.rs` (new in P7) builds a `WhyExplanation` from the same snapshot and
+    is the answer to "why is this branch in that state". `WhySubject` is
+    resolved by `commands/why.rs`, not here, because resolution needs a
+    repository and the model must not have one. `WhyMembership` is a
+    *distinct* vocabulary from `ActualMembership` with a one-to-one
+    `From<MatrixCell>`: `ActualMembership` describes an outcome, and §14's
+    questions ("already in the base") are facts about a journey, which the
+    outcome cannot answer.
   - `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
     have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
     Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
     `details.rs` and `status.rs` are the other two view builders.
   - `render.rs` is **the only place in the codebase allowed to choose words**
-    for a plan or a receipt. `render_plan<I>` / `render_receipt` are pure and
-    total — a value in, a `String` out, no `GlobalContext`, no `Result`, no git,
-    no clock — which is the same rule `build_status_model` follows and for the
-    same reason: a renderer that can open a repository can disagree with the
-    thing it renders. One function serves all four operations because the
-    *model* is the vocabulary; `detail` is the one field a shared renderer
-    ignores. The impure half is `emit_json` / `emit_plan` / `emit_receipt` /
-    `confirm_plan`, and all four take the already-rendered `String`. A new
-    display path renders through here or through a sibling taking the same
-    inputs; do not grow a second set of words.
+    for a plan, a receipt, a status matrix, or a `hitch why` explanation.
+    `render_plan<I>` / `render_receipt` / `render_matrix` / `render_why` /
+    `render_equation` are pure and total — a value in, a `String` out, no
+    `GlobalContext`, no `Result`, no git, no clock — which is the same rule
+    `build_status_model` follows and for the same reason: a renderer that can
+    open a repository can disagree with the thing it renders. One function
+    serves all four *operations* because the *model* is the vocabulary;
+    `detail` is the one field a shared renderer ignores. `render_equation` is
+    shared too, and `describe_projection` and `commands/tree.rs` both go
+    through it, so a composition has one spelling in the codebase. The impure
+    half is `emit_json` / `emit_plan` / `emit_receipt` / `confirm_plan`, and
+    all four take the already-rendered `String`. A new display path renders
+    through here or through a sibling taking the same inputs; do not grow a
+    second set of words.
 - `src/operations/` — the plan → apply → receipt architecture, one operation
   at a time. `model.rs` is operation-agnostic (`OperationPlan<I>` generic over
   its per-operation detail, `PlanFingerprint`, `PlannedEffect`/`AppliedEffect`,
@@ -481,6 +507,18 @@ is consulted, and `test_hitch_status_detects_base_branch_changes` /
 verdict: it has exactly one production caller left,
 `core/timeline.rs:96`, which formats a date for display.
 
+**`removed ⊆ changed_inputs` is an invariant of `health_from_record`, and the
+Result block depends on it.** `health_from_record` walks the *recorded* pins
+and compares them against live ones; a branch that has since left the
+declaration resolves to no current SHA, so it necessarily appears in
+`changed_inputs` as well as in `removed`. That is why `render_resulting_state`
+can skip a changed input whose branch is in `removed` without a second
+condition — printing both is the same fact twice, and the fact is the removal.
+`added` is disjoint from `changed_inputs` by construction and needs no such
+guard. If `health_from_record` ever starts comparing a *declared* list against
+live refs instead of the *recorded* one, this stops being true and the dedupe
+silently starts eating a real change.
+
 **A display of a verdict must read the verdict, not re-derive it — and
 `hitch status` used to derive it four times.** The old status command called
 `determine_rebuild_state` in the per-environment renderer *and* in both summary
@@ -493,6 +531,23 @@ rather than deciding anything, and
 `test_hitch_status_renders_exactly_what_the_snapshot_reports` (both in
 `tests/integration/state_model_tests.rs`) hold the two together. A new display
 path should take a `&EnvironmentState`, not a `GlobalContext`.
+
+**Two display projections of the same snapshot are functions whose *arm order*
+is load-bearing, not style.** `MatrixCell::classify` and `reason_for` (in
+`core/why.rs`) are the two: both answer "what is the most specific true thing I
+can say?", and both get it wrong in the same way if a more general arm is
+matched first. `classify` puts *not declared* ahead of everything, because a
+branch nobody declared has no membership story to tell; `reason_for` gives the
+branch itself first refusal, then the environment-level condition, then *this
+branch's* staleness, then the **base's** (`BaseMoved`), then a catch-all. The
+concrete trap is `NotDesired`: it is fully answerable from the declaration
+alone (`DemotedSinceBuild` when the record's `removed` names the branch, `None`
+otherwise), and if it falls through to the environment-level arms a *stale
+environment* ends up explaining a branch that was never in it — a confident,
+specific, wrong sentence. That is why the `NotDesired` arm is an early `return`
+rather than a match arm. A new cell state, or a new `WhyReason`, has to answer
+the same question before it is written: what is the *least* it can honestly
+claim, and can anything more general get there first?
 
 **A fact and a prediction must not share a glyph, a word, or a code path.** The
 ⛔ on a promoted branch used to always read "(conflicts with X — held on
@@ -863,6 +918,41 @@ Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_re
 (rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose
 — the two paths legitimately word the same event differently.
 
+**A nested operation that sits between a plan and a receipt must narrate
+nothing, and the way to guarantee that is a suppressed-by-default parameter,
+not a flag each caller remembers to pass.** Four commands (`promote`, `demote`,
+`release`, and `hitch rebuild`'s nested calls) each build a plan above a nested
+rebuild and a receipt below it, and each was separately printing the nested
+rebuild's `StepLogger` transcript — `[1/6] Synchronizing branches`, `[2/6]
+Merging 'feature/payments'`, `✅ Rebuilding environment 'dev'` — into the gap
+between them. The in-tree comment on `rebuild_environment_opts` claimed the
+nested path printed the transcript *instead of* a plan and receipt; it did not,
+it printed it *in addition to* both, and then threw both away.
+`StepNarration::Suppressed` is now the default, so a caller that has a plan and
+a receipt of its own gets silence by omission, and `StepNarration::Log` is the
+exception taken by exactly one call site — `src/commands/approvals/approve.rs`,
+the one mutating command that has no plan. If you add a mutating command, the
+right answer is no argument at all; the argument exists for the exception, not
+for the rule. Generalise: a second voice for the same operation is a bug even
+when it is individually accurate, and the parameters to thread are usually
+better off inverted so silence is the default.
+
+**An `Ok(_)` on a nested build's conflicts is a dropped fact, and it renders as
+a false success.** `apply_declaration_plan` and `apply_release_plan` each ran a
+dependent rebuild and discarded its `Vec<CompatibilityConflict>`, so a receipt
+printed `✓ rebuild dev` for an environment that was in fact *holding a branch* —
+the exact flattening `OperationOutcome::AppliedWithHolds` exists to prevent,
+arriving through a different door than the one that was guarded. A nested
+operation's outcome is part of the parent's outcome, so it has to ride on the
+parent's `AppliedEffect`: `AppliedEffect::DependentEnvironmentRebuild` carries
+`held: Vec<HoldPair>`, and the renderer's glyph ladder for that effect is `⧗`
+if the outcome owes an effect, else `⚠️` if anything is held, else `✓`. The
+middle rung is the argument — a hold *did* rebuild, so `✓` is true and useless,
+and `⧗` is reserved for work owed, which a hold is not. Note the parallel to
+`DependentRebuildOutcome::Rebuilt`, whose doc comment previously claimed the
+holds were in the nested build's own receipt: they were, and that receipt is
+discarded, which is the whole reason the effect has to carry them itself.
+
 **`compose_environment` must stay side-effect-free, and the dry-run's
 non-mutation is a separate, narrower guarantee.** Purity is what makes the
 preview safe: no ref moves, no locks, no checkout, no network. It's tested
@@ -904,9 +994,12 @@ Both paths now halt inside `compose_environment` and render the former, which
 is why that formatter moved from `commands/rebuild.rs` into `prelude.rs` — the
 decider has to be able to render its own refusal. Consequence:
 `format_conflict_report` now has no production caller. It is kept (public,
-tested, strictly richer than what replaced it, and a plausible input for P7's
-display paths) and documented as a deletion candidate; nothing should call it
-to decide a mutation's outcome.
+tested, strictly richer than what replaced it) and documented as a deletion
+candidate; nothing should call it to decide a mutation's outcome. P7 was its
+last plausible consumer and did not take it: the hold it renders is already in
+the plan's Composition section, with the branch, the partner, the file count and
+the remedy, so a second, differently-worded rendering of the same fact was a
+fourth copy rather than a richer view.
 
 **Composition happens in the object database, and must stay merge-identical.**
 `rebuild`/`release` build with `git merge-tree --write-tree -z` plus

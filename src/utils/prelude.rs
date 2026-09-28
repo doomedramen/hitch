@@ -718,17 +718,16 @@ pub fn compose_environment(
             )));
         }
 
-        context.log_warning(&format!(
-            "⛔ Held '{}' — conflicts with '{}' ({} file{})",
-            branch,
-            last_composed,
-            conflict.conflicted_files.len(),
-            if conflict.conflicted_files.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        ));
+        // No warning here, and that is a decision rather than an omission. The
+        // only production caller of `compose_environment` is `plan_rebuild`, and
+        // every path that reaches `plan_rebuild` renders a plan whose
+        // Composition section already names the held branch, the neighbour it
+        // conflicts with, the files, and the `git rebase` remedy. The warning
+        // was the same event a third time: once in the dry-run's plan, once in
+        // the real build's plan, and once more on stdout between the plan and
+        // the receipt. `test_dry_run_and_real_build_agree_on_held_branches`
+        // documented that divergence as acceptable; removing this line removes
+        // the divergence, and its comment with it.
         held.push(conflict);
     }
 
@@ -872,9 +871,8 @@ pub(crate) fn format_compatibility_report_for_rebuild(
 ///
 /// The zero-argument sibling of [`rebuild_environment_opts`], and the entry
 /// point for callers that want a rebuild with no replay and no policy override:
-/// `hitch rebuild` (via the `_opts` form), the dependent rebuilds inside
-/// `operations::declaration` and `operations::release`, and
-/// `approvals/approve.rs`.
+/// the dependent rebuilds inside `operations::declaration` and
+/// `operations::release`, and `approvals/approve.rs`.
 ///
 /// The `isolated worktree` this used to mention is gone. Composition happens in
 /// the object database via `merge_tree_compose` + `commit_tree` — no worktree,
@@ -901,8 +899,12 @@ pub(crate) fn format_compatibility_report_for_rebuild(
 /// branches still returns `Ok`, with the held branches named in
 /// [`RebuildOutcome::held`]. That is a deliberate contract, and it is why
 /// `hitch rebuild` maps it to exit code 2 rather than treating it as a failure.
-pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
-    rebuild_environment_opts(context, env_name, false, None)
+pub fn rebuild_environment(
+    context: &GlobalContext,
+    env_name: &str,
+    narration: StepNarration,
+) -> Result<RebuildOutcome> {
+    rebuild_environment_opts(context, env_name, false, None, narration)
 }
 
 /// `rebuild_environment` with the phase-5 replay opt-in. `replay = true`
@@ -929,27 +931,34 @@ pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<Re
 /// **This is not the "rebuild without rendering a plan" path, and after P5 it
 /// is almost the only one left.** It *does* plan — `plan_rebuild` +
 /// `apply_rebuild_plan` are called below — but it throws the plan and the
-/// receipt away, printing the `StepLogger` transcript instead. What survives it
-/// is one specific capability the other callers do not have: it accepts a
-/// replay opt-in and a conflict-policy override, so it can be the *nested*
-/// rebuild inside another operation. `apply_declaration_plan` (promote, demote)
-/// and `apply_release_plan` both call it for their dependent environments, and
-/// `approvals/approve.rs` calls the no-argument wrapper. Do not delete it
-/// thinking promote/demote/release/approve no longer route through it — they
-/// route through it *by way of* their own planners, and this is where the
-/// nesting terminates.
+/// receipt away, leaving the caller's own plan or receipt as the only account
+/// of what happened. What survives it is one specific capability the other
+/// callers do not have: it accepts a replay opt-in and a conflict-policy
+/// override, so it can be the *nested* rebuild inside another operation.
+/// `apply_declaration_plan` (promote, demote) and `apply_release_plan` both
+/// call it for their dependent environments, and `approvals/approve.rs` calls
+/// the no-argument wrapper. Do not delete it thinking promote/demote/release/
+/// approve no longer route through it — they route through it *by way of*
+/// their own planners, and this is where the nesting terminates.
+///
+/// Because the plan and receipt are discarded, what this path narrates is the
+/// *only* thing its caller sees between its own plan and its own receipt — so
+/// `narration` is not cosmetic. It is why a hold is now carried out through
+/// [`RebuildOutcome::held`] into the enclosing receipt: with the transcript
+/// suppressed there is nothing else for it to appear in.
 pub fn rebuild_environment_opts(
     context: &GlobalContext,
     env_name: &str,
     replay: bool,
     on_conflict_override: Option<OnConflict>,
+    narration: StepNarration,
 ) -> Result<RebuildOutcome> {
     let run = rebuild_environment_gated(
         context,
         env_name,
         replay,
         on_conflict_override,
-        StepNarration::Log(context.output.clone()),
+        narration,
         |_plan| Ok(true),
     )?
     .ok_or_else(|| {
@@ -984,12 +993,19 @@ pub fn rebuild_environment_opts(
 /// the reason matters at the call site: one narrates because nothing better will
 /// be shown, the other goes quiet because something better already is.
 ///
-/// The `Suppressed` arm is the `hitch rebuild` path. `StepLogger` narrates
-/// "Synchronizing branches / Merging auth / …", and the plan's Composition
-/// section says the same thing in one place, in declaration order, with the
-/// result — which is held, which is included, at which SHA. Printing both means
-/// every rebuild describes its merge twice, in two vocabularies, and the reader
-/// has to work out which one is the plan.
+/// `StepLogger` narrates "Synchronizing branches / Merging auth / …", and the
+/// plan's Composition section says the same thing in one place, in declaration
+/// order, with the result — which is held, which is included, at which SHA.
+/// Printing both means every rebuild describes its merge twice, in two
+/// vocabularies, and the reader has to work out which one is the plan.
+///
+/// So `Suppressed` is the default posture and `Log` is the exception.
+/// `hitch rebuild` and the nested rebuilds inside promote, demote and release
+/// all suppress: each already renders a plan, and promote/demote/release then
+/// render a receipt. The one caller that takes `Log` is
+/// `approvals/approve.rs`, the single command that still reaches a rebuild
+/// without a plan of its own — a fallback, not a preference, and the reason that
+/// command is the last one still showing raw step output.
 pub enum StepNarration {
     /// Narrate the steps to this sink.
     Log(std::sync::Arc<dyn crate::utils::output::OutputSink>),

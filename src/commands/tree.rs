@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{render_equation, EnvironmentEquation};
 use crate::types::HitchConfig;
 use crate::utils::prelude::access_metadata_read_only;
 use anyhow::Result;
@@ -117,17 +118,38 @@ fn display_branch_tree(
             };
 
             // Environment node with additional info
-            let lock_indicator = if env.is_locked() { " [LOCKED]" } else { "" };
-            let branch_count = env.branches.len();
-            let branch_info = format!(
-                "{} (base: {}, {} promoted{})",
-                env_name.bright_green(),
-                env.base.bright_blue(),
-                branch_count.to_string().bright_cyan(),
-                lock_indicator.yellow()
+            // Colourised only when there is something to colourise. `"".
+            // yellow()` is not the empty string — it is the escape codes with
+            // nothing between them, so every unlocked environment used to print
+            // a stray `[33m[0m` at the end of its line. Pre-existing, and
+            // invisible until the equation made the line worth reading.
+            let lock_indicator = if env.is_locked() {
+                " [LOCKED]".yellow().to_string()
+            } else {
+                String::new()
+            };
+            // The composition is the shared environment equation, not a
+            // `(base: main, 3 promoted)` restatement of it. Spec §13 lists
+            // `tree` as a place the equation has to appear, and a parenthetical
+            // count is the one place the user most needs to see *which* branches
+            // compose an environment — the promoted branches are the children of
+            // this very node, and the equation names them at the node too, so
+            // the two are read together rather than one standing in for the
+            // other.
+            //
+            // A declaration equation has no excluded terms, so it is always a
+            // single line and cannot break the tree's indentation. An
+            // environment with no promoted branches still has a composition
+            // (`dev = main`), which is the whole of it rather than a truncated
+            // one — so there is no "base only" wording here, and the node's own
+            // child list is the thing that reads as empty.
+            let equation = render_equation(&EnvironmentEquation::from_config(env_name, env));
+            println!(
+                "{}{}[env] {}{lock_indicator}",
+                prefix,
+                connector,
+                equation.bright_green(),
             );
-
-            println!("{}{}[env] {}", prefix, connector, branch_info);
 
             // Display promoted branches as children
             if !env.branches.is_empty() {
