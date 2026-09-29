@@ -3102,8 +3102,9 @@ mod tests {
 {before_anchor}"
             );
             assert!(
-                after_anchor.contains("release/main/"),
-                "and the position it is given must still name it: {after_anchor}"
+                after_anchor.contains("kept safe until it is published")
+                    && !after_anchor.contains("release/main/"),
+                "and the position it is given must say what it is for, without the ref name: {after_anchor}"
             );
             // The build record is a surviving, user-meaningful write, so the
             // same separation must not swallow it. A predicate on

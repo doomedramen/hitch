@@ -120,10 +120,42 @@ mod tests {
         c.is_alphanumeric() || c == '_'
     }
 
+    /// Internal ref families whose path-shaped names (`build/dev/2026...`) are
+    /// mechanism even without the `refs/hitch/` prefix.
+    const REF_FAMILIES: &[&str] = &[
+        "build",
+        "release",
+        "prev",
+        "backup",
+        "publish",
+        "state",
+        "resolutions",
+    ];
+
+    /// `<family>/<segment>/` at a word start, e.g. `build/dev/20260929`.
+    fn has_ref_path(lower: &str) -> bool {
+        let seg = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        REF_FAMILIES.iter().any(|family| {
+            let prefix = format!("{family}/");
+            lower.match_indices(&prefix).any(|(start, _)| {
+                let starts_word = lower[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !is_word_char(c) && c != '/' && c != '-');
+                let rest = &lower[start + prefix.len()..];
+                let name_len = rest.find(|c: char| !seg(c)).unwrap_or(rest.len());
+                starts_word && name_len > 0 && rest[name_len..].starts_with('/')
+            })
+        })
+    }
+
     /// Every forbidden needle found in `line`, respecting word boundaries.
     fn hits(line: &str) -> Vec<&'static str> {
         let lower = line.to_lowercase();
         let mut found = Vec::new();
+        if has_ref_path(&lower) {
+            found.push("<family>/<name>/ ref path");
+        }
         for f in FORBIDDEN {
             let mut from = 0;
             while let Some(pos) = lower[from..].find(f.needle) {

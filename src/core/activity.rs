@@ -354,6 +354,10 @@ pub struct ActivityLog {
     pub skipped: Vec<SkippedCommit>,
     /// True when the walk stopped at `limit` before reaching the first commit.
     pub truncated: bool,
+    /// A branch filter drops events from entries, so the log no longer holds
+    /// every event for an environment; the renderer must not infer from absence.
+    #[serde(skip)]
+    pub branch_filtered: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -651,6 +655,7 @@ pub fn build_activity(
         entries,
         skipped,
         truncated,
+        branch_filtered: query.branch.is_some(),
     })
 }
 

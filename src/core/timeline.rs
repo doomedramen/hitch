@@ -163,6 +163,7 @@ mod tests {
             }],
             skipped: Vec::new(),
             truncated: false,
+            branch_filtered: false,
         }
     }
 

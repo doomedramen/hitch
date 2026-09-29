@@ -140,16 +140,9 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
     if !anchors.is_empty() {
         out.push('\n');
         heading(&mut out, "Held only until the publish lands");
-        for effect in anchors {
-            annotated(
-                &mut out,
-                "·",
-                &format!(
-                    "{} — created now, removed once the composed commit is reachable from a branch",
-                    short_ref(&effect.refname())
-                ),
-            );
-        }
+        // The anchor's ref name is mechanism (`--verbose` and `--json` carry it
+        // in the plan); the meaning is that the composed commit is protected.
+        out.push_str("  The new build is kept safe until it is published.\n");
     }
 
     if !plan.unaffected.is_empty() {
@@ -2135,7 +2128,14 @@ pub fn render_activity(
     // entry index -> environments whose newest touching entry is a declaration change
     let mut pointers: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
     let mut decided: BTreeSet<&str> = BTreeSet::new();
-    for (index, entry) in log.entries.iter().enumerate() {
+    // A branch filter removes events from entries, so absence proves nothing:
+    // "not rebuilt since" would be claimed from a log that hides the rebuild.
+    let pointer_entries = if log.branch_filtered {
+        0
+    } else {
+        log.entries.len()
+    };
+    for (index, entry) in log.entries.iter().enumerate().take(pointer_entries) {
         let envs: BTreeSet<&str> = entry.events.iter().map(|e| e.environment()).collect();
         for env in envs {
             if decided.contains(env) {
@@ -2193,6 +2193,29 @@ pub fn render_activity(
         let pad = "         ";
         let mut lines: Vec<String> = Vec::new();
         for event in &entry.events {
+            let voted_here = |id: &str| {
+                entry.events.iter().any(
+                    |e| matches!(e, HitchEvent::ApprovalVoted { request_id, .. } if request_id == id),
+                )
+            };
+            match event {
+                // The vote line already says the request is approved.
+                HitchEvent::ApprovalGranted { request_id, .. } if voted_here(request_id) => {
+                    continue
+                }
+                HitchEvent::ApprovalVoted { request_id, .. }
+                    if entry.events.iter().any(|e| {
+                        matches!(e, HitchEvent::ApprovalGranted { request_id: r, .. } if r == request_id)
+                    }) =>
+                {
+                    lines.push(format!(
+                        "{}, which completes the approval",
+                        render_event(event)
+                    ));
+                    continue;
+                }
+                _ => {}
+            }
             lines.push(render_event(event));
             if let HitchEvent::Rebuilt {
                 outcome: RebuildOutcome::WithHolds { held, .. },
@@ -4224,7 +4247,57 @@ mod tests {
                 entries,
                 skipped: vec![],
                 truncated: false,
+                branch_filtered: false,
             }
+        }
+
+        #[test]
+        fn pointer_is_suppressed_when_the_log_was_filtered_by_branch() {
+            let mut l = log(vec![entry(2026, 9, 29, 8, 0, vec![promoted()])]);
+            assert!(render_activity(&l, now(), false).contains("has not been rebuilt"));
+            l.branch_filtered = true;
+            assert!(!render_activity(&l, now(), false).contains("has not been rebuilt"));
+        }
+
+        #[test]
+        fn a_vote_and_its_grant_in_one_entry_read_as_one_line() {
+            let voted = HitchEvent::ApprovalVoted {
+                request_id: s("r1"),
+                environment: s("prod"),
+                branch: s("search"),
+                direction: ApprovalDirection::Promote,
+                approvals: 1,
+                required: 1,
+            };
+            let granted = HitchEvent::ApprovalGranted {
+                request_id: s("r1"),
+                environment: s("prod"),
+                branch: s("search"),
+                direction: ApprovalDirection::Promote,
+            };
+            let both = render_activity(
+                &log(vec![entry(
+                    2026,
+                    9,
+                    29,
+                    8,
+                    0,
+                    vec![voted.clone(), granted.clone()],
+                )]),
+                now(),
+                false,
+            );
+            assert!(both.contains(
+                "approved adding search to prod (1 of 1), which completes the approval\n"
+            ));
+            assert!(!both.contains("is approved"));
+            let alone = render_activity(
+                &log(vec![entry(2026, 9, 29, 8, 0, vec![granted])]),
+                now(),
+                false,
+            );
+            assert!(alone.contains("adding search to prod is approved"));
+            assert!(!alone.contains("completes"));
         }
 
         #[test]
