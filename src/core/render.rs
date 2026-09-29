@@ -4301,6 +4301,35 @@ mod tests {
         }
 
         #[test]
+        fn a_release_entry_headlines_the_release() {
+            let out = render_activity(
+                &log(vec![entry(
+                    2026,
+                    9,
+                    29,
+                    8,
+                    0,
+                    vec![
+                        HitchEvent::Released {
+                            environment: s("dev"),
+                        },
+                        HitchEvent::Demoted {
+                            environment: s("dev"),
+                            branch: s("payments"),
+                        },
+                    ],
+                )]),
+                now(),
+                false,
+            );
+            assert!(out.contains("  09:00  martin released dev\n"), "{out}");
+            assert!(
+                out.contains("         removed payments from dev\n"),
+                "{out}"
+            );
+        }
+
+        #[test]
         fn days_group_across_midnight_in_now_offset() {
             // now is UTC+1: 23:30Z on the 28th is 00:30 on the 29th (Today).
             let rendered = render_activity(

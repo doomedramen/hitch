@@ -266,7 +266,13 @@ pub fn derive_events(old: &HitchConfig, new: &HitchConfig) -> Vec<HitchEvent> {
         }
     }
 
-    out
+    // Amends the plan's Constraint 7 for releases: the release is the headline
+    // of its entry and the prunes it caused are consequences, so it goes first.
+    let (mut released, rest): (Vec<_>, Vec<_>) = out
+        .into_iter()
+        .partition(|e| matches!(e, HitchEvent::Released { .. }));
+    released.extend(rest);
+    released
 }
 
 fn approval_transition(
@@ -866,15 +872,28 @@ mod tests {
         assert_eq!(
             derive_events(&old, &new),
             vec![
+                HitchEvent::Released {
+                    environment: "dev".into()
+                },
                 HitchEvent::Rebuilt {
                     environment: "dev".into(),
                     outcome: RebuildOutcome::Unrecorded
                 },
-                HitchEvent::Released {
-                    environment: "dev".into()
-                },
             ]
         );
+    }
+
+    #[test]
+    fn a_release_is_emitted_before_the_prunes_it_caused() {
+        let old = config(&[("dev", "main", &["payments"]), ("qa", "main", &["x"])]);
+        let mut new = config(&[("dev", "main", &[]), ("qa", "main", &["x"])]);
+        new.environments.get_mut("qa").unwrap().released_at = Some(Utc::now());
+        let events = derive_events(&old, &new);
+        assert!(
+            matches!(&events[0], HitchEvent::Released { environment } if environment == "qa"),
+            "{events:?}"
+        );
+        assert!(matches!(events[1], HitchEvent::Demoted { .. }));
     }
 
     #[test]
