@@ -246,11 +246,13 @@ pub fn plan_headline<I>(plan: &OperationPlan<I>) -> String {
         }
         // The count, not the refs. Thirty refnames in a headline is a wall, and
         // the plan's effect list is where a reader goes to see what was found.
-        crate::operations::model::OperationIntent::Cleanup { candidates } => format!(
-            "Clean up {} archived ref{}",
-            count(candidates.len(), ""),
-            if candidates.len() == 1 { "" } else { "s" }
-        ),
+        // "ref", not "archived ref": the candidates are unpromoted *branches*
+        // as well as stale archive refs, and a headline naming only the second
+        // kind is wrong for every plan whose first candidate is a branch — which
+        // is most of them.
+        crate::operations::model::OperationIntent::Cleanup { candidates } => {
+            format!("Clean up {}", count(candidates.len(), "ref"))
+        }
         crate::operations::model::OperationIntent::ApplyApproval {
             environment,
             branches,

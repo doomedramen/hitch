@@ -59,10 +59,14 @@
 //! [`rebuild`] and [`release`] each have their own planner for the same
 //! reason: one per *operation*, not one per command name.
 
+// The one operation whose effects are deletions, and so the one that cannot be
+// re-derived: the refs a cleanup plan is about to remove are gone by the time
+// anyone wants to check what it meant. Its prunable-namespace set is the
+// second time the `refs/hitch/state/` exclusion has nearly been written wrong,
+// and it is the reason that set lives here rather than in the command.
+pub mod cleanup;
 pub mod declaration;
 pub mod model;
-pub mod rebuild;
-pub mod release;
 // A metadata operation's rollback story is different, and deliberately so: see
 // this file's header. A metadata plan's whole effect is one `modify_metadata`
 // closure, and that closure runs *before* the write, so a closure that errors
@@ -71,3 +75,5 @@ pub mod release;
 // lands. Do not copy promote's rollback here; there is no failure for it to
 // serve.
 pub mod metadata;
+pub mod rebuild;
+pub mod release;

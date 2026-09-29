@@ -1,4 +1,6 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::operations::cleanup::{apply_cleanup_plan, plan_cleanup};
 use anyhow::Result;
 use clap::Args;
 
@@ -9,177 +11,57 @@ pub struct CleanupCommand {
     #[arg(long)]
     pub apply: bool,
 
-    /// Limit candidates to branches not promoted to this specific environment.
-    /// Without this option the command considers all environments.
+    /// Limit this environment's archive refs to the sweep.
+    ///
+    /// Does *not* narrow which branches are protected: a branch promoted
+    /// anywhere is spared regardless of scope, and so is every environment's
+    /// own branch. A flag named after one environment is not a statement about
+    /// the others, and a branch is a repository-wide object.
     #[arg(long)]
     pub env: Option<String>,
+
+    /// Delete without asking.
+    ///
+    /// A cleanup that removes anything asks first — the same `--yes` every
+    /// other destructive operation takes. Non-interactive callers (CI, a
+    /// Makefile) need it; a human re-running what they just read does not.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
-    crate::utils::prelude::pre_check_repo_only(context)?;
+    // Everything else lives in the planner: which branches are prunable, which
+    // archive refs are stale, and what each of those depends on. The candidate
+    // rules in particular have been written in this file for the whole life of
+    // the command, and `refs/hitch/state/` is the ref they got wrong once.
+    let plan = plan_cleanup(context, args.env.as_deref())?;
 
-    // Read current hitch configuration
-    let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
-
-    // Collect all branch names that are currently promoted (in any / the target env)
-    let mut promoted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Also collect base branches so we never suggest deleting them
-    let mut reserved: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for (env_name, environment) in &config.environments {
-        reserved.insert(environment.base.clone());
-        let in_scope = args.env.as_deref().map(|e| e == env_name).unwrap_or(true);
-        if in_scope {
-            for b in &environment.branches {
-                promoted.insert(b.clone());
-            }
-        }
-    }
-
-    // Built-in reserved names
-    reserved.insert("hitch-metadata".to_string());
-
-    // List all local branches
-    let all_local = context.git().list_local_branches_with_prefix("")?;
-    let current = context.git().get_current_branch().unwrap_or_default();
-
-    // Candidates: local branches that are not currently promoted (in scope),
-    // not a reserved/base branch, not the current branch, and not a hitch internal branch.
-    let candidates: Vec<String> = all_local
-        .into_iter()
-        .filter(|b| {
-            !promoted.contains(b)
-                && !reserved.contains(b)
-                && b != &current
-                && !b.starts_with("hitch-tmp-")
-                && b != "hitch-metadata"
-        })
-        .collect();
-
-    let envs = envs_in_scope(&config, args.env.as_deref());
-    let stale_refs = stale_archive_refs(context, &envs)?;
-
-    if candidates.is_empty() && stale_refs.is_empty() {
-        context.log_success("No branches to clean up.");
+    // Nothing to do is an *answer*, and it is an answer the empty plan cannot
+    // give well: a plan whose effect list is empty renders as a headline and
+    // nothing else, which is true and reads as a command that did not run. So
+    // the empty case is answered in the only words that fit, and no document is
+    // printed — there was no operation to document.
+    if plan.detail.is_empty() {
+        context.log_success("Nothing to clean up.");
         return Ok(());
     }
 
-    if args.apply {
-        if !candidates.is_empty() {
-            context.log_info(&format!("Deleting {} branch(es)...", candidates.len()));
-            let mut deleted = 0;
-            let mut skipped = 0;
-            for branch in &candidates {
-                match context.git().delete_branch(branch, false) {
-                    Ok(()) => {
-                        context.log_success(&format!("  Deleted '{}'", branch));
-                        deleted += 1;
-                    }
-                    Err(e) => {
-                        context.log_warning(&format!(
-                            "  Skipped '{}' (not fully merged — use 'git branch -D {}' to force): {}",
-                            branch, branch, e
-                        ));
-                        skipped += 1;
-                    }
-                }
-            }
-            context.log_info(&format!(
-                "Done: {} deleted, {} skipped (not fully merged).",
-                deleted, skipped
-            ));
-        }
-
-        if !stale_refs.is_empty() {
-            context.log_info(&format!(
-                "Deleting {} old archive ref(s)...",
-                stale_refs.len()
-            ));
-            let mut deleted = 0;
-            let mut skipped = 0;
-            for reference in &stale_refs {
-                match context.git().delete_ref(reference) {
-                    Ok(()) => {
-                        context.log_success(&format!("  Deleted '{}'", reference));
-                        deleted += 1;
-                    }
-                    Err(e) => {
-                        context.log_warning(&format!("  Skipped '{}': {}", reference, e));
-                        skipped += 1;
-                    }
-                }
-            }
-            context.log_info(&format!(
-                "Done: {} archive ref(s) deleted, {} skipped.",
-                deleted, skipped
-            ));
-        }
-    } else {
-        if !candidates.is_empty() {
-            context.log_info(&format!(
-                "Found {} branch(es) not currently promoted{}. \
-                 Run 'hitch cleanup --apply' to delete them:",
-                candidates.len(),
-                args.env
-                    .as_deref()
-                    .map(|e| format!(" to '{}'", e))
-                    .unwrap_or_default()
-            ));
-            for branch in &candidates {
-                println!("  {}", branch);
-            }
-        }
-
-        if !stale_refs.is_empty() {
-            context.log_info(&format!(
-                "Found {} old archive ref(s) beyond the {}-most-recent-per-environment \
-                 retention policy. Run 'hitch cleanup --apply' to delete them:",
-                stale_refs.len(),
-                ARCHIVE_REF_RETENTION
-            ));
-            for reference in &stale_refs {
-                println!("  {}", reference);
-            }
-        }
-
-        context.log_info("(dry-run — nothing was deleted)");
+    if !args.apply {
+        emit_plan(context, &plan)?;
+        context.log_info("(preview — nothing was deleted; re-run with --apply)");
+        return Ok(());
     }
 
+    if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+        return Ok(());
+    }
+
+    // A failed delete is an owed effect in the receipt, not an `Err`: see
+    // `operations::cleanup`'s header. The exit code stays 0 because a sweep
+    // that removed 59 of 60 refs succeeded at what it set out to do, and a
+    // non-zero code would make every caller treat a mostly-finished cleanup as
+    // a failed one.
+    let receipt = apply_cleanup_plan(context, &plan)?;
+    emit_receipt(context, &plan, &receipt)?;
     Ok(())
-}
-
-/// Environments whose archive refs get pruned. `--env` scopes this exactly
-/// like it already scopes branch cleanup.
-fn envs_in_scope(config: &crate::types::HitchConfig, env_filter: Option<&str>) -> Vec<String> {
-    config
-        .environments
-        .keys()
-        .filter(|e| env_filter.map(|f| f == e.as_str()).unwrap_or(true))
-        .cloned()
-        .collect()
-}
-
-/// How many of the most recent archive refs to keep per (namespace,
-/// environment). Chosen to comfortably cover manual rollback while bounding
-/// unconditional growth — see Task 10 in the production-hardening plan for
-/// the reasoning against an age-based alternative.
-const ARCHIVE_REF_RETENTION: usize = 10;
-
-/// Refs older than the most recent `ARCHIVE_REF_RETENTION` under
-/// `refs/hitch/<namespace>/<env>/*`, for every namespace/env pair in scope.
-/// Ref names sort chronologically because the timestamp segment is
-/// fixed-width, so this needs no extra date lookup.
-fn stale_archive_refs(context: &GlobalContext, envs: &[String]) -> Result<Vec<String>> {
-    let mut stale = Vec::new();
-    for namespace in ["backup", "prev"] {
-        for env_name in envs {
-            let prefix = format!("refs/hitch/{}/{}/", namespace, env_name);
-            let mut refs = context.git().list_refs_under(&prefix)?;
-            refs.sort(); // chronological: fixed-width timestamp suffix
-            if refs.len() > ARCHIVE_REF_RETENTION {
-                stale.extend(refs.into_iter().rev().skip(ARCHIVE_REF_RETENTION));
-            }
-        }
-    }
-    Ok(stale)
 }
