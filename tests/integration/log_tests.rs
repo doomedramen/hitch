@@ -1028,4 +1028,57 @@ mod tests {
         });
         Ok(())
     }
+    #[test]
+    fn hitch_log_env_never_touches_the_network() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let _ = env.git.run(&["remote", "remove", "origin"]);
+            env.git
+                .run(&["remote", "add", "origin", "/nonexistent/hitch-origin"])?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["log", "--env", "dev"])
+                .execute()?
+                .assert_success();
+            let err = result.stderr();
+            assert!(err.trim().is_empty(), "no stderr expected offline: {err}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_without_setup_says_how_to_set_up() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::None, |env| {
+            let result = env.hitch.run().args(&["log"]).execute()?.assert_failure();
+            let err = result.stderr();
+            assert!(err.contains("not set up"), "{err}");
+            assert!(err.contains("hitch init"), "{err}");
+            assert!(!err.contains("git log"), "{err}");
+            assert!(!err.contains("ambiguous"), "{err}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_global_verbose_flag_is_honoured_by_log() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let out = env
+                .hitch
+                .run()
+                .args(&["--verbose", "log"])
+                .execute()?
+                .assert_success()
+                .stdout();
+            assert!(out.contains("metadata commit"), "{out}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
 }

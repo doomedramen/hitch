@@ -18,7 +18,6 @@ pub struct TimelineItem {
     #[allow(dead_code)]
     pub detail: Option<String>,
     /// The typed event behind `summary`; `None` for `GitCommit` items.
-    #[allow(dead_code)]
     pub event: Option<HitchEvent>,
 }
 
@@ -85,6 +84,10 @@ pub fn build_combined_timeline(
 /// event model: operation locks are collapsed (no Locked/Unlocked noise around
 /// mutations), a rejection is one line, and sentences use the new wording.
 /// Filtering is by exact environment/branch, not summary substring.
+///
+/// The adapter drops `ActivityLog::skipped` and `truncated`, so a desktop
+/// timeline can be partial without saying so. A hitch-metadata with a single
+/// commit now yields an `EnvironmentCreated`-style event for what it declares.
 pub fn build_hitch_events(
     context: &GlobalContext,
     max_commits: usize,

@@ -130,6 +130,7 @@ mod tests {
         "publish",
         "state",
         "resolutions",
+        "pending-resync",
     ];
 
     /// `<family>/<segment>/` at a word start, e.g. `build/dev/20260929`.

@@ -6,10 +6,8 @@
 //! take the repo lock and stays usable while a rebuild is running.
 
 use crate::commands::global_context::GlobalContext;
-use crate::core::activity::{build_activity, ActivityLog, ActivityQuery};
+use crate::core::activity::{build_activity, read_config_at, ActivityLog, ActivityQuery};
 use crate::core::render::{emit_json, render_activity, JSON_SCHEMA_VERSION};
-use crate::types::HitchConfig;
-use crate::utils::prelude::access_metadata_read_only;
 use anyhow::Result;
 use clap::Args;
 
@@ -41,7 +39,20 @@ struct LogDocument {
 
 pub fn run(args: LogCommand, context: &GlobalContext) -> Result<()> {
     let mut context = context.clone();
-    context.verbose = args.verbose;
+    context.verbose = context.verbose || args.verbose;
+
+    // Offline by contract (like `status`): look at the local branch only, never
+    // fetch or bootstrap it from origin.
+    if context
+        .git()
+        .rev_parse_opt("refs/heads/hitch-metadata")?
+        .is_none()
+    {
+        anyhow::bail!(
+            "Hitch is not set up in this repository yet.\n\n\
+             To set it up:\n  hitch init"
+        );
+    }
 
     let query = ActivityQuery {
         environment: args.environment.clone(),
@@ -53,8 +64,7 @@ pub fn run(args: LogCommand, context: &GlobalContext) -> Result<()> {
     if let Some(name) = &args.environment {
         // A removed environment is valid: its history is what the reader wants.
         // So the check is "known now, or seen in an event", not "configured".
-        let config =
-            access_metadata_read_only(&context, |config: &HitchConfig| Ok(config.clone()))?;
+        let config = read_config_at(&context, "hitch-metadata")?;
         if !config.environments.contains_key(name) && !seen_in_history(&context, name)? {
             let mut names: Vec<&str> = config.environments.keys().map(|k| k.as_str()).collect();
             names.sort_unstable();

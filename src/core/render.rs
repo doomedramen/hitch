@@ -2130,7 +2130,8 @@ pub fn render_activity(
     let mut decided: BTreeSet<&str> = BTreeSet::new();
     // A branch filter removes events from entries, so absence proves nothing:
     // "not rebuilt since" would be claimed from a log that hides the rebuild.
-    let pointer_entries = if log.branch_filtered {
+    // An unreadable (skipped) commit can hide one just the same.
+    let pointer_entries = if log.branch_filtered || !log.skipped.is_empty() {
         0
     } else {
         log.entries.len()
@@ -4249,6 +4250,16 @@ mod tests {
                 truncated: false,
                 branch_filtered: false,
             }
+        }
+
+        #[test]
+        fn pointer_is_suppressed_when_a_commit_was_skipped() {
+            let mut l = log(vec![entry(2026, 9, 29, 8, 0, vec![promoted()])]);
+            l.skipped.push(crate::core::activity::SkippedCommit {
+                commit: s("deadbeef"),
+                reason: s("unreadable"),
+            });
+            assert!(!render_activity(&l, now(), false).contains("has not been rebuilt"));
         }
 
         #[test]

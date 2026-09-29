@@ -1329,10 +1329,10 @@ do not add config-based "mitigations" that silently change merge semantics.
 common commands and fails on `sha`/`oid`/`ref`/`refs/`/`cas`/`eject`/`journal`/
 `fingerprint`/`anchor`/`hitch-metadata`/... as case-insensitive words. New
 output extends that scenario; a hit gets past only via its `ALLOWED` table,
-each entry with a reason (pasteable `git …` lines are skipped outright). A
+each entry with a reason (no line is exempt by shape, pasteable `git …` lines included). A
 new allow-list entry needs a reason string, and the reason is reviewed like
 code. Path-shaped internal ref names (`build/<env>/…`, `release/…`, `prev/`,
-`backup/`, `publish/`, `state/`, `resolutions/` — see `REF_FAMILIES`) are
+`backup/`, `publish/`, `pending-resync/`, `state/`, `resolutions/` — see `REF_FAMILIES`) are
 forbidden in default output too; fixture branch names must avoid those seven
 family names.
 `hitch-metadata` renders as `settings` in effect rows (`short_ref`). An
@@ -1405,3 +1405,10 @@ A mismatch means the push is genuinely still owed — warn as before, but
 leave the record in place (rather than deleting it) so the next mutating
 command's `recover()` sees it and warns again, instead of the obligation
 being reported once and then permanently forgotten.
+
+**A stuck operation lock is invisible to `hitch log`, and so is the manual
+`hitch unlock` that clears it.** A lock left by a crash or `rebuild --force`
+carries `lock_purpose: Operation`, and the reader collapses every operation
+lock as a normal bracket, so neither the lock nor the later manual unlock
+appears. The reader cannot tell a stuck one from a bracket; fixing it needs a
+marker written at unlock time (P10).

@@ -959,3 +959,4 @@ reasoned allow-list. `core/timeline.rs` is an adapter over the event model.
 - D6: a conflict-refused promote narrates a rollback and names the wrong partner (`main` instead of `payments`); a release failure's remedy repeats the failing command.
 - An approval apply still shows as three log lines (D3, Applied triple).
 - The adapter drops `skipped`/`truncated`, so the desktop shows a partial timeline silently.
+- An operation lock left by a crash or `rebuild --force` has `lock_purpose` Operation, so neither it nor the manual `hitch unlock` that clears it appears in `hitch log`; fixing it needs a marker written at unlock time.
