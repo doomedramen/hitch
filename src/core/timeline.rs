@@ -1,6 +1,6 @@
 use crate::commands::global_context::GlobalContext;
-use crate::core::activity::read_config_at;
-use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig};
+use crate::core::activity::{build_activity, ActivityLog, ActivityQuery, HitchEvent};
+use crate::core::render::render_event;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
@@ -17,6 +17,9 @@ pub struct TimelineItem {
     pub summary: String,
     #[allow(dead_code)]
     pub detail: Option<String>,
+    /// The typed event behind `summary`; `None` for `GitCommit` items.
+    #[allow(dead_code)]
+    pub event: Option<HitchEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +65,7 @@ pub fn build_combined_timeline(
                 kind: TimelineKind::GitCommit,
                 summary: format!("{} {}", &c.sha[..7.min(c.sha.len())], c.summary),
                 detail: None,
+                event: None,
             });
         }
     }
@@ -73,306 +77,132 @@ pub fn build_combined_timeline(
     Ok(items)
 }
 
+/// Compatibility adapter over `build_activity`: one item per event, newest
+/// entry first, worded by `render_event`.
+///
+/// `max_commits` (the desktop passes 80) now bounds activity *entries*, not
+/// metadata commits scanned. The desktop's timeline content changes with the
+/// event model: operation locks are collapsed (no Locked/Unlocked noise around
+/// mutations), a rejection is one line, and sentences use the new wording.
+/// Filtering is by exact environment/branch, not summary substring.
 pub fn build_hitch_events(
     context: &GlobalContext,
     max_commits: usize,
     filter: HitchEventFilter<'_>,
 ) -> Result<Vec<TimelineItem>> {
-    // We rely on hitch-metadata existing locally (matches current CLI health checks).
-    let shas = list_metadata_commits(context, max_commits)?;
-    if shas.len() < 2 {
-        return Ok(Vec::new());
-    }
-
-    let mut events = Vec::new();
-    // `git log` returns newest -> oldest. Iterate oldest -> newest so diffs make sense, but
-    // timestamp will be from the "new" commit.
-    let mut shas = shas;
-    shas.reverse();
-
-    // Read/parse hitch.json once per commit (instead of twice per diff window).
-    let mut prev_cfg = read_config_at(context, &shas[0])?;
-    for sha in shas.iter().skip(1) {
-        let next_cfg = read_config_at(context, sha)?;
-        let when = context.git().get_commit_timestamp(sha)?;
-        events.extend(diff_configs_to_events(&prev_cfg, &next_cfg, when, &filter));
-        prev_cfg = next_cfg;
-    }
-
-    Ok(events)
+    let query = match filter.scope {
+        HitchEventScope::Any => ActivityQuery {
+            limit: max_commits,
+            ..Default::default()
+        },
+        HitchEventScope::Environment => match filter.environment {
+            Some(env) => ActivityQuery {
+                environment: Some(env.to_string()),
+                limit: max_commits,
+                ..Default::default()
+            },
+            None => return Ok(Vec::new()),
+        },
+        HitchEventScope::Branch => match filter.branch {
+            Some(b) => ActivityQuery {
+                branch: Some(b.to_string()),
+                limit: max_commits,
+                ..Default::default()
+            },
+            None => return Ok(Vec::new()),
+        },
+    };
+    let log = build_activity(context, &query)?;
+    Ok(items_from_log(&log, &filter))
 }
 
-fn list_metadata_commits(context: &GlobalContext, max_commits: usize) -> Result<Vec<String>> {
-    let output = context.git().run_git_command(&[
-        "log",
-        "-n",
-        &max_commits.to_string(),
-        "--format=%H",
-        "hitch-metadata",
-    ])?;
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect())
+fn items_from_log(log: &ActivityLog, filter: &HitchEventFilter<'_>) -> Vec<TimelineItem> {
+    log.entries
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .events
+                .iter()
+                .filter(|e| event_matches(e, filter))
+                .map(|e| TimelineItem {
+                    when: entry.when,
+                    kind: TimelineKind::HitchEvent,
+                    summary: render_event(e),
+                    detail: None,
+                    event: Some(e.clone()),
+                })
+        })
+        .collect()
 }
 
-fn matches_filter(summary: &str, filter: &HitchEventFilter<'_>) -> bool {
+fn event_matches(event: &HitchEvent, filter: &HitchEventFilter<'_>) -> bool {
     match filter.scope {
         HitchEventScope::Any => true,
-        HitchEventScope::Environment => filter.environment.is_some_and(|env| summary.contains(env)),
-        HitchEventScope::Branch => filter.branch.is_some_and(|b| summary.contains(b)),
+        HitchEventScope::Environment => {
+            filter.environment.is_some_and(|e| event.environment() == e)
+        }
+        HitchEventScope::Branch => filter.branch.is_some_and(|b| event.branches().contains(&b)),
     }
 }
 
-fn diff_configs_to_events(
-    old_cfg: &HitchConfig,
-    new_cfg: &HitchConfig,
-    when: DateTime<Utc>,
-    filter: &HitchEventFilter<'_>,
-) -> Vec<TimelineItem> {
-    let mut out = Vec::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::activity::ActivityEntry;
 
-    // Environment-level diffs
-    for (env_name, new_env) in &new_cfg.environments {
-        let old_env = old_cfg.environments.get(env_name);
-
-        // Added env
-        if old_env.is_none() {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Created environment '{}'", env_name),
-                None,
-                filter,
-            );
-            continue;
-        }
-        let old_env = old_env.unwrap();
-
-        // Base change
-        if old_env.base != new_env.base {
-            push_if_match(
-                &mut out,
-                when,
-                format!(
-                    "Env '{}' base changed: {} → {}",
-                    env_name, old_env.base, new_env.base
-                ),
-                None,
-                filter,
-            );
-        }
-
-        // Promote/demote diffs
-        for added in new_env
-            .branches
-            .iter()
-            .filter(|b| !old_env.branches.contains(b))
-        {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Promoted '{}' → {}", added, env_name),
-                None,
-                filter,
-            );
-        }
-        for removed in old_env
-            .branches
-            .iter()
-            .filter(|b| !new_env.branches.contains(b))
-        {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Demoted '{}' ← {}", removed, env_name),
-                None,
-                filter,
-            );
-        }
-
-        // Lock/unlock
-        if old_env.locked != new_env.locked {
-            if new_env.locked {
-                let by = new_env
-                    .locked_by
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
-                push_if_match(
-                    &mut out,
-                    when,
-                    format!("Locked env '{}' by {}", env_name, by),
-                    None,
-                    filter,
-                );
-            } else {
-                push_if_match(
-                    &mut out,
-                    when,
-                    format!("Unlocked env '{}'", env_name),
-                    None,
-                    filter,
-                );
-            }
-        }
-
-        // Rebuild/release timestamps
-        if old_env.rebuilt_at != new_env.rebuilt_at {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Rebuilt env '{}'", env_name),
-                None,
-                filter,
-            );
-        }
-        if old_env.released_at != new_env.released_at {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Released env '{}'", env_name),
-                None,
-                filter,
-            );
+    fn log_with_promotion() -> ActivityLog {
+        ActivityLog {
+            entries: vec![ActivityEntry {
+                commit: "abc".into(),
+                when: Utc::now(),
+                actor: "a@b.c".into(),
+                events: vec![HitchEvent::Promoted {
+                    environment: "qa".into(),
+                    branch: "feature/devtools".into(),
+                }],
+            }],
+            skipped: Vec::new(),
+            truncated: false,
         }
     }
 
-    // Removed envs
-    for env_name in old_cfg.environments.keys() {
-        if !new_cfg.environments.contains_key(env_name) {
-            push_if_match(
-                &mut out,
-                when,
-                format!("Removed environment '{}'", env_name),
-                None,
-                filter,
-            );
+    fn filter<'a>(
+        scope: HitchEventScope,
+        environment: Option<&'a str>,
+        branch: Option<&'a str>,
+    ) -> HitchEventFilter<'a> {
+        HitchEventFilter {
+            scope,
+            environment,
+            branch,
         }
     }
 
-    // Approval request diffs
-    out.extend(diff_approvals(old_cfg, new_cfg, when, filter));
+    #[test]
+    fn environment_scope_matches_exactly_not_by_substring() {
+        let log = log_with_promotion();
+        // "dev" is a substring of the branch name but not the environment.
+        let f = filter(HitchEventScope::Environment, Some("dev"), None);
+        assert!(items_from_log(&log, &f).is_empty());
 
-    out
-}
-
-fn diff_approvals(
-    old_cfg: &HitchConfig,
-    new_cfg: &HitchConfig,
-    when: DateTime<Utc>,
-    filter: &HitchEventFilter<'_>,
-) -> Vec<TimelineItem> {
-    let mut out = Vec::new();
-
-    let old_by_id: std::collections::HashMap<_, _> = old_cfg
-        .approval_requests
-        .iter()
-        .map(|r| (r.id.clone(), r))
-        .collect();
-    let new_by_id: std::collections::HashMap<_, _> = new_cfg
-        .approval_requests
-        .iter()
-        .map(|r| (r.id.clone(), r))
-        .collect();
-
-    for (id, req) in &new_by_id {
-        if !old_by_id.contains_key(id) {
-            push_if_match(
-                &mut out,
-                when,
-                format!(
-                    "Approval request created: {} {} → {} ({})",
-                    req.operation, req.branch, req.environment, req.id
-                ),
-                None,
-                filter,
-            );
-        }
+        let f = filter(HitchEventScope::Environment, Some("qa"), None);
+        let items = items_from_log(&log, &f);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, TimelineKind::HitchEvent);
+        assert!(items[0].event.is_some());
+        assert_eq!(
+            items[0].summary,
+            render_event(items[0].event.as_ref().unwrap())
+        );
     }
 
-    for (id, new_req) in &new_by_id {
-        if let Some(old_req) = old_by_id.get(id) {
-            if old_req.status != new_req.status {
-                push_if_match(
-                    &mut out,
-                    when,
-                    format!(
-                        "Approval {}: {} ({})",
-                        status_word(new_req.status),
-                        approval_short(new_req),
-                        new_req.id
-                    ),
-                    None,
-                    filter,
-                );
-            }
-
-            if new_req.approvals.len() > old_req.approvals.len() {
-                let delta = new_req.approvals.len() - old_req.approvals.len();
-                push_if_match(
-                    &mut out,
-                    when,
-                    format!(
-                        "Approval +{} for {} ({})",
-                        delta,
-                        approval_short(new_req),
-                        new_req.id
-                    ),
-                    None,
-                    filter,
-                );
-            }
-
-            if old_req.rejection.is_none() && new_req.rejection.is_some() {
-                push_if_match(
-                    &mut out,
-                    when,
-                    format!(
-                        "Approval rejected: {} ({})",
-                        approval_short(new_req),
-                        new_req.id
-                    ),
-                    None,
-                    filter,
-                );
-            }
-        }
-    }
-
-    out
-}
-
-fn status_word(status: ApprovalStatus) -> &'static str {
-    match status {
-        ApprovalStatus::Pending => "pending",
-        ApprovalStatus::Approved => "approved",
-        ApprovalStatus::Applied => "applied",
-        ApprovalStatus::Rejected => "rejected",
-        ApprovalStatus::Cancelled => "cancelled",
-    }
-}
-
-fn approval_short(req: &ApprovalRequest) -> String {
-    format!("{} {} → {}", req.operation, req.branch, req.environment)
-}
-
-fn push_if_match(
-    out: &mut Vec<TimelineItem>,
-    when: DateTime<Utc>,
-    summary: String,
-    detail: Option<String>,
-    filter: &HitchEventFilter<'_>,
-) {
-    if matches_filter(&summary, filter) {
-        out.push(TimelineItem {
-            when,
-            kind: TimelineKind::HitchEvent,
-            summary,
-            detail,
-        });
+    #[test]
+    fn branch_scope_and_any_scope() {
+        let log = log_with_promotion();
+        let f = filter(HitchEventScope::Branch, None, Some("feature/devtools"));
+        assert_eq!(items_from_log(&log, &f).len(), 1);
+        let f = filter(HitchEventScope::Branch, None, Some("devtools"));
+        assert!(items_from_log(&log, &f).is_empty());
+        assert_eq!(items_from_log(&log, &HitchEventFilter::any()).len(), 1);
     }
 }

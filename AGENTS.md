@@ -546,9 +546,8 @@ is consulted, and `test_hitch_status_detects_base_branch_changes` /
 `test_hitch_status_multiple_envs_with_changed_base` used to be `#[ignore]`d as
 "timing-sensitive" for exactly this reason — they are live now and their
 `sleep(2)` is gone. Do not reintroduce `get_commit_timestamp` into any
-verdict: it has exactly one production caller left,
-`core/timeline.rs:96`, which formats a date for display (P9 Task 8 is meant to
-reduce `timeline.rs` to an adapter over `activity.rs`; check before assuming).
+verdict: it has no production caller left (`core/timeline.rs` is now an
+adapter over `activity.rs`, which takes dates from `list_first_parent_history`).
 
 **`removed ⊆ changed_inputs` is an invariant of `health_from_record`, and the
 Result block depends on it.** `health_from_record` walks the *recorded* pins
