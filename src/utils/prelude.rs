@@ -339,6 +339,23 @@ where
     modify_metadata_impl(context, closure, true)
 }
 
+/// Whether falling back to a default configuration is news: only when the
+/// settings branch already exists, so a settings file was expected there.
+fn default_config_deserves_warning(settings_branch_tip: Option<&str>) -> bool {
+    settings_branch_tip.is_some()
+}
+
+#[cfg(test)]
+mod default_config_warning_tests {
+    use super::default_config_deserves_warning;
+
+    #[test]
+    fn a_fresh_init_is_silent_and_an_existing_branch_is_not() {
+        assert!(!default_config_deserves_warning(None));
+        assert!(default_config_deserves_warning(Some("abc1234")));
+    }
+}
+
 fn modify_metadata_impl<F>(context: &GlobalContext, closure: F, skip_preflight: bool) -> Result<()>
 where
     F: FnOnce(&mut HitchConfig) -> Result<()>,
@@ -385,10 +402,19 @@ where
         {
             Ok(content) => content,
             Err(e) => {
-                // If file doesn't exist, create default config
-                context.log_warning(
-                    "hitch's settings file was not found or could not be read, creating default configuration",
-                );
+                // A branch that does not exist yet is a fresh `hitch init`, where
+                // the default is expected; a branch with no readable settings
+                // file is something the user should hear about.
+                if default_config_deserves_warning(
+                    context
+                        .git()
+                        .rev_parse_opt("refs/heads/hitch-metadata")?
+                        .as_deref(),
+                ) {
+                    context.log_warning(
+                        "hitch's settings file could not be read, creating default configuration",
+                    );
+                }
                 context.log_verbose(&format!("Reading hitch.json failed: {}", e));
                 let default_config = HitchConfig::new();
                 serde_json::to_string_pretty(&default_config)
@@ -452,7 +478,9 @@ where
                          then re-run, or push manually with: git push origin hitch-metadata",
                     );
                 } else {
-                    context.log_warning("Failed to push hitch's settings to remote");
+                    context.log_warning(
+                        "Failed to push hitch's settings to remote. Push manually with: git push origin hitch-metadata",
+                    );
                     context.log_verbose(&format!("Push error: {}", e));
                 }
             } else {

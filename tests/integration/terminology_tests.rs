@@ -102,6 +102,12 @@ mod tests {
         },
         Allowed {
             needle: "hitch-metadata",
+            line_contains: "Push manually with: git push origin hitch-metadata",
+            reason: "the next step for a failed settings push is a pasteable git \
+                     command (Constraint 11, exception 2)",
+        },
+        Allowed {
+            needle: "hitch-metadata",
             line_contains: "git checkout hitch-metadata && git pull",
             reason: "a pasteable reconcile remedy for a diverged remote \
                      (Constraint 11, exception 2)",
@@ -403,5 +409,24 @@ mod tests {
             promote.1
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod default_config_tests {
+    use crate::framework::TestSetup;
+    use crate::test_framework::*;
+
+    #[test]
+    fn a_fresh_init_says_nothing_about_a_missing_settings_file() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::None, |env| {
+            let result = env.hitch.run().args(&["init"]).execute()?;
+            let text = format!("{}\n{}", result.stdout(), result.stderr());
+            result.assert_success();
+            assert!(!text.contains("could not be read"), "{text}");
+            assert!(!text.contains('⚠'), "{text}");
+            Ok::<(), anyhow::Error>(())
+        })
     }
 }
