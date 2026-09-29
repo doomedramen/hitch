@@ -418,6 +418,72 @@ fn drop_event(drafts: &mut [Draft], live_entries: &mut usize, draft: usize, even
     }
 }
 
+/// Fills in the outcome of the newest `Rebuilt` event per environment, and only
+/// when the live build record provably came from that rebuild: the record's
+/// `metadata_sha` is a transient tip written between the rebuild's lock commit
+/// and its `rebuilt_at` stamp, so it must be an ancestor of the stamp commit
+/// (`c1`) and not of the previous rebuild's stamp commit (`c2`). Any doubt
+/// (ancestry error, non-`Known` record, an older rebuild that may be out of
+/// sight) leaves the event `Unrecorded`; a wrong attachment is worse than none.
+fn attach_build_records(
+    context: &GlobalContext,
+    entries: &mut [ActivityEntry],
+    older_rebuilds_visible: bool,
+) {
+    use crate::utils::build_record::{read_state, EnvironmentBuildState};
+
+    let git = context.git();
+    let is_ancestor = |a: &str, b: &str| -> Option<bool> {
+        git.get_merge_base(a, b)
+            .ok()
+            .map(|m| m.as_deref() == Some(a))
+    };
+    let mut seen: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        for (k, ev) in entry.events.iter().enumerate() {
+            if let HitchEvent::Rebuilt { environment, .. } = ev {
+                seen.entry(environment.clone()).or_default().push((i, k));
+            }
+        }
+    }
+    for (environment, positions) in seen {
+        let Ok(EnvironmentBuildState::Known(record)) = read_state(git, &environment) else {
+            continue;
+        };
+        let (i1, k1) = positions[0];
+        let c1 = entries[i1].commit.clone();
+        if is_ancestor(&record.metadata_sha, &c1) != Some(true) {
+            continue;
+        }
+        match positions.get(1) {
+            Some(&(i2, _)) => {
+                if is_ancestor(&record.metadata_sha, &entries[i2].commit) != Some(false) {
+                    continue;
+                }
+            }
+            None if !older_rebuilds_visible => continue,
+            None => {}
+        }
+        let included = record
+            .included_branches
+            .iter()
+            .map(|b| b.branch.clone())
+            .collect();
+        let outcome = if record.held.is_empty() {
+            RebuildOutcome::Clean { included }
+        } else {
+            RebuildOutcome::WithHolds {
+                included,
+                held: record.held.iter().map(HoldPair::from).collect(),
+            }
+        };
+        if let HitchEvent::Rebuilt { outcome: slot, .. } = &mut entries[i1].events[k1] {
+            *slot = outcome;
+        }
+    }
+}
+
 pub fn build_activity(
     context: &GlobalContext,
     query: &ActivityQuery,
@@ -473,10 +539,17 @@ pub fn build_activity(
                     .environment
                     .as_deref()
                     .is_none_or(|e| ev.environment() == e)
-                    && query
-                        .branch
-                        .as_deref()
-                        .is_none_or(|b| ev.branches().contains(&b))
+                    && query.branch.as_deref().is_none_or(|b| {
+                        // An unattached rebuild has no branch names yet; the
+                        // branch filter runs after attachment gives it some.
+                        matches!(
+                            ev,
+                            HitchEvent::Rebuilt {
+                                outcome: RebuildOutcome::Unrecorded,
+                                ..
+                            }
+                        ) || ev.branches().contains(&b)
+                    })
             })
             .collect();
         if events.is_empty() {
@@ -527,7 +600,7 @@ pub fn build_activity(
         });
     }
 
-    let entries: Vec<ActivityEntry> = drafts
+    let mut entries: Vec<ActivityEntry> = drafts
         .into_iter()
         .filter(|d| d.alive_count > 0)
         .map(|d| {
@@ -537,6 +610,17 @@ pub fn build_activity(
             entry
         })
         .collect();
+
+    // With a truncated or gappy walk an older rebuild may exist out of sight,
+    // so "no older rebuild" cannot be established.
+    let older_rebuilds_visible = !truncated && reader.skipped.is_empty();
+    attach_build_records(context, &mut entries, older_rebuilds_visible);
+    if let Some(b) = query.branch.as_deref() {
+        for entry in &mut entries {
+            entry.events.retain(|ev| ev.branches().contains(&b));
+        }
+        entries.retain(|e| !e.events.is_empty());
+    }
 
     let mut skipped = reader.skipped;
     let order: std::collections::HashMap<&str, usize> = history

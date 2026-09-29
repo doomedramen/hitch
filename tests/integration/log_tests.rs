@@ -9,7 +9,9 @@ mod tests {
     use crate::framework::TestSetup;
     use crate::test_framework::*;
     use hitch::commands::global_context::{GlobalContext, GlobalFlags};
-    use hitch::core::activity::{build_activity, ActivityLog, ActivityQuery, HitchEvent};
+    use hitch::core::activity::{
+        build_activity, ActivityLog, ActivityQuery, HitchEvent, RebuildOutcome,
+    };
     use hitch::utils::logging::Logger;
     use std::sync::Arc;
 
@@ -522,6 +524,180 @@ mod tests {
             assert!(log.skipped.is_empty());
             assert!(events_of(&log).iter().any(|ev| matches!(ev,
                 HitchEvent::EnvironmentCreated { environment, .. } if environment == "dev")));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    fn rebuild(env: &TestEnvironment, environment: &str) {
+        env.hitch
+            .run()
+            .args(&["--no-push", "rebuild", environment])
+            .execute()
+            .unwrap();
+    }
+
+    fn rebuilt_outcomes(log: &ActivityLog) -> Vec<&RebuildOutcome> {
+        events_of(log)
+            .into_iter()
+            .filter_map(|ev| match ev {
+                HitchEvent::Rebuilt { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn setup_hold(env: &TestEnvironment) -> anyhow::Result<()> {
+        add_env(env, "dev");
+        env.fs.write_file("shared.txt", "base\n")?;
+        env.git.run(&["add", "-f", "shared.txt"])?;
+        env.git.run(&["commit", "-m", "Add shared.txt"])?;
+        for b in ["branch-a", "branch-b"] {
+            env.git.run(&["checkout", "-b", b])?;
+            env.fs.write_file("shared.txt", &format!("from {b}\n"))?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", b])?;
+            env.git.run(&["checkout", "main"])?;
+        }
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let mut config: serde_json::Value = serde_json::from_str(&env.fs.read_file("hitch.json")?)?;
+        config["environments"]["dev"]["branches"] = serde_json::json!(["branch-a", "branch-b"]);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git.run(&["commit", "-m", "test: inject branches"])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_latest_rebuild_carries_its_holds() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_hold(env)?;
+            rebuild(env, "dev");
+            let log = activity(env, &query(50))?;
+            match rebuilt_outcomes(&log).as_slice() {
+                [RebuildOutcome::WithHolds { included, held }] => {
+                    assert_eq!(included, &vec!["branch-a".to_string()]);
+                    assert_eq!(held.len(), 1);
+                    assert_eq!(held[0].branch, "branch-b");
+                    assert_eq!(held[0].conflicts_with, "branch-a");
+                }
+                other => panic!("expected one WithHolds rebuild, got {other:?}"),
+            }
+            // Filtering by the held branch must still find the rebuild.
+            let filtered = activity(
+                env,
+                &ActivityQuery {
+                    branch: Some("branch-b".into()),
+                    ..query(50)
+                },
+            )?;
+            assert!(matches!(
+                rebuilt_outcomes(&filtered).as_slice(),
+                [RebuildOutcome::WithHolds { .. }]
+            ));
+            // A branch the rebuild never touched drops the event.
+            let other = activity(
+                env,
+                &ActivityQuery {
+                    branch: Some("nope".into()),
+                    ..query(50)
+                },
+            )?;
+            assert!(rebuilt_outcomes(&other).is_empty());
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn an_older_rebuild_is_unrecorded_not_clean() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            make_feature(env, "feat-2")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            promote(env, "feat-2", "dev");
+            rebuild(env, "dev");
+            let log = activity(env, &query(50))?;
+            match rebuilt_outcomes(&log).as_slice() {
+                [RebuildOutcome::Clean { included }, RebuildOutcome::Unrecorded] => {
+                    assert_eq!(included.len(), 2);
+                }
+                other => panic!("expected [Clean, Unrecorded], got {other:?}"),
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_record_from_a_rebuild_outside_the_walk_is_not_misattributed() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            make_feature(env, "feat-2")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            promote(env, "feat-2", "dev");
+            let log = activity(env, &query(1))?;
+            assert!(rebuilt_outcomes(&log).is_empty());
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_truncated_walk_showing_one_rebuild_leaves_it_unrecorded() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            let full = activity(env, &query(50))?;
+            assert!(matches!(
+                rebuilt_outcomes(&full).as_slice(),
+                [RebuildOutcome::Clean { .. }]
+            ));
+            let log = activity(env, &query(1))?;
+            assert!(log.truncated);
+            assert!(matches!(
+                rebuilt_outcomes(&log).as_slice(),
+                [RebuildOutcome::Unrecorded]
+            ));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_legacy_repo_without_a_record_says_unrecorded() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            assert!(
+                env.git
+                    .run(&["rev-parse", "--verify", "refs/hitch/state/dev"])?
+                    .success(),
+                "a rebuild should have written a record"
+            );
+            env.git
+                .run(&["update-ref", "-d", "refs/hitch/state/dev"])?
+                .assert_success();
+            let log = activity(env, &query(50))?;
+            assert!(matches!(
+                rebuilt_outcomes(&log).as_slice(),
+                [RebuildOutcome::Unrecorded]
+            ));
             Ok::<(), anyhow::Error>(())
         });
         Ok(())
