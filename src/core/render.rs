@@ -171,8 +171,18 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
             &mut out,
             if plan.warnings.iter().any(|w| w.is_blocking()) {
                 "Why this cannot apply"
-            } else {
+            } else if plan.confirmation.required
+                || plan
+                    .warnings
+                    .iter()
+                    .any(|w| w.kind == crate::operations::model::PlanWarningKind::ApprovalRequired)
+            {
                 "Needs your decision"
+            } else {
+                // Nobody is being asked anything — `--force` or `--yes` already
+                // answered, or the operation never asked — so a heading that
+                // invites a decision would be inviting one that was made.
+                "Worth knowing"
             },
         );
         for warning in &plan.warnings {
@@ -251,7 +261,13 @@ pub fn plan_headline<I>(plan: &OperationPlan<I>) -> String {
         // kind is wrong for every plan whose first candidate is a branch — which
         // is most of them.
         crate::operations::model::OperationIntent::Cleanup { candidates } => {
-            format!("Clean up {}", count(candidates.len(), "ref"))
+            if candidates.is_empty() {
+                // A sweep can find nothing to delete and still have a plan to
+                // show: the branches it kept, and why.
+                "Clean up — nothing to delete".to_string()
+            } else {
+                format!("Clean up {}", count(candidates.len(), "ref"))
+            }
         }
         crate::operations::model::OperationIntent::ApplyApproval {
             environment,
@@ -1726,6 +1742,17 @@ pub fn emit_plan<I: serde::Serialize>(
     Ok(())
 }
 
+/// Say that a `--dry-run` printed a plan and stopped there.
+///
+/// A plan alone reads like the first half of an operation that then ran; this is
+/// the line that says it did not. `detail` is what to add after the dash — a
+/// command with a flag to re-run with names it there.
+pub fn emit_preview_note(context: &GlobalContext, detail: &str) {
+    context
+        .output
+        .log(OutputLevel::Info, &format!("(preview — {detail})"));
+}
+
 /// Emit the receipt, for a command that applied.
 ///
 /// Under `--json` this is a document carrying the plan *and* the receipt, so a
@@ -2595,6 +2622,7 @@ mod tests {
             message: "promote would conflict with an existing promoted branch".into(),
             kind: PlanWarningKind::PolicyRefusal,
             remedy: None,
+            nothing_to_do: false,
         }];
         let refused = render_plan(&p);
         assert!(
@@ -2609,6 +2637,7 @@ mod tests {
             message: "'qa' will not be rebuilt — compatibility check failed".into(),
             kind: PlanWarningKind::Advisory,
             remedy: None,
+            nothing_to_do: false,
         }];
         let advisory = render_plan(&p);
         assert!(

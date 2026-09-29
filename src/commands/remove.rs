@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::core::render::{confirm_plan, emit_plan, emit_preview_note, emit_receipt, render_plan};
 use crate::operations::metadata::{apply_metadata_plan, plan_remove_environment};
 use crate::utils::validation::validate_name;
 use anyhow::Result;
@@ -41,6 +41,7 @@ pub fn run(args: RemoveCommand, context: &GlobalContext) -> Result<()> {
 
     if args.dry_run {
         emit_plan(context, &plan)?;
+        emit_preview_note(context, "nothing was changed");
         return Ok(());
     }
 

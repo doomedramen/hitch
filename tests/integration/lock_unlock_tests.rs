@@ -177,7 +177,7 @@ mod tests {
             let result = env.hitch.run().args(&["lock", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("already locked");
+                .assert_stdout_contains("already locked");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -202,7 +202,7 @@ mod tests {
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("not currently locked");
+                .assert_stdout_contains("not currently locked");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -453,7 +453,7 @@ mod tests {
             let result = env.hitch.run().args(&["remove", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("is currently locked")
+                .assert_stdout_contains("is currently locked")
                 .assert_stderr_contains("--force");
 
             Ok::<(), anyhow::Error>(())
@@ -606,8 +606,8 @@ mod tests {
             let err = result.stderr();
             result.assert_failure();
             assert!(
-                err.contains("already locked"),
-                "and it says why, in the same words as before: {err}"
+                out.contains("already locked") && !err.contains("already locked"),
+                "and it says why once, in the plan, not again in the error: {out} / {err}"
             );
             // The plan, so the reader can see what was refused instead of
             // reconstructing it. Asserted as the *refusal section* rather than
@@ -676,7 +676,7 @@ mod tests {
             let result = env.hitch.run().args(&["unlock", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("someone@else.com");
+                .assert_stdout_contains("someone@else.com");
             assert_eq!(
                 env.git
                     .run(&["rev-parse", "hitch-metadata"])?
@@ -684,6 +684,67 @@ mod tests {
                     .trim(),
                 before,
                 "a refused unlock must not spend a metadata commit"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+    /// A refusal names its cause once — in the plan, under "Why this cannot
+    /// apply" — and the error that follows carries only what the plan does not:
+    /// that nothing changed, and what to do next. And a refusal that is only
+    /// "already so" has no "next", so it does not print a "To proceed:" with a
+    /// non-action under it.
+    #[test]
+    fn a_refused_lock_states_its_cause_once_and_a_no_op_offers_no_way_to_proceed(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["lock", "dev"])
+                .execute()?
+                .assert_success();
+
+            let locked = env.hitch.run().args(&["lock", "dev"]).execute()?;
+            let both = format!("{}{}", locked.stdout(), locked.stderr());
+            let locked = locked.assert_failure();
+            assert_eq!(
+                both.matches("is already locked").count(),
+                1,
+                "the cause is said once: {both}"
+            );
+            locked
+                .assert_stderr_contains("To proceed:")
+                .assert_stderr_contains("hitch unlock dev");
+
+            env.hitch
+                .run()
+                .args(&["unlock", "dev"])
+                .execute()?
+                .assert_success();
+            let unlocked = env.hitch.run().args(&["unlock", "dev"]).execute()?;
+            let both = format!("{}{}", unlocked.stdout(), unlocked.stderr());
+            let unlocked = unlocked.assert_failure();
+            assert_eq!(
+                both.matches("is not currently locked").count(),
+                1,
+                "the cause is said once: {both}"
+            );
+            assert!(
+                !unlocked.stderr().contains("To proceed"),
+                "there is nothing to proceed with: {}",
+                unlocked.stderr()
+            );
+            assert!(
+                !both.contains("nothing to undo"),
+                "a non-action does not go under a proceed heading: {both}"
             );
             Ok::<(), anyhow::Error>(())
         });

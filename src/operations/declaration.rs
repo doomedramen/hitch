@@ -1048,8 +1048,7 @@ fn apply_blocked_plan(
                 // own, because "re-run the promote that just conflicted" is not
                 // an answer.
                 remedy: blocking
-                    .remedy_or(&plan.kind.command_hint(environment, &plan.detail.argument))
-                    .to_string(),
+                    .remedy_for(&plan.kind.command_hint(environment, &plan.detail.argument)),
             }
             .into_anyhow())
         }
@@ -1060,7 +1059,7 @@ fn apply_blocked_plan(
         PlanWarningKind::Advisory => Err(PlanApplyError::PolicyBlocked {
             environment: environment.to_string(),
             reason: "internal error: an advisory warning was treated as blocking".to_string(),
-            remedy: plan.kind.command_hint(environment, &plan.detail.argument),
+            remedy: Some(plan.kind.command_hint(environment, &plan.detail.argument)),
         }
         .into_anyhow()),
     }

@@ -6,9 +6,10 @@
 //! are gone — so the plan has to be the whole statement of what was found, and
 //! the receipt has to be the whole statement of what was actually removed.
 //! Those are two different statements, and `OperationIntent::Cleanup` says so:
-//! its `candidates` are "what the sweep found", not "what will be deleted",
-//! because a delete can fail (a branch that is not fully merged refuses
-//! `git branch -d`, and that refusal is information, not a crash).
+//! its `candidates` are "what the sweep found", and a delete can still fail at
+//! apply time (a stale ref lock, say). A branch that is not merged is *not* such
+//! a failure: the planner asks git's own question and keeps it, so the plan never
+//! promises a deletion `git branch -d` will refuse.
 //!
 //! ## What moved here, and why it moved rather than being copied
 //!
@@ -41,13 +42,12 @@
 //!   [`stale_archive_refs`].
 
 use crate::commands::global_context::GlobalContext;
-use crate::core::state::build_state_snapshot;
 use crate::utils::prelude::{access_metadata_read_only, pre_check_repo_only};
 use anyhow::Result;
 
 use super::model::{
-    changed_inputs, ConfirmationRequirement, ExecutionReceipt, ExecutionWarning, OperationKind,
-    OperationOutcome, PlanApplyError, PlanFingerprint, PlannedEffect, UnaffectedResource,
+    changed_inputs, ConfirmationRequirement, ExecutionReceipt, OperationKind, OperationOutcome,
+    PlanApplyError, PlanFingerprint, PlanWarning, PlannedEffect, UnaffectedResource,
 };
 use super::model::{AppliedEffect, OperationIntent, OperationPlan, ResourceKind};
 
@@ -83,9 +83,14 @@ const PRUNABLE_NAMESPACES: [&str; 2] = ["backup", "prev"];
 pub struct CleanupPlanDetail {
     /// The `--env` filter, or `None` for "every environment".
     pub environment_filter: Option<String>,
-    /// Local branches that are not promoted, not reserved, and not the current
-    /// branch. Name order.
+    /// Local branches that are not promoted, not reserved, not the current
+    /// branch, and that `git branch -d` will accept. Name order.
     pub branches: Vec<String>,
+    /// Branches that passed every filter above but are not merged — into their
+    /// upstream, or into `HEAD` — so `git branch -d` would refuse them and hitch
+    /// will not force it: deleting unmerged work is data loss. Kept, and named in
+    /// the plan so the reader knows why they are not on the list. Name order.
+    pub unmerged: Vec<String>,
     /// Archive refs beyond [`ARCHIVE_REF_RETENTION`], in
     /// [`stale_archive_refs`]'s order.
     pub refs: Vec<String>,
@@ -94,7 +99,12 @@ pub struct CleanupPlanDetail {
 impl CleanupPlanDetail {
     /// Whether this sweep has anything to do.
     pub fn is_empty(&self) -> bool {
-        self.branches.is_empty() && self.refs.is_empty()
+        self.branches.is_empty() && self.refs.is_empty() && self.unmerged.is_empty()
+    }
+
+    /// Whether the sweep will delete anything at all.
+    pub fn has_deletions(&self) -> bool {
+        !self.branches.is_empty() || !self.refs.is_empty()
     }
 }
 
@@ -180,6 +190,27 @@ pub fn plan_cleanup(
     // order is the only ordering that is the same on every run.
     branches.sort();
 
+    // The predicate is git's own — see `GitOperations::branch_is_merged` — so
+    // the plan never promises a deletion `git branch -d` will refuse. The
+    // reference it measures against (the upstream, else `HEAD`) is tracked in
+    // the fingerprint below, which is what makes this a prediction the
+    // validator can check rather than one it cannot.
+    let mut unmerged: Vec<String> = Vec::new();
+    let mut references: Vec<String> = vec!["HEAD".to_string()];
+    let mut deletable: Vec<String> = Vec::new();
+    for branch in branches {
+        let reference = context.git().delete_reference_for(&branch)?;
+        if !references.contains(&reference) {
+            references.push(reference);
+        }
+        if context.git().branch_is_merged(&branch)? {
+            deletable.push(branch);
+        } else {
+            unmerged.push(branch);
+        }
+    }
+    let branches = deletable;
+
     let envs = envs_in_scope(&config, env_filter);
     let refs = stale_archive_refs(context, &envs)?;
 
@@ -196,10 +227,17 @@ pub fn plan_cleanup(
     // something live.
     let mut fingerprint = PlanFingerprint::new();
     fingerprint.metadata_sha = context.git().rev_parse_opt("refs/heads/hitch-metadata")?;
-    for name in branches.iter().chain(refs.iter()) {
+    for name in branches.iter().chain(refs.iter()).chain(unmerged.iter()) {
         let refname = fully_qualified(name);
         if let Some(sha) = context.git().rev_parse_opt(&refname)? {
             fingerprint.track_ref(refname, sha);
+        }
+    }
+    // What "merged" was measured against. A plan that outlived a commit on
+    // `HEAD` could otherwise delete a branch that had stopped being merged.
+    for reference in &references {
+        if let Some(sha) = context.git().rev_parse_opt(reference)? {
+            fingerprint.track_ref(reference.clone(), sha);
         }
     }
 
@@ -212,6 +250,21 @@ pub fn plan_cleanup(
         .collect();
 
     let found = branches.len() + refs.len();
+    let mut warnings = Vec::new();
+    if !unmerged.is_empty() {
+        warnings.push(PlanWarning::advisory(format!(
+            "Kept: {} — not merged into HEAD or its upstream, so git would refuse to \
+             delete {}. To remove {} anyway: {}",
+            unmerged.join(", "),
+            if unmerged.len() == 1 { "it" } else { "them" },
+            if unmerged.len() == 1 { "it" } else { "one" },
+            unmerged
+                .iter()
+                .map(|b| format!("`git branch -D {b}`"))
+                .collect::<Vec<_>>()
+                .join(" or "),
+        )));
+    }
     let confirmation = if found == 0 {
         ConfirmationRequirement::not_required()
     } else {
@@ -266,11 +319,12 @@ pub fn plan_cleanup(
                 })
                 .collect()
         },
-        warnings: Vec::new(),
+        warnings,
         confirmation,
         detail: CleanupPlanDetail {
             environment_filter: env_filter.map(str::to_string),
             branches,
+            unmerged,
             refs,
         },
     };
@@ -286,28 +340,39 @@ pub fn plan_cleanup(
     Ok(plan)
 }
 
+/// What an apply did: the receipt of what was removed, and the deletes that
+/// failed.
+///
+/// Two fields rather than one receipt because a failed delete is neither of the
+/// things a receipt can say. It is not an applied effect, and it is not an
+/// *owed* one — `Still owed` promises a follow-up, and nothing in hitch retries
+/// a cleanup ref, so the promise would be false. The command prints the receipt
+/// (what did apply) and then fails with `failures`.
+pub struct CleanupRun {
+    pub receipt: ExecutionReceipt,
+    /// One `refname: cause` line per delete git refused *at apply time*. The
+    /// plan already declines what git would refuse for want of a merge, so
+    /// what lands here is what it could not foresee — a stale ref lock, a
+    /// branch that changed after planning.
+    pub failures: Vec<String>,
+}
+
 /// Delete what the plan found, and report exactly what that came to.
 ///
-/// A delete that fails is **not** an `Err`. A sweep that removed 59 of 60 refs
-/// has done almost all of its work, and returning an error would leave the
-/// reader with a failed command and no list of what it managed — and a retry
-/// would re-attempt the same 59 successful deletes, which is the behaviour
-/// that makes a partially-applied bulk operation painful rather than merely
-/// imperfect. So each failure becomes one owed `ExecutionWarning` naming the
-/// command that would finish it, and the outcome stays
-/// [`OperationOutcome::Applied`].
+/// Every delete is attempted; a failure does not stop the sweep, because
+/// stopping at the first would leave the rest of a valid plan undone for one
+/// bad ref. The failures are collected in [`CleanupRun::failures`] rather than
+/// raised, so the caller can print the receipt of what *did* apply before it
+/// fails — an `Err` from in here would discard that record.
 ///
-/// The plan does not predict *which* deletes will fail, and that is a
-/// deliberate omission rather than an oversight. Whether `git branch -d` will
-/// succeed is a property of the commit graph, not of the ref's value, so it is
-/// the one fact here that `PlanFingerprint` cannot protect: a branch's tip can
-/// be identical at plan time and apply time while the branch became merged in
-/// between. A prediction the validator cannot check is worse than none, and
-/// the receipt is where a fact the apply learned belongs.
+/// Whether a branch is *merged* is decided by the plan, not here: the planner
+/// asks git's own question and leaves an unmerged branch out, so a
+/// `git branch -d` refusal is no longer an expected outcome that needs a
+/// receipt section of its own.
 pub fn apply_cleanup_plan(
     context: &GlobalContext,
     plan: &OperationPlan<CleanupPlanDetail>,
-) -> Result<ExecutionReceipt> {
+) -> Result<CleanupRun> {
     let started_at = chrono::Utc::now();
     validate_cleanup_plan(context, plan).map_err(PlanApplyError::into_anyhow)?;
 
@@ -319,29 +384,32 @@ pub fn apply_cleanup_plan(
                 .clone()
                 .unwrap_or_else(|| "all".to_string()),
             reason: blocking.message.clone(),
-            remedy: blocking
-                .remedy_or(&plan.kind.command_hint("cleanup", ""))
-                .to_string(),
+            remedy: blocking.remedy_for(&plan.kind.command_hint("cleanup", "")),
         }
         .into_anyhow());
     }
 
     let detail = plan.detail.clone();
-    if detail.is_empty() {
-        return Ok(ExecutionReceipt {
-            plan_id: plan.id.clone(),
-            operation: plan.kind,
-            started_at,
-            completed_at: chrono::Utc::now(),
-            outcome: OperationOutcome::NoChange,
-            effects: Vec::new(),
-            warnings: Vec::new(),
-            resulting_state: build_state_snapshot(context).ok(),
+    // Also the case where the sweep kept an unmerged branch and found nothing
+    // else: there is nothing to write, and saying so is `NoChange`.
+    if !detail.has_deletions() {
+        return Ok(CleanupRun {
+            receipt: ExecutionReceipt {
+                plan_id: plan.id.clone(),
+                operation: plan.kind,
+                started_at,
+                completed_at: chrono::Utc::now(),
+                outcome: OperationOutcome::NoChange,
+                effects: Vec::new(),
+                warnings: Vec::new(),
+                resulting_state: None,
+            },
+            failures: Vec::new(),
         });
     }
 
     let mut effects: Vec<AppliedEffect> = Vec::new();
-    let mut warnings: Vec<ExecutionWarning> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
 
     for branch in &detail.branches {
         let refname = format!("refs/heads/{branch}");
@@ -356,17 +424,7 @@ pub fn apply_cleanup_plan(
                 refname,
                 old: old.unwrap_or_default(),
             }),
-            // git's own first line, not the whole of it. `git branch -d` on an
-            // unmerged branch prints the refusal *and* a two-line hint *and* a
-            // config suggestion, and a receipt that quoted all of it would be
-            // four lines of advice ending in a full stop after a newline — with
-            // hitch's remedy appended to a hint that already said the same
-            // thing. The cause is git's to state and it states it well in one
-            // line; the remedy is ours, because git only offers it as a hint.
-            Err(e) => warnings.push(owed(&format!(
-                "{}. To remove it anyway: `git branch -D {branch}`",
-                first_line(&e)
-            ))),
+            Err(e) => failures.push(format!("{refname}: {}", first_line(&e))),
         }
     }
 
@@ -377,22 +435,26 @@ pub fn apply_cleanup_plan(
                 refname: refname.clone(),
                 old: old.unwrap_or_default(),
             }),
-            Err(e) => warnings.push(owed(&format!(
-                "{}. To remove it anyway: `git update-ref -d {refname}`",
-                first_line(&e)
-            ))),
+            Err(e) => failures.push(format!("{refname}: {}", first_line(&e))),
         }
     }
 
-    Ok(ExecutionReceipt {
-        plan_id: plan.id.clone(),
-        operation: plan.kind,
-        started_at,
-        completed_at: chrono::Utc::now(),
-        outcome: OperationOutcome::Applied,
-        effects,
-        warnings,
-        resulting_state: build_state_snapshot(context).ok(),
+    Ok(CleanupRun {
+        receipt: ExecutionReceipt {
+            plan_id: plan.id.clone(),
+            operation: plan.kind,
+            started_at,
+            completed_at: chrono::Utc::now(),
+            outcome: OperationOutcome::Applied,
+            effects,
+            warnings: Vec::new(),
+            // No `Result` block: a sweep of refs says nothing about what any
+            // environment contains, and listing every environment under a
+            // branch deletion is noise the reader has to skim past. Environment
+            // branches and their state refs are reserved from the sweep anyway.
+            resulting_state: None,
+        },
+        failures,
     })
 }
 
@@ -418,24 +480,10 @@ pub fn validate_cleanup_plan(
     ))
 }
 
-/// An effect hitch did not carry out, and the command that would.
-///
-/// `owes_effect: true` with no exceptions, and this function is the only way a
-/// cleanup receipt gets a warning — which is the point the plan's test suite
-/// holds. A non-owed warning here would be a fact discovered while applying
-/// that nothing else was owed for, and there is no such fact in this file.
-fn owed(message: &str) -> ExecutionWarning {
-    ExecutionWarning {
-        message: message.to_string(),
-        owes_effect: true,
-    }
-}
-
 /// An error's first non-empty line, which is where git puts the cause.
 ///
 /// Git's own stderr puts the diagnosis on line one and everything after it on
-/// the remedy, and hitch appends its own remedy. Three renderings of one fact,
-/// with the reader to work out which one to believe.
+/// hints; quoting all of it would print advice under a failure it does not fit.
 fn first_line(error: &anyhow::Error) -> String {
     error
         .to_string()

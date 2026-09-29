@@ -233,17 +233,16 @@ mod tests {
         Ok(())
     }
 
-    /// `cleanup`: a partial run is 0, and `--json` without `--yes` is 1.
+    /// `cleanup`: a sweep that keeps an unmerged branch is 0, a delete that fails
+    /// at apply time is 1, and `--json` without `--yes` is 1.
     ///
-    /// The partial case is the one worth stating. `hitch cleanup` sweeps
-    /// branches and archive refs it is *allowed* to touch, and `git branch -d`
-    /// refuses a branch that is not merged — the ordinary shape of a feature
-    /// that was promoted and then demoted. Half the sweep landing is half the
-    /// job done, and the receipt says which ref is still owed. Exiting non-zero
-    /// would make a mostly-finished cleanup indistinguishable from a failed one,
-    /// which is the code a caller actually needs to tell apart.
+    /// The first is not a partial failure: the planner declines what
+    /// `git branch -d` would refuse and says so, so nothing was attempted and
+    /// nothing is owed. The second is a real failure and exits like one, after
+    /// the receipt of what did apply.
     #[test]
-    fn a_partial_cleanup_exits_zero_because_it_owes_nothing_but_a_ref() -> anyhow::Result<()> {
+    fn cleanup_exits_zero_when_it_keeps_a_branch_and_one_when_a_delete_fails() -> anyhow::Result<()>
+    {
         let framework = HitchTestFramework::new()?;
         framework.with_test_environment(TestSetup::HitchInit, |env| {
             expect_code(
@@ -252,19 +251,29 @@ mod tests {
                 0,
             );
 
-            // Never merged into `main`, so `-d` refuses it.
+            // Never merged into `main`, so `-d` would refuse it and the plan
+            // leaves it out.
             env.git.run(&["checkout", "-b", "feat-stranded"])?;
             env.fs.write_file("stranded.txt", "content")?;
             env.git.run(&["add", "-f", "stranded.txt"])?;
             env.git.run(&["commit", "-m", "Add feat-stranded"])?;
             env.git.run(&["checkout", "main"])?;
 
-            let partial = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
-            expect_code("cleanup --apply (one refused delete)", &partial, 0);
+            let kept = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
+            expect_code("cleanup --apply (one branch kept)", &kept, 0);
             assert!(
-                partial.stdout().contains("Still owed"),
-                "a 0 here is only honest because the receipt names what is owed:\n{}",
-                partial.stdout(),
+                !kept.stdout().contains("Still owed"),
+                "nothing is owed for a kept branch:\n{}",
+                kept.stdout(),
+            );
+
+            // A refusal the plan cannot foresee: a stale lock on the ref.
+            env.git.run(&["branch", "feat-locked"])?;
+            env.fs.write_file(".git/refs/heads/feat-locked.lock", "")?;
+            expect_code(
+                "cleanup --apply (a delete fails)",
+                &env.hitch.run().args(&["cleanup", "--apply"]).execute()?,
+                1,
             );
 
             expect_code(

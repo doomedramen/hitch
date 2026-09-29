@@ -17,10 +17,10 @@
 //! effect is one [`modify_metadata`] closure, and `modify_metadata_impl` runs
 //! the closure *before* `write_file`/`commit_branch_write` — so a closure that
 //! returns `Err` has committed nothing at all. That is the whole of the safety
-//! argument, and it is why the two `attempt_*_rollback` helpers in
-//! `approvals/approve.rs` are, on every path that reaches them, restoring a
-//! snapshot onto a ref that already holds it: a no-op commit wrapped in a
-//! narrative about a repair. Promote and demote *do* keep their rollback,
+//! argument, and it is why the two `attempt_*_rollback` helpers that
+//! `approvals/approve.rs` used to carry were deleted: on every path that
+//! reached them they restored a snapshot onto a ref that already held it — a
+//! no-op commit wrapped in a narrative about a repair. Promote and demote *do* keep their rollback,
 //! because their nested rebuild can fail *after* the edit commits and leave the
 //! declaration and the environment branch disagreeing. Nothing in this file has
 //! that shape, and a rollback added "just in case" would be a second code path
@@ -257,21 +257,15 @@ fn plan_lock_change(
         }
         MetadataEdit::Unlock => {
             if !declared.is_locked() {
-                // No unblocker, so no command. The environment is already in
-                // the state the command was asked to put it in, and pointing
-                // at the *other* lock flag would answer a question the reader
-                // did not ask: they typed `unlock`, so `hitch lock dev` reads
-                // as an instruction to do the opposite of what they wanted. A
-                // remedy line is allowed to be a sentence for exactly this case
-                // — see the stranger's refusal below.
+                // Nothing to unblock: the environment is already in the state
+                // the command was asked to put it in, and pointing at `hitch
+                // lock` would read as an instruction to do the opposite.
                 warnings.push(
                     PlanWarning::policy_refusal(format!(
                         "Environment '{}' is not currently locked",
                         environment
                     ))
-                    .with_remedy(format!(
-                        "nothing to undo — '{environment}' is already unlocked"
-                    )),
+                    .with_nothing_to_do(),
                 );
             } else if let Some(holder) = holder.as_deref() {
                 if holder != you {
@@ -443,9 +437,9 @@ pub fn plan_set_environment(
     let branch_sha = context
         .git()
         .rev_parse_opt(&format!("refs/heads/{}", environment))?;
-    let projected = |branches: Vec<PinnedBranch>| EnvironmentProjection {
+    let projected = |base: &str, branches: Vec<PinnedBranch>| EnvironmentProjection {
         environment: environment.to_string(),
-        base: effective.base.clone(),
+        base: base.to_string(),
         branches,
         branch_sha: branch_sha.clone(),
     };
@@ -464,8 +458,8 @@ pub fn plan_set_environment(
             changes: changes.clone(),
         },
         fingerprint: metadata_fingerprint(context)?,
-        current: Some(projected(current_branches)),
-        proposed: Some(projected(proposed_branches)),
+        current: Some(projected(&declared.base, current_branches)),
+        proposed: Some(projected(&effective.base, proposed_branches)),
         compositions: Vec::new(),
         // Empty for a blocked plan, because none of them will happen.
         effects: if blocked {
@@ -560,18 +554,15 @@ fn plan_create_or_destroy(
                 // do, and a remedy naming a flag would send the reader to run a
                 // command that changes nothing. The default would be worse
                 // still: `hitch add qa`, the command that just refused.
-                let remedy = if declared.base == *base {
-                    format!("nothing to declare — '{environment}' is already on base {base}")
+                let refusal = PlanWarning::policy_refusal(format!(
+                    "Environment '{}' already exists in the configuration",
+                    environment
+                ));
+                warnings.push(if declared.base == *base {
+                    refusal.with_nothing_to_do()
                 } else {
-                    format!("hitch set {environment} --base {base}")
-                };
-                warnings.push(
-                    PlanWarning::policy_refusal(format!(
-                        "Environment '{}' already exists in the configuration",
-                        environment
-                    ))
-                    .with_remedy(remedy),
-                );
+                    refusal.with_remedy(format!("hitch set {environment} --base {base}"))
+                });
                 // …and the plan proposes nothing, because a refused `add` will
                 // not declare anything. The `Proposed` line would otherwise
                 // read `qa = main` above a refusal that `qa` is already
@@ -804,13 +795,11 @@ pub fn apply_metadata_plan(
             // file names one, because every refusal here has an unblocker that
             // is *not* this command — re-running the command that just refused
             // is the one move guaranteed to refuse again.
-            remedy: blocking
-                .remedy_or(
-                    &plan
-                        .kind
-                        .command_hint(&plan.detail.environment, &plan.detail.argument),
-                )
-                .to_string(),
+            remedy: blocking.remedy_for(
+                &plan
+                    .kind
+                    .command_hint(&plan.detail.environment, &plan.detail.argument),
+            ),
         }
         .into_anyhow());
     }
@@ -1162,28 +1151,42 @@ fn describe_set(
     // the base has silently stopped being promoted. Saying it here rather than
     // leaving it to the `Result` block is the difference between the reader
     // finding it and the reader being shown it.
+    let base_move = changes
+        .iter()
+        .find_map(|c| match (c.field, &c.old, &c.new) {
+            (
+                EnvironmentField::Base,
+                EnvironmentFieldValue::Branch(old),
+                EnvironmentFieldValue::Branch(new),
+            ) => Some((old.as_str(), new.as_str())),
+            _ => None,
+        });
     if let Some(branch) = absorbed {
+        let from = base_move
+            .map(|(old, _)| format!(" from '{old}'"))
+            .unwrap_or_default();
         return format!(
-            "update base of '{}' to '{}', absorbing promoted branch '{}'",
-            environment, branch, branch
+            "update base of '{}'{} to '{}', absorbing promoted branch '{}'",
+            environment, from, branch, branch
         );
     }
     if changes.is_empty() {
         return format!("no settings change to '{}'", environment);
     }
-    format!(
+    let fields = format!(
         "update {} of '{}'",
         changed_fields(changes).join(", "),
         environment
-    )
+    );
+    // The move itself, because "update base" alone leaves the reader to work
+    // out which way it went. The other fields' values live in the typed change.
+    match base_move {
+        Some((old, new)) if changes.len() == 1 => format!("{fields}: {old} → {new}"),
+        Some((old, new)) => format!("{fields} (base: {old} → {new})"),
+        None => fields,
+    }
 }
 
-/// The receipt's line, read back from the declaration rather than copied from
-/// the plan.
-///
-/// The lock holder is the one case where they can differ — a plan resolves the
-/// email at plan time and the declaration records whatever the write produced —
-/// and a receipt is a record, so the record's value is the one that goes in.
 fn describe_applied(
     plan: &OperationPlan<MetadataPlanDetail>,
     observed: Option<&Environment>,

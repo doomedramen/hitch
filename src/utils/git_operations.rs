@@ -1224,6 +1224,44 @@ impl GitOperations {
         Ok(())
     }
 
+    /// What `git branch -d` measures a branch against: its upstream when one is
+    /// configured and still resolves, otherwise `HEAD`.
+    ///
+    /// Returned as the refname the ancestry test is run against, so a caller
+    /// can both ask [`Self::branch_is_merged`] and name the reference in a
+    /// sentence.
+    pub fn delete_reference_for(&self, branch: &str) -> Result<String> {
+        let upstream = self.run_git_command(&[
+            "for-each-ref",
+            "--format=%(upstream)",
+            &format!("refs/heads/{branch}"),
+        ])?;
+        let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
+        if !upstream.is_empty() && self.rev_parse_opt(&upstream)?.is_some() {
+            return Ok(upstream);
+        }
+        Ok("HEAD".to_string())
+    }
+
+    /// Whether `git branch -d` would accept `branch`: its tip is an ancestor of
+    /// [`Self::delete_reference_for`]'s reference.
+    ///
+    /// The same predicate git applies, so a plan can decline to propose a delete
+    /// git will refuse. Unresolvable answers (no `HEAD`, a broken ref) are
+    /// `false`: a branch hitch cannot prove integrated is one it does not delete.
+    pub fn branch_is_merged(&self, branch: &str) -> Result<bool> {
+        let reference = self.delete_reference_for(branch)?;
+        Ok(self
+            .run_git_command(&[
+                "merge-base",
+                "--is-ancestor",
+                &format!("refs/heads/{branch}"),
+                &reference,
+            ])?
+            .status
+            .success())
+    }
+
     /// Delete a branch (local)
     pub fn delete_branch(&self, branch: &str, force: bool) -> Result<()> {
         // Get current branch to ensure we're not trying to delete the branch we're on

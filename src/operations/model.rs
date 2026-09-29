@@ -554,6 +554,12 @@ pub struct PlanWarning {
     /// reader's actual next move is — so a new refusal must say what that is
     /// rather than inheriting a re-run.
     pub remedy: Option<String>,
+    /// The refusal is that the environment is *already* what the command asked
+    /// for, so there is no action that would help and no "To proceed" to print.
+    /// A remedy line reading "nothing to undo" under that heading is a sentence
+    /// that answers a question nobody asked.
+    #[serde(default)]
+    pub nothing_to_do: bool,
 }
 
 impl PlanWarning {
@@ -564,6 +570,7 @@ impl PlanWarning {
             message: message.into(),
             kind: PlanWarningKind::ApprovalRequired,
             remedy: None,
+            nothing_to_do: false,
         }
     }
 
@@ -574,6 +581,7 @@ impl PlanWarning {
             message: message.into(),
             kind: PlanWarningKind::PolicyRefusal,
             remedy: None,
+            nothing_to_do: false,
         }
     }
 
@@ -583,11 +591,29 @@ impl PlanWarning {
             message: message.into(),
             kind: PlanWarningKind::Advisory,
             remedy: None,
+            nothing_to_do: false,
         }
     }
 
     /// Replace the default "re-run this command" remedy with the one that
     /// actually unblocks the reader.
+    /// Mark a refusal that has no unblocker because nothing is wrong: the
+    /// requested state already holds.
+    pub fn with_nothing_to_do(mut self) -> Self {
+        self.nothing_to_do = true;
+        self
+    }
+
+    /// The remedy the raised error should carry: `None` for a refusal that has
+    /// nothing to do, otherwise [`Self::remedy_or`].
+    pub fn remedy_for(&self, fallback: &str) -> Option<String> {
+        if self.nothing_to_do {
+            None
+        } else {
+            Some(self.remedy_or(fallback).to_string())
+        }
+    }
+
     pub fn with_remedy(mut self, remedy: impl Into<String>) -> Self {
         self.remedy = Some(remedy.into());
         self
@@ -1142,14 +1168,18 @@ pub enum PlanApplyError {
     // siblings, whose remedy is a rebase and not a policy override. A message
     // that named the wrong remedy would have forced that refusal to be
     // something it is not.
+    // The reason is not restated: the plan printed above this error already
+    // carries it under "Why this cannot apply", and one cause said twice reads as
+    // two failures. It stays a field for callers that downcast.
     #[error(
-        "The plan for '{environment}' was refused by policy:\n  {reason}\n\
-         Nothing was changed. To proceed:\n  {remedy}"
+        "The plan for '{environment}' was refused by policy, for the reason given \
+         in the plan above.\nNothing was changed.{}", proceed_with(.remedy)
     )]
     PolicyBlocked {
         environment: String,
         reason: String,
-        remedy: String,
+        /// `None` when nothing would help — the state asked for already holds.
+        remedy: Option<String>,
     },
 
     #[error(
@@ -1181,6 +1211,13 @@ pub enum PlanApplyError {
         detail: String,
         remedy: String,
     },
+}
+
+fn proceed_with(remedy: &Option<String>) -> String {
+    match remedy {
+        Some(remedy) => format!(" To proceed:\n  {remedy}"),
+        None => String::new(),
+    }
 }
 
 impl PlanApplyError {
@@ -1681,7 +1718,7 @@ mod tests {
             PlanApplyError::PolicyBlocked {
                 environment: "dev".into(),
                 reason: "on-conflict is halt".into(),
-                remedy: "hitch rebuild dev --force".into(),
+                remedy: Some("hitch rebuild dev --force".into()),
             }
             .to_string(),
             PlanApplyError::Conflict {

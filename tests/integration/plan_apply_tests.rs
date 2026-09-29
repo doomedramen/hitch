@@ -2470,21 +2470,25 @@ mod tests {
                 approved_receipt.warnings
             );
 
-            // The one operation whose receipt *should* carry a warning, and the
-            // reason the distinction exists: a refused `git branch -d` is a fact
-            // about the commit graph that no fingerprint could have protected,
-            // so the plan cannot predict it and the apply has to report it.
-            //
-            // This is the arm that would fail if `cleanup`'s plan started
-            // predicting the failure — which would be the double print, arriving
-            // from a new direction.
+            // A cleanup used to be the one operation whose receipt carried a
+            // warning: a refused `git branch -d`. The plan now asks git's own
+            // question and keeps an unmerged branch, saying so *in the plan* as
+            // an advisory — which is where a prediction belongs — so the receipt
+            // has nothing to restate and nothing owed.
             unmergeable_branch(env, "feat-stranded")?;
             let cleanup = plan_cleanup(&context_for(env, false)?, None)?;
-            let cleanup_receipt = apply_cleanup_plan(&context_for(env, false)?, &cleanup)?;
             assert!(
-                !cleanup_receipt.warnings.is_empty(),
-                "this arm is vacuous unless a refused delete produced an owed \
-                 warning: {:?}",
+                cleanup
+                    .warnings
+                    .iter()
+                    .any(|w| w.message.contains("feat-stranded")),
+                "this arm is vacuous unless the plan carries the kept-branch advisory: {:?}",
+                cleanup.warnings
+            );
+            let cleanup_receipt = apply_cleanup_plan(&context_for(env, false)?, &cleanup)?.receipt;
+            assert!(
+                cleanup_receipt.warnings.is_empty(),
+                "{:?}",
                 cleanup_receipt.warnings
             );
             assert_no_restated_warning(&cleanup, &cleanup_receipt);

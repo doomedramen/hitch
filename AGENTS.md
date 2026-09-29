@@ -121,11 +121,19 @@ covered.
   module), `src/cli.rs` (add the `Commands` variant), `src/main.rs` (add to
   both the `command_name` match and the dispatch match, and to
   `command_is_mutating` if it's read-only). The global flags live here too:
-  `--json` is `global = true` and its doc comment **names the six commands that
-  honour it** (`rebuild`, `promote`, `demote`, `release`, `status`, `why`) and
-  says that a command without support says so rather than printing prose. That
-  list is asserted in prose deliberately — it is the difference between a
-  documented partial and a silent one. The two read-only ones use a
+  `--json` is `global = true` and its doc comment **names the thirteen commands
+  that honour it** (`rebuild`, `promote`, `demote`, `release`, `lock`, `unlock`,
+  `set`, `add`, `remove`, `cleanup`, `approvals approve`, `status`, `why` —
+  every mutating command plus the two read-only ones) and says that a command
+  without support leaves stdout **empty** rather than printing prose. Both halves
+  of that are load-bearing and the second is easy to get wrong in the direction
+  that looks safer: "says so" implies a diagnostic on stdout, and the mechanism
+  is the opposite — under `--json` the `log_*` sinks all go to stderr, so a
+  command with no support says nothing there either. `tests/integration/json_support_tests.rs`
+  parses the thirteen names out of the doc comment's own backticks and compares
+  them as sets, both directions, against the command files in `src/commands/`
+  that actually reach `emit_json`/`emit_plan`/`emit_receipt` — so neither a
+  dropped command nor an invented one survives. The two read-only ones use a
   **one-half envelope**, `{"schema_version": 1, "<view>": …}`, not the
   mutations' `{"plan", "receipt"}` — a read-only view has no "after", and a
   `null` receipt would say "nothing happened", which is true and useless. Every
@@ -134,13 +142,22 @@ covered.
   `PascalCase` token, so a new enum cannot forget the rename.
 - `src/commands/*.rs` — one file per CLI command/subcommand, thin: arg
   parsing (`clap::Args` struct) + orchestration. Business logic belongs in
-  `src/utils/prelude.rs` or a dedicated `src/utils/*.rs` module, not here.
-  The four mutating commands share one shape and it is worth copying rather
-  than reinventing: pre-checks, then `with_auto_stash` → `with_locked_env` →
-  plan → `confirm_plan` → apply → `emit_receipt` (or `emit_plan` alone for a
+  `src/utils/prelude.rs`, a dedicated `src/utils/*.rs` module, or the
+  `src/operations/<op>.rs` that owns the command's plan, not here. The mutating
+  commands share one shape and it is worth copying rather than reinventing:
+  pre-checks, then `with_auto_stash` → `with_locked_env` → plan →
+  `confirm_plan` → apply → `emit_receipt` (or `emit_plan` alone for a
   `--dry-run`, which plans *outside* the lock and never applies). `emit_plan`
   and `emit_receipt` are separate because the gate already printed the plan;
-  a combined emitter prints it twice.
+  a combined emitter prints it twice. Two shapes in that sentence are *not*
+  shared by every command and the departures are deliberate: a metadata
+  operation (`set`, `add`, `remove`, `lock`, `unlock`) is a one-shot declaration
+  edit, so it is planned and applied under `with_locked_env` but composed from
+  `access_metadata_read_only` rather than from a pinned environment, and it has
+  no anchor to discard because it composes nothing. `hitch cleanup` has no
+  environment lock at all — it sweeps refs and branches across every
+  environment, so the `with_locked_env` it would need is the set of all of
+  them.
 - `src/utils/prelude.rs` — the domain-logic hub: rebuild orchestration,
   metadata read/write transactions (`access_metadata_read_only`,
   `modify_metadata`), locking (`with_locked_env`), the conflict-preflight
@@ -273,18 +290,28 @@ covered.
   `ExecutionWarning`, `ExecutionReceipt`, `OperationOutcome`, `PlanApplyError`,
   plus the shared `changed_inputs` diff helper every validator calls);
   `rebuild.rs` holds `plan_rebuild`/`apply_rebuild_plan` and `PlanPurpose`;
-  `declaration.rs` holds the promote/demote planner+executor; `release.rs` holds
-  release's. A new operation adds a `*PlanDetail` and a `plan_*`/`apply_*` pair,
-  and reuses the fingerprint, validation, and receipt assembly as shared
+  `declaration.rs` holds the promote/demote planner+executor, plus
+  `plan_approved_declaration_change` for `hitch approve`; `release.rs` holds
+  release's; `metadata.rs` holds the five declaration-editing operations
+  (`set`, `add`, `remove`, `lock`, `unlock`) behind one `MetadataEdit`
+  discriminator and one `MetadataPlanDetail`; `cleanup.rs` holds the prune
+  sweep. A new operation adds a `*PlanDetail` and a `plan_*`/`apply_*` pair,
+  an `OperationKind` variant (append to `OPERATION_KINDS` — a test walks it),
+  and an `OperationIntent` variant (a headline test walks that list too), and
+  reuses the fingerprint, validation, and receipt assembly as shared
   machinery rather than re-deriving them. One planner per operation, on purpose
   — see the "one planner per operation" gotcha. `rebuild_environment_gated` in
   `src/utils/prelude.rs` is the one plan-then-apply *sequence*: it plans, hands
   the finished plan to a caller-supplied `FnOnce(&plan) -> Result<bool>` gate,
   and applies, returning `RebuildRun { plan, receipt }` with `Ok(None)` meaning
-  declined. A fifth operation should reach for it rather than write its own —
+  declined. A sixth operation should reach for it rather than write its own —
   the ordering it gets right (the `finally` that discards the anchor, and the
   discard on *both* non-applying arms) is exactly the kind of thing a
-  hand-rolled copy gets wrong.
+  hand-rolled copy gets wrong. `validate_metadata_plan` and
+  `validate_cleanup_plan` are *separate copies* of `validate_plan` rather than
+  instantiations of it, because the fingerprint's meaning differs per operation
+  and unifying them turned out to need a type parameter rather than a
+  parameter; extract on the third copy, not before.
 - `src/types.rs` — `HitchConfig`/`Environment`/`ApprovalRequest` etc., the
   schema persisted as `hitch.json`. Adding a field needs `#[serde(default)]`
   (or a default fn) so older configs still deserialize, and — if it should
@@ -786,13 +813,39 @@ declaration is being changed under it. This was live in
 `approvals/approve.rs`: an approved branch landed in `hitch.json` and never in
 the environment branch, and the two disagreed until something unrelated
 triggered another build. Same bug class as the wrong-merge-base one above — a
-shape that reads correctly and is not. Fixed by splitting
-`apply_declaration_change` (metadata only) from `rebuild_after_approval`
-(called after `modify_metadata` returns, still inside `with_locked_env`);
-pinned by the `cat-file` assertion in
+shape that reads correctly and is not. Since P8 the approval's own
+`modify_metadata` only records the vote; the promotion is then planned by
+`plan_approved_declaration_change` and applied by `apply_declaration_plan`
+*after* that transaction returns, still inside `with_locked_env`, so its nested
+rebuild reads the committed declaration. Pinned by the `cat-file` assertion in
 `test_automatic_application_on_threshold`. Generalise: if a new command wants to
 "update the declaration and rebuild" as one step, that rebuild goes *after* the
 transaction returns, not inside the closure.
+
+**A metadata operation has no rollback, because its whole effect is one
+closure that runs before its commit.** `set`, `add`, `remove`, `lock`, `unlock`
+and `hitch approve` each make their edit inside one `modify_metadata` closure,
+and `modify_metadata_impl` runs that closure *before* `write_file` /
+`commit_branch_write` — so a closure `Err` has committed nothing. A rollback
+there restores a snapshot onto a ref that already holds it: `approve.rs`'s two
+`attempt_*_rollback` helpers did exactly that on every path that reached them,
+costing an extra `hitch-metadata` commit per refusal and narrating a repair of
+nothing. They are gone. Promote and demote keep theirs only because their
+nested rebuild can fail *after* the edit commits. Do not add a "just in case"
+rollback to a metadata operation; a refusal's cost is exactly the lock and
+unlock commits, which the crash-recovery tests read.
+
+**A `DeclarationChange` variant is how a new direction joins an existing
+planner — not a new parameter, and not a new planner.** `hitch approve` needed
+promote's plan with the approval gate already satisfied. A `skip_approval: bool`
+on `plan_declaration_change` would be a promote with a hole in it that any
+caller could open; a separate planner would duplicate the edit → snapshot →
+rebuild steps that must stay in agreement. So it is
+`DeclarationChange::ApprovedApply { direction, .. }`, and `kind()` is a method on
+the change, so the plan's kind, headline and `command_hint` remedy (`hitch
+approve …`, not `hitch promote …`) cannot disagree with the change they
+describe. Direction is a *field*, because every downstream arm asks only "which
+way" and "already authorised?", and a demotion can be approval-gated too.
 
 **A failed dependent rebuild is an owed effect, not an error, and
 `rollback_metadata_changes` cannot repair it.** Promote, demote, and release
@@ -906,6 +959,30 @@ and passed `"✓ Automatic rollback completed successfully"` to `log_success`, w
 already prefixes `✅` — the glyph printed twice. The `log_*` sinks own the glyph
 (see `utils/output.rs`); a message must not carry its own.
 
+**A refusal's cause is in the plan, and `PolicyBlocked`'s `Display` does not
+repeat it.** The plan prints the blocking warning under "Why this cannot apply"
+and then the apply raises `PolicyBlocked`, so a `Display` that restated `reason`
+said one sentence twice (`lock` on a locked environment). It now says "for the
+reason given in the plan above", then `Nothing was changed.`, then `To proceed:`
+and the remedy — so tests assert the *cause* on stdout (the plan), not stderr.
+A refusal that is only "already so" (`unlock` on an unlocked environment, `add`
+of an existing environment on the same base) is `PlanWarning::with_nothing_to_do`,
+`remedy: None`, and prints no `To proceed:` at all: a non-action under that
+heading answers a question nobody asked.
+
+**`hitch cleanup` plans only deletions `git branch -d` will accept, and a delete
+that fails anyway is a failure, not an owed effect.** The planner asks git's own
+question (`GitOperations::branch_is_merged`: tip is an ancestor of the upstream,
+else `HEAD`) and puts a branch that fails it in `CleanupPlanDetail::unmerged` —
+kept, named in an advisory with the `git branch -D` the *reader* can run; hitch
+never forces, because deleting unmerged work is data loss. `HEAD` and the upstream
+are in the fingerprint, so the prediction is one the validator can check. What
+`apply_cleanup_plan` still cannot foresee (a stale ref lock) comes back in
+`CleanupRun::failures`; the command prints the receipt of what applied and *then*
+fails (exit 1). It is not `Still owed`: nothing retries a cleanup. The receipt has
+no `resulting_state` — a `Result` block of every environment under a branch
+deletion is noise.
+
 **A decision the plan can make at plan time belongs in the plan, and a
 decision about the release's own result must be evaluated against the planned
 result, not the live ref.** Two instances. (1) `plan_dependents` runs
@@ -1013,11 +1090,12 @@ between them. The in-tree comment on `rebuild_environment_opts` claimed the
 nested path printed the transcript *instead of* a plan and receipt; it did not,
 it printed it *in addition to* both, and then threw both away.
 `StepNarration::Suppressed` is now the default, so a caller that has a plan and
-a receipt of its own gets silence by omission, and `StepNarration::Log` is the
-exception taken by exactly one call site — `src/commands/approvals/approve.rs`,
-the one mutating command that has no plan. If you add a mutating command, the
-right answer is no argument at all; the argument exists for the exception, not
-for the rule. Generalise: a second voice for the same operation is a bug even
+a receipt of its own gets silence by omission. Since P8 gave `hitch approve` a
+plan, **every** caller passes `Suppressed` and `StepNarration::Log` has no call
+site at all — the variant, the enum, and the `on_step` callbacks threaded
+through `plan_rebuild`/`apply_rebuild_plan`/`compose_environment` are dead
+plumbing left for P10's legacy removal, not a hook to reach for. If you add a
+mutating command, it has a plan and a receipt, so it narrates nothing. Generalise: a second voice for the same operation is a bug even
 when it is individually accurate, and the parameters to thread are usually
 better off inverted so silence is the default.
 

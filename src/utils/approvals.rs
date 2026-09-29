@@ -196,34 +196,13 @@ pub fn approve_request(
     // Add approval
     request.add_approval(approver_email, comment);
 
-    context.log_info(&format!("Approval recorded for request {}", request_id));
-
-    // Check if threshold is met
+    // Silent on purpose: the caller reports the outcome once the write has
+    // landed, and a line printed from inside the transaction would describe a
+    // commit that had not happened yet.
     if request.threshold_met(min_approvals) {
         request.mark_approved();
-        context.log_info(&format!(
-            "Approval threshold met ({} approvals)",
-            request.approval_count()
-        ));
         return Ok(true); // Threshold met, ready to execute
     }
-
-    // Show remaining approvals needed
-    let remaining = min_approvals - request.approval_count();
-    let remaining_approvers =
-        crate::utils::authorization::get_remaining_approvers(&environment, request);
-
-    context.log_info(&format!(
-        "Approvals: {}/{}\nWaiting for {} more approval(s) from:\n{}",
-        request.approval_count(),
-        min_approvals,
-        remaining,
-        remaining_approvers
-            .iter()
-            .map(|a| format!("  - {}", a))
-            .collect::<Vec<_>>()
-            .join("\n")
-    ));
 
     Ok(false) // Threshold not yet met
 }

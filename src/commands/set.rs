@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
+use crate::core::render::{confirm_plan, emit_plan, emit_preview_note, emit_receipt, render_plan};
 use crate::operations::metadata::{apply_metadata_plan, plan_set_environment, EnvironmentSet};
 use crate::types::OnConflict;
 use crate::utils::validation::{validate_base_branch_exists, validate_name};
@@ -101,6 +101,7 @@ pub fn run(args: SetCommand, context: &GlobalContext) -> Result<()> {
         // no composition for a preview to describe more optimistically than the
         // apply would.
         emit_plan(context, &plan)?;
+        emit_preview_note(context, "nothing was changed");
         return Ok(());
     }
 

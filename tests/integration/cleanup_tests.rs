@@ -35,6 +35,14 @@ mod tests {
                 .args(&["demote", "feat-demoted", "dev"])
                 .execute()?
                 .assert_success();
+            // Merged, so `git branch -d` accepts it and the plan can propose it.
+            env.git.run(&[
+                "merge",
+                "--no-ff",
+                "feat-demoted",
+                "-m",
+                "Merge feat-demoted",
+            ])?;
 
             // The candidate list is the plan's "Will change" table, and each row
             // names a verb — a bare list of names is not a statement about what
@@ -148,6 +156,8 @@ mod tests {
                 .args(&["demote", "feat-gone", "dev"])
                 .execute()?
                 .assert_success();
+            env.git
+                .run(&["merge", "--no-ff", "feat-gone", "-m", "Merge feat-gone"])?;
 
             let result = env.hitch.run().args(&["cleanup"]).execute()?;
             let stdout = result.stdout();
@@ -450,15 +460,14 @@ mod tests {
     // ── plan → apply → receipt ──────────────────────────────────────────
     //
     // A cleanup is the only operation whose effects are deletions, and that
-    // makes three of its properties unshared: the plan cannot be re-derived
-    // (the refs are gone), the executor can fail a delete without anything
-    // being wrong (a branch that is not fully merged refuses `git branch -d`),
-    // and it is the only place in the programme where a receipt's `warnings` is
-    // legitimately populated. Each of those gets a test.
+    // makes two of its properties unshared: the plan cannot be re-derived (the
+    // refs are gone), and the planner has to ask git's own "is it merged"
+    // question so it never promises a delete `git branch -d` will refuse. Each
+    // of those gets a test.
 
     /// A branch merged into `main`, and one that is not. The pair is what makes
-    /// the second test real: `git branch -d` succeeds for the first and refuses
-    /// the second, so a single-branch repository can only ever test half of a
+    /// the tests real: `git branch -d` accepts the first and would refuse the
+    /// second, so a single-branch repository can only ever test half of a
     /// cleanup.
     fn one_mergeable_and_one_unmergeable_branch(env: &TestEnvironment) -> anyhow::Result<()> {
         env.hitch
@@ -486,35 +495,43 @@ mod tests {
         Ok(())
     }
 
-    /// A refused delete is an *owed effect*, not a failure — and the plan does
-    /// not predict it.
+    /// The plan does not propose a delete git will refuse.
     ///
-    /// Both halves matter. The receipt carries exactly one owed warning naming
-    /// `git branch -D feat-unmerged`, which keeps this the only producer of
-    /// `receipt.warnings` in the programme (a warning nobody owes is a fact
-    /// discovered while applying that should have been a plan warning or a
-    /// resulting-state fact, and this receipt has no such thing). And the exit
-    /// code stays 0: a sweep that removed what it could has done its job, and a
-    /// non-zero code would make a mostly-finished cleanup indistinguishable from
-    /// a failed one.
-    ///
-    /// The plan could have predicted which deletes would fail, and deliberately
-    /// does not. Whether `-d` succeeds is a property of the commit graph, not of
-    /// the ref's value — so it is the one fact in this operation that
-    /// `PlanFingerprint` cannot protect, and a prediction the validator cannot
-    /// check is worse than no prediction.
+    /// It used to: the plan said `delete feat-unmerged`, `git branch -d` refused
+    /// at apply time, and the receipt listed the refusal under `Still owed` and
+    /// exited 0 — a plan claiming an effect it could have known would not happen,
+    /// and an "owed" effect that nothing would ever retry. Whether `-d` accepts a
+    /// branch is a question the planner can ask the same way git does (is the tip
+    /// an ancestor of the upstream, or of `HEAD`), so it does, and a branch that
+    /// fails the test is *kept*: named, with the reason, and never deleted by
+    /// hitch. Deleting unmerged work is data loss, so there is no `-D` here.
     #[test]
-    fn a_partial_cleanup_is_a_success_that_says_what_is_still_owed() -> anyhow::Result<()> {
+    fn a_cleanup_plan_keeps_an_unmerged_branch_instead_of_promising_to_delete_it(
+    ) -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             one_mergeable_and_one_unmergeable_branch(env)?;
 
+            let preview = env.hitch.run().args(&["cleanup"]).execute()?;
+            let plan = preview.stdout();
+            preview.assert_success();
+            assert!(plan.contains("delete feat-merged"), "{plan}");
+            assert!(
+                !plan.contains("delete feat-unmerged"),
+                "the plan must not claim a deletion git will refuse: {plan}"
+            );
+            assert!(
+                plan.contains("feat-unmerged")
+                    && plan.contains("not merged")
+                    && plan.contains("git branch -D feat-unmerged"),
+                "it names the kept branch, why, and how to remove it by hand: {plan}"
+            );
+
             let result = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
             let stdout = result.stdout();
             result.assert_success();
 
-            // The one that could go, did.
             assert!(
                 env.git
                     .run(&["branch", "--list", "feat-merged"])?
@@ -523,9 +540,6 @@ mod tests {
                     .is_empty(),
                 "the merged branch is gone: {stdout}"
             );
-            // The one that could not, did not — and the plan said it would be
-            // attempted, so its survival is the apply reporting itself, not the
-            // plan lying.
             assert!(
                 !env.git
                     .run(&["branch", "--list", "feat-unmerged"])?
@@ -534,14 +548,13 @@ mod tests {
                     .is_empty(),
                 "the unmerged branch is untouched: {stdout}"
             );
-
             assert!(
                 stdout.contains("delete feat-merged"),
                 "the receipt records what it removed: {stdout}"
             );
             assert!(
-                stdout.contains("Still owed") && stdout.contains("git branch -D feat-unmerged"),
-                "and names what it did not, with the command that would: {stdout}"
+                !stdout.contains("Still owed"),
+                "nothing is owed: a kept branch is a decision, not a debt: {stdout}"
             );
 
             Ok::<(), anyhow::Error>(())
@@ -550,16 +563,15 @@ mod tests {
         Ok(())
     }
 
-    /// The same partial cleanup, as a document.
+    /// The same cleanup, as a document.
     ///
-    /// This is the assertion that could not have been written before this task:
-    /// `commands/cleanup.rs` printed branch and ref names with `println!` — to
-    /// **stdout** — inside its preview branch, so a `--json` run interleaved
-    /// prose into the stream a consumer is trying to parse. Both are gone, and
-    /// this is what holds them gone: a `serde_json::from_str` over the whole of
-    /// stdout, which fails on the first stray line.
+    /// `commands/cleanup.rs` once printed branch and ref names with `println!`
+    /// to **stdout** inside its preview branch, so a `--json` run interleaved
+    /// prose into the stream a consumer is trying to parse. This holds that gone
+    /// with a `serde_json::from_str` over the whole of stdout, which fails on the
+    /// first stray line — and that the kept branch is absent from the effects.
     #[test]
-    fn a_cleanup_json_document_is_well_formed_even_when_deletes_fail() -> anyhow::Result<()> {
+    fn a_cleanup_json_document_is_well_formed_and_excludes_the_kept_branch() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
 
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -575,9 +587,6 @@ mod tests {
 
             let doc: serde_json::Value = serde_json::from_str(&stdout)
                 .map_err(|e| anyhow::anyhow!("stdout is not one JSON document ({e}):\n{stdout}"))?;
-            // The variant name, not the `Display` — `OperationKind` serialises
-            // as the variant, and both halves agree on it, so a consumer can
-            // key on either.
             assert_eq!(doc["plan"]["kind"], "Cleanup");
             assert_eq!(doc["receipt"]["operation"], "Cleanup");
             assert_eq!(doc["receipt"]["outcome"], "Applied");
@@ -586,21 +595,126 @@ mod tests {
                     .as_array()
                     .map(Vec::len)
                     .unwrap_or_default(),
-                1,
-                "one owed warning, for the one refused delete: {stdout}"
-            );
-            assert_eq!(
-                doc["receipt"]["warnings"][0]["owes_effect"],
-                serde_json::json!(true)
+                0,
+                "nothing is owed: {stdout}"
             );
             assert!(
-                doc["receipt"]["warnings"][0]["message"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("git branch -D feat-unmerged"),
-                "naming the command that would finish it: {stdout}"
+                !doc["plan"]["effects"].to_string().contains("feat-unmerged"),
+                "the plan proposes no deletion of the unmerged branch: {stdout}"
+            );
+            assert!(
+                doc["plan"]["detail"]["unmerged"]
+                    .to_string()
+                    .contains("feat-unmerged"),
+                "and names it as kept: {stdout}"
             );
 
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A delete that fails *at apply time* is a failure, not a debt.
+    ///
+    /// Nothing retries an "owed" cleanup ref, so listing it under `Still owed`
+    /// and exiting 0 promised a follow-up that does not exist. The receipt still
+    /// shows what did apply — and the command then exits 1 naming what did not,
+    /// with the one command that would try again. A stale ref lock is the cause
+    /// used here because it is a refusal the planner cannot foresee.
+    #[test]
+    fn a_delete_that_fails_at_apply_time_is_reported_after_the_receipt_and_exits_one(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.git.run(&["branch", "feat-a"])?;
+            env.git.run(&["branch", "feat-b"])?;
+            env.fs.write_file(".git/refs/heads/feat-b.lock", "")?;
+
+            let result = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
+            let stdout = result.stdout();
+            let stderr = result.stderr();
+            result.assert_failure();
+            assert!(
+                stdout.contains("✓ delete feat-a"),
+                "the receipt shows what applied: {stdout}"
+            );
+            assert!(
+                !stdout.contains("✓ delete feat-b") && !stdout.contains("Still owed"),
+                "and does not list the failure as applied or as owed: {stdout}"
+            );
+            assert!(
+                stderr.contains("feat-b") && stderr.contains("hitch cleanup --apply"),
+                "the error names what failed and how to try again: {stderr}"
+            );
+            assert!(
+                env.git
+                    .run(&["branch", "--list", "feat-a"])?
+                    .stdout()
+                    .trim()
+                    .is_empty(),
+                "the other delete was not abandoned"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// `--json` always yields exactly one document on success, including when
+    /// there is nothing to clean.
+    #[test]
+    fn a_json_cleanup_with_nothing_to_do_still_prints_one_document() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            for args in [
+                vec!["cleanup", "--apply", "--json"],
+                vec!["cleanup", "--json"],
+            ] {
+                let result = env.hitch.run().args(&args).execute()?;
+                let stdout = result.stdout();
+                result.assert_success();
+                let doc: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
+                    anyhow::anyhow!("{args:?}: stdout is not one JSON document ({e}):\n{stdout}")
+                })?;
+                assert_eq!(doc["plan"]["kind"], "Cleanup", "{args:?}: {stdout}");
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A cleanup receipt is about refs, so it does not list every environment's
+    /// state.
+    #[test]
+    fn a_cleanup_receipt_has_no_environment_result_block() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.git.run(&["branch", "feat-a"])?;
+
+            let result = env.hitch.run().args(&["cleanup", "--apply"]).execute()?;
+            let stdout = result.stdout();
+            result.assert_success();
+            assert!(stdout.contains("delete feat-a"), "{stdout}");
+            assert!(
+                !stdout.contains("Result"),
+                "environment state is irrelevant to deleting a branch: {stdout}"
+            );
             Ok::<(), anyhow::Error>(())
         });
 

@@ -266,12 +266,10 @@ mod tests {
     /// a lie. This is the same reasoning as the one-half envelope for
     /// `hitch status` and `hitch why`.
     ///
-    /// The second half is the one effect in the CLI that is a *deletion*, and
-    /// the warning a refused `git branch -d` earns. That warning is the only
-    /// current producer of a receipt warning that owes an effect on this path,
-    /// and it is here rather than in the plan because no fingerprint could have
-    /// protected it: the plan is built before anything is deleted, and the
-    /// failure is `git`'s, discovered while applying.
+    /// The second half is the one effect in the CLI that is a *deletion*. The
+    /// branch here was never merged, so the plan keeps it rather than promising
+    /// a delete `git branch -d` would refuse: the apply is a `NoChange` receipt
+    /// with nothing owed, not an `Applied` one with a warning.
     #[test]
     fn a_cleanup_preview_is_a_plan_and_nothing_else() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -307,9 +305,9 @@ mod tests {
                 "kind:    Cleanup\n\
                  intent:  Cleanup\n\
                  edit:    -\n\
-                 outcome: Applied\n\
+                 outcome: NoChange\n\
                  effects: []\n\
-                 still owed: [feat-stranded]",
+                 still owed: []",
             );
             Ok::<(), anyhow::Error>(())
         })?;

@@ -84,7 +84,7 @@ mod tests {
             let result = env.hitch.run().args(&["add", "dev"]).execute()?;
             result
                 .assert_failure()
-                .assert_stderr_contains("already exists");
+                .assert_stdout_contains("already exists");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -244,7 +244,7 @@ mod tests {
             let err = result.stderr();
             result
                 .assert_failure()
-                .assert_stderr_contains("is currently locked")
+                .assert_stdout_contains("is currently locked")
                 .assert_stderr_contains("--force");
             assert!(
                 out.contains("Why this cannot apply"),
@@ -384,6 +384,10 @@ mod tests {
                 out.contains("still has 1 promoted branch"),
                 "and the plan says what is at stake before it asks: {out}"
             );
+            assert!(
+                out.contains("Needs your decision"),
+                "and it is a decision here, because it is about to be asked: {out}"
+            );
             assert_eq!(
                 env.git
                     .run(&["rev-parse", "hitch-metadata"])?
@@ -410,6 +414,15 @@ mod tests {
             assert!(
                 !out.contains("Apply this plan?"),
                 "…and it does not ask: {out}"
+            );
+            assert!(
+                !out.contains("Needs your decision"),
+                "…and it does not headline the fact as a decision, because the \
+                 decision has been made: {out}"
+            );
+            assert!(
+                out.contains("still has 1 promoted branch"),
+                "the fact itself stays, as an advisory: {out}"
             );
             assert!(
                 !env.read_hitch_config()?.environments.contains_key("dev"),
@@ -439,7 +452,7 @@ mod tests {
             let err = result.stderr();
             result
                 .assert_failure()
-                .assert_stderr_contains("already exists");
+                .assert_stdout_contains("already exists");
             // The plan shows what `dev` *is*, not what the refused `add` would
             // have made it. A `Proposed / dev = main` above a refusal that
             // `dev` is already exactly that is a plan describing an outcome it
@@ -453,10 +466,11 @@ mod tests {
                 "and names no ref to write: {out}"
             );
             assert!(
-                err.contains("nothing to declare"),
+                !err.contains("To proceed") && !err.contains("hitch set"),
                 "and the remedy is derived from the *difference* — a reader who \
                  named the base it already has has nothing to do, and telling \
-                 them to run a `set` would send them to change nothing: {err}"
+                 them to run a `set` would send them to change nothing, or to \
+                 \"proceed\" with a non-action: {err}"
             );
             assert_eq!(
                 env.git
@@ -538,6 +552,25 @@ mod tests {
             assert!(!config.environments.contains_key("qa"));
             assert!(config.environments.contains_key("staging"));
 
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+    #[test]
+    fn a_dry_run_of_a_remove_says_it_changed_nothing() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchWithEnv, |env| {
+            let result = env
+                .hitch
+                .run()
+                .args(&["remove", "dev", "--dry-run"])
+                .execute()?;
+            result
+                .assert_success()
+                .assert_stdout_contains("preview — nothing was changed");
+            assert!(env.read_hitch_config()?.environments.contains_key("dev"));
             Ok::<(), anyhow::Error>(())
         });
 

@@ -778,8 +778,8 @@ mod tests {
                 "and that plan proposes nothing it will not do: {out}"
             );
             assert!(
-                err.contains("cannot be greater than number of approvers"),
-                "and says which of the two settings disagrees with the other: {err}"
+                out.contains("cannot be greater than number of approvers"),
+                "and says which of the two settings disagrees with the other: {out}"
             );
             assert!(
                 err.contains("hitch set dev --add-approver"),
@@ -795,6 +795,65 @@ mod tests {
                 "a refused set must not spend a metadata commit"
             );
             let _ = before;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+    /// The plan's `Current` is the declaration as it is, and its effect names
+    /// which way the base moved.
+    ///
+    /// `Current` used to take its base from the *proposed* declaration, so a
+    /// `set --base f1` on `qa = main + f1` printed `qa = f1 + f1` above a
+    /// proposal of the same thing, and the effect said only `update base of 'qa'`.
+    #[test]
+    fn a_base_change_shows_the_old_base_in_current_and_the_move_in_the_effect() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_success();
+            env.git.run(&["checkout", "-b", "f1"])?;
+            env.fs.write_file("f1.txt", "x")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "f1"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "f1", "qa"])
+                .execute()?
+                .assert_success();
+
+            let preview = env
+                .hitch
+                .run()
+                .args(&["set", "qa", "--base", "f1", "--dry-run"])
+                .execute()?;
+            let out = preview.stdout();
+            preview
+                .assert_success()
+                .assert_stdout_contains("qa = main + f1")
+                .assert_stdout_contains("update base of 'qa' from 'main' to 'f1'")
+                .assert_stdout_contains("preview — nothing was changed");
+            assert!(
+                !out.contains("qa = f1 + f1"),
+                "the proposed base leaked into Current: {out}"
+            );
+
+            env.git.run(&["checkout", "-b", "develop"])?;
+            env.git.run(&["checkout", "main"])?;
+            let plain = env
+                .hitch
+                .run()
+                .args(&["set", "qa", "--base", "develop", "--dry-run"])
+                .execute()?;
+            plain
+                .assert_success()
+                .assert_stdout_contains("main → develop");
             Ok::<(), anyhow::Error>(())
         });
 

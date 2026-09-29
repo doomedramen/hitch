@@ -285,9 +285,8 @@ mod tests {
                 .execute()?;
             approve2_result
                 .assert_success()
-                .assert_stdout_contains("Approval threshold met")
                 .assert_stdout_contains("Approve feature/dashboard → production")
-                .assert_stdout_contains("approved and operation executed successfully");
+                .assert_stdout_contains("Applied");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -753,7 +752,6 @@ mod tests {
                 .execute()?;
             approve2_result
                 .assert_success()
-                .assert_stdout_contains("Approval threshold met")
                 // "Executing promotion..." used to be printed here, one line
                 // above the plan. It is gone: the plan *is* that sentence, with
                 // the branch, the environment and both effects spelled out, and a
@@ -761,7 +759,7 @@ mod tests {
                 // contains it is a second voice for one operation. The assertion
                 // is the plan's own heading.
                 .assert_stdout_contains("Approve feature/auto-apply → production")
-                .assert_stdout_contains("approved and operation executed successfully");
+                .assert_stdout_contains("Applied");
 
             // Verify branch is now promoted
             let status_after = env.hitch.run().args(&["status"]).execute()?;
@@ -1075,8 +1073,7 @@ mod tests {
                 .execute()?;
             approve2_result
                 .assert_success()
-                .assert_stdout_contains("Approval threshold met")
-                .assert_stdout_contains("approved and operation executed successfully");
+                .assert_stdout_contains("Applied");
 
             // Verify branch is now demoted from production.
             //
@@ -1528,6 +1525,158 @@ mod tests {
                 Some(0),
                 "the approval was refused, so it was not recorded"
             );
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        Ok(())
+    }
+    /// `--json` without `--yes` is refused before anything is written.
+    ///
+    /// Every other mutation refuses at the gate, which sits ahead of its first
+    /// write. `approve` recorded the vote — a metadata commit and a lock/unlock
+    /// pair — and only then reached the gate for the apply, so a refusal exited
+    /// 1 having already changed the repository, which is the one thing a
+    /// refusal must not do.
+    #[test]
+    fn a_json_approve_without_yes_refuses_before_recording_anything() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+            env.git.run(&["checkout", "-b", "feature/gated"])?;
+            env.fs.write_file("gated.js", "console.log('gated');")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add gated feature"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature/gated", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/gated")?;
+
+            let tip = |env: &TestEnvironment| -> anyhow::Result<String> {
+                Ok(env
+                    .git
+                    .run(&["rev-parse", "refs/heads/hitch-metadata"])?
+                    .stdout()
+                    .trim()
+                    .to_string())
+            };
+            let before = tip(env)?;
+            env.git.config_user("Alice", "alice@example.com")?;
+            let result = env
+                .hitch
+                .run()
+                .with_yes(false)
+                .args(&["--json", "approvals", "approve", &request_id])
+                .execute()?;
+            let result = result.assert_failure();
+            assert!(
+                result.stderr().contains("--yes"),
+                "the refusal names the flag: {}",
+                result.stderr()
+            );
+            assert!(
+                result.stdout().trim().is_empty(),
+                "a refusal prints no document: {}",
+                result.stdout()
+            );
+            assert_eq!(tip(env)?, before, "a refusal writes nothing at all");
+            let config = env.read_hitch_config()?;
+            assert_eq!(
+                config
+                    .approval_requests
+                    .iter()
+                    .find(|r| r.id == request_id)
+                    .map(|r| r.approvals.len()),
+                Some(0),
+                "the approval was refused, so it was not recorded"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        Ok(())
+    }
+    /// `approve` narrates nothing around its plan and receipt.
+    ///
+    /// It used to open with `Approving request…`, `Fetching approval request…`,
+    /// `Request found…` and bare empty lines, print `Approval recorded` from two
+    /// places, and close with a `Request … applied successfully!` under a receipt
+    /// that already said `Applied`. The one line worth keeping is the vote that
+    /// did not reach its threshold, which has no plan to say so.
+    #[test]
+    fn approve_says_nothing_around_its_plan_and_receipt() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+            env.git.run(&["checkout", "-b", "feature/quiet"])?;
+            env.fs.write_file("quiet.js", "console.log('quiet');")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add quiet feature"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature/quiet", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/quiet")?;
+
+            let narration = [
+                "Approving request",
+                "Fetching approval request",
+                "Request found",
+                "Recording approval",
+                "applied successfully",
+                "approved successfully",
+                "Threshold met",
+            ];
+            let assert_quiet = |out: &str| {
+                for phrase in narration {
+                    assert!(!out.contains(phrase), "narration {phrase:?} in:\n{out}");
+                }
+                assert!(
+                    !out.lines().any(|l| l.trim() == "ℹ️"),
+                    "an empty info line in:\n{out}"
+                );
+            };
+
+            env.git.config_user("Alice", "alice@example.com")?;
+            let vote = env
+                .hitch
+                .run()
+                .args(&["approvals", "approve", &request_id])
+                .execute()?
+                .assert_success();
+            let out = format!("{}{}", vote.stdout(), vote.stderr());
+            assert_quiet(&out);
+            assert_eq!(
+                out.matches("Approval recorded").count(),
+                1,
+                "the vote that did not reach its threshold is said once: {out}"
+            );
+
+            env.git.config_user("Bob", "bob@example.com")?;
+            let applied = env
+                .hitch
+                .run()
+                .args(&["approvals", "approve", &request_id])
+                .execute()?
+                .assert_success();
+            let out = format!("{}{}", applied.stdout(), applied.stderr());
+            assert_quiet(&out);
+            assert!(!out.contains("Approval recorded"), "{out}");
             Ok::<(), anyhow::Error>(())
         })?;
 
