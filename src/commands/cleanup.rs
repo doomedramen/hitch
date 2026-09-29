@@ -1,5 +1,7 @@
 use crate::commands::global_context::GlobalContext;
-use crate::core::render::{confirm_plan, emit_plan, emit_preview_note, emit_receipt, render_plan};
+use crate::core::render::{
+    confirm_plan, emit_plan, emit_preview_note, emit_receipt_with_failures, render_plan,
+};
 use crate::operations::cleanup::{apply_cleanup_plan, plan_cleanup};
 use anyhow::Result;
 use clap::Args;
@@ -50,7 +52,11 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
 
     if !args.apply {
         emit_plan(context, &plan)?;
-        emit_preview_note(context, "nothing was deleted; re-run with --apply");
+        // Only when there is something an `--apply` would delete: a preview of
+        // kept branches alone has nothing to re-run.
+        if plan.detail.has_deletions() {
+            emit_preview_note(context, "nothing was deleted; re-run with --apply");
+        }
         return Ok(());
     }
 
@@ -62,7 +68,7 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
     // receipt of what did apply. It is not an owed effect: nothing retries a
     // cleanup, so `Still owed` would promise a follow-up that does not exist.
     let run = apply_cleanup_plan(context, &plan)?;
-    emit_receipt(context, &plan, &run.receipt)?;
+    emit_receipt_with_failures(context, &plan, &run.receipt, &run.failures)?;
     if !run.failures.is_empty() {
         let mut retry = String::from("hitch cleanup --apply");
         if let Some(env) = &args.env {
@@ -72,7 +78,11 @@ pub fn run(args: CleanupCommand, context: &GlobalContext) -> Result<()> {
             "{} of {} deletes failed; the rest were applied:\n  {}\nTo try again:\n  {retry}",
             run.failures.len(),
             run.failures.len() + run.receipt.effects.len(),
-            run.failures.join("\n  "),
+            run.failures
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n  "),
         );
     }
     Ok(())

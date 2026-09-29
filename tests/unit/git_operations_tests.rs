@@ -264,6 +264,51 @@ mod tests {
         Ok(())
     }
 
+    /// The strict delete is `git branch -d` and nothing more.
+    ///
+    /// `delete_branch` retries a "used by worktree" refusal with `-D --force` and
+    /// then `update-ref -d`, which deletes a branch someone is standing on in a
+    /// linked worktree, merged or not. A caller that must never do that (the
+    /// cleanup sweep) uses this one, which fails instead of escalating.
+    #[test]
+    fn test_delete_branch_strict_never_escalates_past_a_worktree() -> Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
+            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
+
+            git_ops.create_branch_from("merged", "main")?;
+            git_ops.create_branch_from("in-worktree", "main")?;
+            git_ops.checkout_branch("main")?;
+            let repo_name = env
+                .temp_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let wt = env
+                .temp_dir
+                .parent()
+                .expect("repo has a parent")
+                .join(format!("{repo_name}-strict-wt"));
+            env.git
+                .run(&["worktree", "add", &wt.to_string_lossy(), "in-worktree"])?
+                .assert_success();
+
+            assert!(
+                git_ops.delete_branch_strict("in-worktree").is_err(),
+                "a branch checked out elsewhere is refused, not force-deleted"
+            );
+            assert!(git_ops.branch_exists("in-worktree")?);
+
+            git_ops.delete_branch_strict("merged")?;
+            assert!(!git_ops.branch_exists("merged")?);
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn test_force_delete_branch() -> Result<()> {
         let framework = HitchTestFramework::new()?;

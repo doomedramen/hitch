@@ -1676,6 +1676,23 @@ pub struct JsonDocument<'a, I> {
     pub schema_version: u32,
     pub plan: Option<&'a OperationPlan<I>>,
     pub receipt: Option<&'a crate::operations::model::ExecutionReceipt>,
+    /// What the apply attempted and could not do. Absent (not `[]`) when nothing
+    /// failed, so every other command's document is byte-for-byte what it was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<ApplyFailure>,
+}
+
+/// One step an apply attempted and git refused, as a typed record.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct ApplyFailure {
+    pub refname: String,
+    pub cause: String,
+}
+
+impl std::fmt::Display for ApplyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.refname, self.cause)
+    }
 }
 
 impl<'a, I> JsonDocument<'a, I> {
@@ -1686,6 +1703,7 @@ impl<'a, I> JsonDocument<'a, I> {
             schema_version: JSON_SCHEMA_VERSION,
             plan: Some(plan),
             receipt: None,
+            failures: Vec::new(),
         }
     }
 
@@ -1695,6 +1713,7 @@ impl<'a, I> JsonDocument<'a, I> {
             schema_version: JSON_SCHEMA_VERSION,
             plan: Some(plan),
             receipt: Some(receipt),
+            failures: Vec::new(),
         }
     }
 }
@@ -1718,6 +1737,58 @@ pub fn emit_json<T: serde::Serialize>(value: &T) -> anyhow::Result<()> {
     std::io::stdout()
         .flush()
         .context("Failed to flush the JSON document to stdout")?;
+    Ok(())
+}
+
+/// A vote that was recorded and did not reach its threshold.
+///
+/// The one `approvals approve` outcome with no plan and no receipt: nothing was
+/// declared or rebuilt, only the request moved. It is a fact about the request,
+/// so it gets its own small shape rather than a fabricated plan whose effects
+/// would be empty — an empty receipt would say "nothing happened", which is the
+/// opposite of true.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct ApprovalRecorded {
+    pub request_id: String,
+    pub environment: String,
+    pub approvals: usize,
+    pub required: usize,
+    pub threshold_met: bool,
+    pub remaining_approvers: Vec<String>,
+}
+
+/// The words for an [`ApprovalRecorded`]. Pure, like the other renderers.
+pub fn render_approval_recorded(vote: &ApprovalRecorded) -> String {
+    let mut out = format!(
+        "Approval recorded ({}/{}). Waiting for {} more approval(s) from:",
+        vote.approvals,
+        vote.required,
+        vote.required.saturating_sub(vote.approvals)
+    );
+    for approver in &vote.remaining_approvers {
+        out.push_str(&format!("\n  - {approver}"));
+    }
+    out
+}
+
+/// Emit a recorded vote: text on the sink, or under `--json` a document with the
+/// same `schema_version` and `plan`/`receipt` keys as every other mutation
+/// (both `null`, since there was neither) plus an `approval` object.
+pub fn emit_approval_recorded(
+    context: &GlobalContext,
+    vote: &ApprovalRecorded,
+) -> anyhow::Result<()> {
+    if context.json {
+        return emit_json(&serde_json::json!({
+            "schema_version": JSON_SCHEMA_VERSION,
+            "plan": null,
+            "receipt": null,
+            "approval": vote,
+        }));
+    }
+    context
+        .output
+        .log(OutputLevel::Info, &render_approval_recorded(vote));
     Ok(())
 }
 
@@ -1776,6 +1847,23 @@ pub fn emit_receipt<I: serde::Serialize>(
         .output
         .log(OutputLevel::Info, &render_receipt(receipt));
     Ok(())
+}
+
+/// [`emit_receipt`] for an apply that also failed in part: the document carries
+/// the failures next to the receipt of what did apply. The caller still fails
+/// the command afterwards — the document is the account, not the verdict.
+pub fn emit_receipt_with_failures<I: serde::Serialize>(
+    context: &GlobalContext,
+    plan: &OperationPlan<I>,
+    receipt: &ExecutionReceipt,
+    failures: &[ApplyFailure],
+) -> anyhow::Result<()> {
+    if context.json {
+        let mut document = JsonDocument::applied(plan, receipt);
+        document.failures = failures.to_vec();
+        return emit_json(&document);
+    }
+    emit_receipt(context, plan, receipt)
 }
 
 /// What the confirmation gate decides, before anything is printed or asked.

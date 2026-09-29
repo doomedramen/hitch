@@ -1682,4 +1682,101 @@ mod tests {
 
         Ok(())
     }
+    /// The `--json` gate comes after the read-only checks, so an answer that
+    /// does not depend on confirmation is not replaced by one that does: a
+    /// request that was already applied is "already applied", not "needs
+    /// `--yes`".
+    #[test]
+    fn a_json_approve_of_an_applied_request_says_it_is_applied_not_that_it_needs_yes(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(env, "production", &["alice@example.com"], 1)?;
+            env.git.run(&["checkout", "-b", "feature/done"])?;
+            env.fs.write_file("done.js", "1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "done"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature/done", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/done")?;
+            env.git.config_user("Alice", "alice@example.com")?;
+            env.hitch
+                .run()
+                .args(&["approvals", "approve", &request_id])
+                .execute()?
+                .assert_success();
+
+            let again = env
+                .hitch
+                .run()
+                .with_yes(false)
+                .args(&["--json", "approvals", "approve", &request_id])
+                .execute()?;
+            let stderr = again.stderr();
+            again.assert_failure();
+            assert!(stderr.contains("already been applied"), "{stderr}");
+            assert!(!stderr.contains("--yes"), "{stderr}");
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        Ok(())
+    }
+
+    /// A vote that does not reach the threshold has no plan, but under `--json`
+    /// it still yields exactly one document — `approve` is on the list of
+    /// commands that honour the flag, and a program reading empty stdout cannot
+    /// tell a recorded vote from a command that did nothing.
+    #[test]
+    fn a_json_approve_below_the_threshold_emits_one_document() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+            env.git.run(&["checkout", "-b", "feature/vote"])?;
+            env.fs.write_file("vote.js", "1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "vote"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature/vote", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/vote")?;
+            env.git.config_user("Alice", "alice@example.com")?;
+
+            let vote = env
+                .hitch
+                .run()
+                .args(&["--json", "approvals", "approve", &request_id])
+                .execute()?;
+            let stdout = vote.stdout();
+            vote.assert_success();
+            let doc: serde_json::Value = serde_json::from_str(&stdout)
+                .map_err(|e| anyhow::anyhow!("not one JSON document ({e}):\n{stdout}"))?;
+            assert_eq!(doc["schema_version"], 1);
+            assert!(doc["plan"].is_null() && doc["receipt"].is_null(), "{doc}");
+            assert_eq!(doc["approval"]["request_id"], request_id.as_str());
+            assert_eq!(doc["approval"]["approvals"], 1);
+            assert_eq!(doc["approval"]["required"], 2);
+            assert_eq!(doc["approval"]["threshold_met"], false);
+            assert_eq!(
+                doc["approval"]["remaining_approvers"],
+                serde_json::json!(["bob@example.com"])
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        Ok(())
+    }
 }

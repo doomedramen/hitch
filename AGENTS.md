@@ -981,7 +981,24 @@ are in the fingerprint, so the prediction is one the validator can check. What
 `CleanupRun::failures`; the command prints the receipt of what applied and *then*
 fails (exit 1). It is not `Still owed`: nothing retries a cleanup. The receipt has
 no `resulting_state` — a `Result` block of every environment under a branch
-deletion is noise.
+deletion is noise. Under `--json` the failures also ride in the document as a
+typed `failures: [{refname, cause}]` (`emit_receipt_with_failures`; the key is
+absent when nothing failed). A branch checked out in *any* worktree is kept
+(`CleanupPlanDetail::checked_out`, advisory names the path) whether or not it is
+merged, and the apply uses `delete_branch_strict` — `delete_branch` escalates a
+"used by worktree" refusal to `-D --force` and `update-ref -d`, so cleanup must
+not reach it. Never parse `git branch --list` for names: it decorates `* ` and
+`+ ` (worktree); `list_local_branches_with_prefix` uses `for-each-ref`.
+
+**`approvals approve` gates after its read-only answers and before its first
+write, and a vote below the threshold still emits a document.** The `--json`
+without `--yes` refusal (`refuse_unconfirmable`) sits after the status checks so
+"already applied" is not replaced by "needs --yes", and before `validate_and_approve`
+because the vote is a committed write. A below-threshold vote has neither plan nor
+receipt, so `emit_approval_recorded` prints `{schema_version, plan: null, receipt:
+null, approval: {request_id, environment, approvals, required, threshold_met,
+remaining_approvers}}` — same envelope keys as every mutation, and the words live
+in `render_approval_recorded`.
 
 **A decision the plan can make at plan time belongs in the plan, and a
 decision about the release's own result must be evaluated against the planned

@@ -721,6 +721,142 @@ mod tests {
         Ok(())
     }
 
+    /// A branch checked out in a linked worktree is never a candidate.
+    ///
+    /// `git branch --list` prefixes such a branch with `+ `, which the branch
+    /// enumeration did not strip, so the plan said "Kept: + feat" and offered
+    /// `git branch -D + feat`. Beyond the parsing, a branch someone is standing on
+    /// in another checkout is not stale whether or not it is merged, so it is kept
+    /// on purpose and the advisory says where it is checked out.
+    #[test]
+    fn a_branch_checked_out_in_a_linked_worktree_is_kept_and_named_correctly() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.git.run(&["branch", "feat-merged"])?;
+            env.git.run(&["checkout", "-b", "feat-unmerged"])?;
+            env.fs.write_file("unmerged.txt", "x")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "unmerged"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let repo_name = env
+                .temp_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let parent = env.temp_dir.parent().expect("repo has a parent");
+            for branch in ["feat-merged", "feat-unmerged"] {
+                let wt = parent.join(format!("{repo_name}-{branch}-wt"));
+                env.git
+                    .run(&["worktree", "add", &wt.to_string_lossy(), branch])?
+                    .assert_success();
+            }
+
+            let preview = env.hitch.run().args(&["cleanup"]).execute()?;
+            let plan = preview.stdout();
+            preview.assert_success();
+            assert!(
+                !plan.contains("+ feat"),
+                "a marker leaked into a name: {plan}"
+            );
+            assert!(
+                !plan.contains("delete feat-"),
+                "a checked-out branch is not proposed for deletion: {plan}"
+            );
+            assert!(
+                plan.contains("feat-merged")
+                    && plan.contains("feat-unmerged")
+                    && plan.contains("checked out"),
+                "both are named, with why they are kept: {plan}"
+            );
+            assert!(
+                plan.contains("feat-merged-wt"),
+                "and where they are checked out: {plan}"
+            );
+            assert!(
+                !plan.contains("git branch -D feat-merged"),
+                "a merged branch is not kept for being unmerged: {plan}"
+            );
+
+            env.hitch
+                .run()
+                .args(&["cleanup", "--apply"])
+                .execute()?
+                .assert_success();
+            for branch in ["feat-merged", "feat-unmerged"] {
+                assert!(
+                    !env.git
+                        .run(&["branch", "--list", branch])?
+                        .stdout()
+                        .trim()
+                        .is_empty(),
+                    "{branch} survives the sweep"
+                );
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A preview whose only findings are kept branches has nothing to re-run
+    /// with `--apply`, so it does not say to.
+    #[test]
+    fn a_preview_with_nothing_to_delete_does_not_suggest_apply() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.git.run(&["checkout", "-b", "feat-unmerged"])?;
+            env.fs.write_file("u.txt", "x")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "u"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let out = env.hitch.run().args(&["cleanup"]).execute()?.stdout();
+            assert!(out.contains("Kept: feat-unmerged"), "{out}");
+            assert!(!out.contains("re-run with --apply"), "{out}");
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// An apply-time failure is in the `--json` document, typed, so a consumer
+    /// need not parse stderr — while the exit code still says it failed.
+    #[test]
+    fn a_failed_delete_appears_in_the_json_document() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.git.run(&["branch", "feat-a"])?;
+            env.git.run(&["branch", "feat-b"])?;
+            env.fs.write_file(".git/refs/heads/feat-b.lock", "")?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["cleanup", "--apply", "--json"])
+                .execute()?;
+            let stdout = result.stdout();
+            result.assert_failure();
+            let doc: serde_json::Value = serde_json::from_str(&stdout)
+                .map_err(|e| anyhow::anyhow!("not one JSON document ({e}):\n{stdout}"))?;
+            assert_eq!(doc["receipt"]["outcome"], "Applied");
+            let failures = doc["failures"].as_array().expect("a failures array");
+            assert_eq!(failures.len(), 1, "{stdout}");
+            assert_eq!(failures[0]["refname"], "refs/heads/feat-b");
+            assert!(
+                !failures[0]["cause"].as_str().unwrap_or_default().is_empty(),
+                "{stdout}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     /// `--env` scopes the archives, not the protections.
     ///
     /// The rule it used to carry scoped *both*: a branch promoted into `dev` was

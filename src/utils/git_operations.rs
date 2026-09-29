@@ -1262,6 +1262,25 @@ impl GitOperations {
             .success())
     }
 
+    /// `git branch -d`, and nothing more: no checkout to move off the branch and
+    /// no escalation when git refuses.
+    ///
+    /// [`Self::delete_branch`] retries a "used by worktree" refusal with `-D
+    /// --force` and then `update-ref -d`, which removes a branch someone is
+    /// standing on in a linked worktree whether or not it is merged. The cleanup
+    /// sweep must never do that, so it uses this: git's refusal is the answer.
+    pub fn delete_branch_strict(&self, branch: &str) -> Result<()> {
+        let output = self.run_git_command(&["branch", "-d", branch])?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "Failed to delete branch '{}': {}",
+            branch,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+
     /// Delete a branch (local)
     pub fn delete_branch(&self, branch: &str, force: bool) -> Result<()> {
         // Get current branch to ensure we're not trying to delete the branch we're on
@@ -2977,21 +2996,26 @@ impl GitOperations {
     ///
     /// Used to detect stale hitch-managed branches (e.g. hitch-tmp-*, hitch-backup-*)
     pub fn list_local_branches_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
-        let pattern = format!("{}*", prefix);
-        let output = self.run_git_command(&["branch", "--list", &pattern])?;
+        // `for-each-ref` rather than `branch --list`: the latter decorates a
+        // branch with `* ` (current) and `+ ` (checked out in a linked
+        // worktree), and a parser that strips only one of them hands the other
+        // back as part of the name.
+        //
+        // Filtered here rather than by pattern: `for-each-ref` patterns match
+        // whole path components, so `refs/heads/hitch-tmp-` would match nothing.
+        let output =
+            self.run_git_command(&["for-each-ref", "--format=%(refname)", "refs/heads/"])?;
 
         if !output.status.success() {
             return Ok(Vec::new());
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let branches: Vec<String> = stdout
+        Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .map(|line| line.trim().trim_start_matches("* ").to_string())
-            .filter(|b| !b.is_empty())
-            .collect();
-
-        Ok(branches)
+            .filter_map(|line| line.trim().strip_prefix("refs/heads/"))
+            .filter(|b| !b.is_empty() && b.starts_with(prefix))
+            .map(str::to_string)
+            .collect())
     }
 
     /// Read the conflict markers from a file

@@ -1,5 +1,8 @@
 use crate::commands::global_context::GlobalContext;
-use crate::core::render::{confirm_plan, decide_gate, emit_receipt, render_plan, GateDecision};
+use crate::core::render::{
+    confirm_plan, decide_gate, emit_approval_recorded, emit_receipt, render_plan, ApprovalRecorded,
+    GateDecision,
+};
 use crate::operations::declaration::{
     apply_declaration_plan, plan_approved_declaration_change, DeclarationChange,
     DeclarationPlanOptions,
@@ -21,13 +24,6 @@ pub struct ApproveArgs {
 
 pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     use crate::types::ApprovalStatus;
-
-    // The gate's refusal comes first, ahead of the vote's own write: the apply
-    // that follows a met threshold reaches the same gate, and by then the vote
-    // is committed. Refusing here keeps "exit 1" meaning "nothing happened".
-    if let GateDecision::Refuse(reason) = decide_gate(context.assume_yes, context.json, true) {
-        anyhow::bail!(reason);
-    }
 
     // Step 1: pre_check - Ensure git repository is in good state
     crate::utils::prelude::pre_check(context)?;
@@ -67,12 +63,20 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
             // approved request isn't a dead end.
             // No vote is recorded on this path, which is the one fact the plan
             // and receipt cannot say.
+            refuse_unconfirmable(context)?;
             context.log_info("Request already meets its approval threshold; applying it now.");
             execute_approved_operation(context, &request_id, &environment_name)?;
             return Ok(());
         }
         ApprovalStatus::Pending => { /* normal approval flow below */ }
     }
+
+    // The gate's refusal comes here: after every read-only answer a request can
+    // give (`already applied`, `rejected`, …) so those are not replaced by a
+    // demand for `--yes`, and before the vote's own write, because the apply
+    // that follows a met threshold reaches the same gate and by then the vote is
+    // committed. Refusing here keeps "exit 1" meaning "nothing happened".
+    refuse_unconfirmable(context)?;
 
     // Step 3: Record this approval (validation happens under the lock).
     let request_details = validate_and_approve(context, &args, &request_id, &environment_name)?;
@@ -94,20 +98,28 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     if request_details.threshold_met(min_approvals) {
         execute_approved_operation(context, &request_id, &environment_name)?;
     } else {
-        let have = request_details.approvals.len();
-        let remaining =
-            crate::utils::authorization::get_remaining_approvers(&environment, &request_details);
-        context.log_info(&format!(
-            "Approval recorded ({have}/{min_approvals}). Waiting for {} more approval(s) from:\n{}",
-            min_approvals.saturating_sub(have),
-            remaining
-                .iter()
-                .map(|a| format!("  - {a}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
+        let vote = ApprovalRecorded {
+            request_id: request_id.clone(),
+            environment: environment_name.clone(),
+            approvals: request_details.approvals.len(),
+            required: min_approvals,
+            threshold_met: false,
+            remaining_approvers: crate::utils::authorization::get_remaining_approvers(
+                &environment,
+                &request_details,
+            ),
+        };
+        emit_approval_recorded(context, &vote)?;
     }
 
+    Ok(())
+}
+
+/// `--json` without `--yes` is refused, as for every mutation.
+fn refuse_unconfirmable(context: &GlobalContext) -> Result<()> {
+    if let GateDecision::Refuse(reason) = decide_gate(context.assume_yes, context.json, true) {
+        anyhow::bail!(reason);
+    }
     Ok(())
 }
 

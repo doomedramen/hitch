@@ -50,6 +50,7 @@ use super::model::{
     PlanApplyError, PlanFingerprint, PlanWarning, PlannedEffect, UnaffectedResource,
 };
 use super::model::{AppliedEffect, OperationIntent, OperationPlan, ResourceKind};
+use crate::core::render::ApplyFailure;
 
 /// How many of the most recent archive refs to keep per (namespace,
 /// environment). Chosen to comfortably cover manual rollback while bounding
@@ -91,15 +92,29 @@ pub struct CleanupPlanDetail {
     /// will not force it: deleting unmerged work is data loss. Kept, and named in
     /// the plan so the reader knows why they are not on the list. Name order.
     pub unmerged: Vec<String>,
+    /// Branches checked out in another worktree, with where. Kept whether or not
+    /// they are merged: a branch someone is standing on is not stale, and git
+    /// (or worse, a forced delete) would pull it out from under them.
+    pub checked_out: Vec<CheckedOutBranch>,
     /// Archive refs beyond [`ARCHIVE_REF_RETENTION`], in
     /// [`stale_archive_refs`]'s order.
     pub refs: Vec<String>,
 }
 
+/// A candidate branch that is checked out in a worktree.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct CheckedOutBranch {
+    pub branch: String,
+    pub path: String,
+}
+
 impl CleanupPlanDetail {
     /// Whether this sweep has anything to do.
     pub fn is_empty(&self) -> bool {
-        self.branches.is_empty() && self.refs.is_empty() && self.unmerged.is_empty()
+        self.branches.is_empty()
+            && self.refs.is_empty()
+            && self.unmerged.is_empty()
+            && self.checked_out.is_empty()
     }
 
     /// Whether the sweep will delete anything at all.
@@ -190,6 +205,27 @@ pub fn plan_cleanup(
     // order is the only ordering that is the same on every run.
     branches.sort();
 
+    // A branch checked out in any worktree is set aside before the merge test:
+    // the main checkout's branch is `current` above, and every *other* checkout
+    // is someone's working state. Kept on purpose, not for want of a merge.
+    let worktrees = context.git().list_worktrees()?;
+    let mut checked_out: Vec<CheckedOutBranch> = Vec::new();
+    branches.retain(|b| {
+        match worktrees
+            .iter()
+            .find(|w| w.branch.as_deref() == Some(b.as_str()))
+        {
+            Some(w) => {
+                checked_out.push(CheckedOutBranch {
+                    branch: b.clone(),
+                    path: w.path.clone(),
+                });
+                false
+            }
+            None => true,
+        }
+    });
+
     // The predicate is git's own — see `GitOperations::branch_is_merged` — so
     // the plan never promises a deletion `git branch -d` will refuse. The
     // reference it measures against (the upstream, else `HEAD`) is tracked in
@@ -265,6 +301,16 @@ pub fn plan_cleanup(
                 .join(" or "),
         )));
     }
+    if !checked_out.is_empty() {
+        warnings.push(PlanWarning::advisory(format!(
+            "Kept, checked out in another worktree: {}",
+            checked_out
+                .iter()
+                .map(|c| format!("{} ({})", c.branch, c.path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
     let confirmation = if found == 0 {
         ConfirmationRequirement::not_required()
     } else {
@@ -325,6 +371,7 @@ pub fn plan_cleanup(
             environment_filter: env_filter.map(str::to_string),
             branches,
             unmerged,
+            checked_out,
             refs,
         },
     };
@@ -350,11 +397,11 @@ pub fn plan_cleanup(
 /// (what did apply) and then fails with `failures`.
 pub struct CleanupRun {
     pub receipt: ExecutionReceipt,
-    /// One `refname: cause` line per delete git refused *at apply time*. The
+    /// One entry per delete git refused *at apply time*. The
     /// plan already declines what git would refuse for want of a merge, so
     /// what lands here is what it could not foresee — a stale ref lock, a
     /// branch that changed after planning.
-    pub failures: Vec<String>,
+    pub failures: Vec<ApplyFailure>,
 }
 
 /// Delete what the plan found, and report exactly what that came to.
@@ -409,7 +456,7 @@ pub fn apply_cleanup_plan(
     }
 
     let mut effects: Vec<AppliedEffect> = Vec::new();
-    let mut failures: Vec<String> = Vec::new();
+    let mut failures: Vec<ApplyFailure> = Vec::new();
 
     for branch in &detail.branches {
         let refname = format!("refs/heads/{branch}");
@@ -419,12 +466,15 @@ pub fn apply_cleanup_plan(
         // recording what was actually there is what survives if they ever
         // don't.
         let old = context.git().rev_parse_opt(&refname)?;
-        match context.git().delete_branch(branch, false) {
+        match context.git().delete_branch_strict(branch) {
             Ok(()) => effects.push(AppliedEffect::LocalRefDelete {
                 refname,
                 old: old.unwrap_or_default(),
             }),
-            Err(e) => failures.push(format!("{refname}: {}", first_line(&e))),
+            Err(e) => failures.push(ApplyFailure {
+                refname,
+                cause: first_line(&e),
+            }),
         }
     }
 
@@ -435,7 +485,10 @@ pub fn apply_cleanup_plan(
                 refname: refname.clone(),
                 old: old.unwrap_or_default(),
             }),
-            Err(e) => failures.push(format!("{refname}: {}", first_line(&e))),
+            Err(e) => failures.push(ApplyFailure {
+                refname: refname.clone(),
+                cause: first_line(&e),
+            }),
         }
     }
 
