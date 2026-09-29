@@ -36,9 +36,13 @@ pub struct Cli {
     /// Print a machine-readable document on stdout and nothing else; send all
     /// progress, warnings, and errors to stderr
     ///
-    /// Honours this today: `rebuild`, `promote`, `demote`, `release`, `status`,
-    /// `why`. A command that does not support it says so rather than printing
-    /// prose into a stream the caller is about to parse.
+    /// Honours this today: `rebuild`, `promote`, `demote`, `release`, `lock`,
+    /// `unlock`, `set`, `add`, `remove`, `cleanup`, `approvals approve`,
+    /// `status`, `why` — every mutating command, plus the two read-only ones. A
+    /// command that does not support it leaves stdout **empty** rather than
+    /// printing prose into a stream the caller is about to parse: under
+    /// `--json` the diagnostic sink sends every `log_*` to stderr, so the way to
+    /// be unsupported is to say nothing on stdout.
     ///
     /// For a mutating command the document is `{"schema_version", "plan",
     /// "receipt"}`, and `receipt` is `null` for a `--dry-run`. For a read-only

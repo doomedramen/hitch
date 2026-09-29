@@ -9,6 +9,7 @@ pub mod crash_recovery_tests;
 pub mod diff_tests;
 pub mod guard_tests;
 pub mod init_tests;
+pub mod json_support_tests;
 pub mod lock_unlock_tests;
 pub mod output_contract_tests;
 pub mod plan_apply_tests;
