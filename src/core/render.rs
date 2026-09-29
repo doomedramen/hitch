@@ -1148,7 +1148,25 @@ fn render_applied_effect(out: &mut String, effect: &AppliedEffect) {
 /// first is a ref edit read back from the object database. Collapsing the
 /// sections would lose the distinction; indenting the detail deeper than the
 /// effect lines is what keeps the two kinds from sharing a column.
+///
+/// The heading is omitted when there is nothing to report, which `hitch remove`
+/// is the first command to reach. Every other mutation has a named environment
+/// in the snapshot by construction — the reader asked about `dev`, so `dev` is
+/// in the answer — and `remove` is defined by making it stop being the case. A
+/// bare `Result` heading with no lines under it reads as a rendering that broke,
+/// which is the worst thing a receipt can say after it has just told the reader
+/// it did the thing correctly.
+///
+/// The reader's actual question is answered elsewhere and more precisely: the
+/// effect line above says `remove environment 'dev' from the declaration`, so
+/// nothing is lost by not also opening a section that has no contents. This
+/// follows `unaffected_resources_are_listed_and_the_heading_vanishes_when_empty`
+/// for the same reason — a document section that has nothing in it should not
+/// be on the page.
 fn render_resulting_state(out: &mut String, snapshot: &RepositoryStateSnapshot) {
+    if snapshot.environments.is_empty() {
+        return;
+    }
     out.push('\n');
     heading(out, "Result");
     for environment in &snapshot.environments {
@@ -1843,12 +1861,14 @@ mod tests {
     };
     use crate::core::status::{MatrixCell, MatrixRow};
     use crate::operations::model::{
-        CompositionPlan, ConfirmationRequirement, DependentRebuildOutcome, ExecutionReceipt,
-        ExecutionWarning, HoldPair, OperationIntent, OperationKind, PlanFingerprint, PlanWarning,
-        PlanWarningKind, ResourceKind, UnaffectedResource,
+        CompositionPlan, ConfirmationRequirement, DependentRebuildOutcome, EnvironmentField,
+        EnvironmentFieldChange, EnvironmentFieldValue, ExecutionReceipt, ExecutionWarning,
+        HoldPair, OperationIntent, OperationKind, PlanFingerprint, PlanWarning, PlanWarningKind,
+        ResourceKind, UnaffectedResource, OPERATION_KINDS,
     };
     use crate::utils::build_record::PinnedBranch;
     use chrono::{TimeZone, Utc};
+    use std::collections::BTreeMap;
 
     #[derive(serde::Serialize)]
     struct Detail;
@@ -2017,10 +2037,180 @@ mod tests {
                 },
                 "Release dev → main",
             ),
+            (
+                OperationIntent::LockEnvironment {
+                    environment: "dev".into(),
+                },
+                "Lock dev",
+            ),
+            (
+                OperationIntent::UnlockEnvironment {
+                    environment: "dev".into(),
+                },
+                "Unlock dev",
+            ),
+            (
+                OperationIntent::SetEnvironment {
+                    environment: "dev".into(),
+                    changes: vec![EnvironmentFieldChange {
+                        field: EnvironmentField::Base,
+                        old: EnvironmentFieldValue::Branch("main".into()),
+                        new: EnvironmentFieldValue::Branch("develop".into()),
+                    }],
+                },
+                "Set dev · 1 setting",
+            ),
+            (
+                OperationIntent::AddEnvironment {
+                    environment: "staging".into(),
+                    base: "main".into(),
+                },
+                "Add staging on main",
+            ),
+            (
+                OperationIntent::RemoveEnvironment {
+                    environment: "legacy".into(),
+                },
+                "Remove legacy",
+            ),
+            (
+                OperationIntent::Cleanup {
+                    candidates: vec!["refs/hitch/backup/a".into()],
+                },
+                "Clean up 1 ref",
+            ),
+            (
+                OperationIntent::ApplyApproval {
+                    environment: "production".into(),
+                    request_id: "req-7".into(),
+                    branches: vec!["feature/login".into()],
+                },
+                "Approve feature/login → production",
+            ),
         ];
         for (intent, expected) in cases {
             assert_eq!(plan_headline(&plan(intent)), expected);
         }
+    }
+
+    /// Every `OperationKind` reaches a headline, and none of them collides.
+    ///
+    /// The table above is a list of what the eleven intents happen to say, and a
+    /// list is not a total function: an intent with no arm, or two that render
+    /// the same words, both pass it. This walks `OPERATION_KINDS` — the constant
+    /// a new kind is added to — so a twelfth kind fails here rather than in a
+    /// document. Pairing each kind with a representative intent is the only way
+    /// to say "a kind and an intent are not the same thing": `SetEnvironment` and
+    /// `LockEnvironment` are different kinds whose headlines are both one verb
+    /// away from each other, and a kind/intent mixup between them would be
+    /// invisible to a test that only looked at intents.
+    #[test]
+    fn every_operation_kind_has_a_distinct_headline() {
+        let representatives = [
+            (
+                OperationKind::Rebuild,
+                OperationIntent::RebuildEnvironment {
+                    environment: "dev".into(),
+                },
+            ),
+            (
+                OperationKind::Promote,
+                OperationIntent::PromoteBranches {
+                    environment: "dev".into(),
+                    branches: vec!["a".into()],
+                },
+            ),
+            (
+                OperationKind::Demote,
+                OperationIntent::DemoteBranches {
+                    environment: "dev".into(),
+                    branches: vec!["a".into()],
+                },
+            ),
+            (
+                OperationKind::Release,
+                OperationIntent::ReleaseEnvironment {
+                    environment: "dev".into(),
+                    target: "main".into(),
+                },
+            ),
+            (
+                OperationKind::Lock,
+                OperationIntent::LockEnvironment {
+                    environment: "dev".into(),
+                },
+            ),
+            (
+                OperationKind::Unlock,
+                OperationIntent::UnlockEnvironment {
+                    environment: "dev".into(),
+                },
+            ),
+            (
+                OperationKind::SetEnvironment,
+                OperationIntent::SetEnvironment {
+                    environment: "dev".into(),
+                    changes: vec![],
+                },
+            ),
+            (
+                OperationKind::AddEnvironment,
+                OperationIntent::AddEnvironment {
+                    environment: "staging".into(),
+                    base: "main".into(),
+                },
+            ),
+            (
+                OperationKind::RemoveEnvironment,
+                OperationIntent::RemoveEnvironment {
+                    environment: "dev".into(),
+                },
+            ),
+            (
+                OperationKind::Cleanup,
+                OperationIntent::Cleanup { candidates: vec![] },
+            ),
+            (
+                OperationKind::ApprovalApply,
+                OperationIntent::ApplyApproval {
+                    environment: "dev".into(),
+                    request_id: "req-1".into(),
+                    branches: vec!["a".into()],
+                },
+            ),
+        ];
+
+        assert_eq!(
+            representatives.len(),
+            OPERATION_KINDS.len(),
+            "a new OperationKind needs a headline, and a representative intent to \
+             check it with: {representatives:?} vs {OPERATION_KINDS:?}"
+        );
+
+        let mut seen: BTreeMap<String, OperationKind> = BTreeMap::new();
+        for (kind, intent) in &representatives {
+            let mut p = plan(intent.clone());
+            p.kind = *kind;
+            let headline = plan_headline(&p);
+            assert!(
+                !headline.is_empty(),
+                "{kind:?} renders an empty headline, which is a document that opens \
+                 with a blank line"
+            );
+            if let Some(previous) = seen.insert(headline.clone(), *kind) {
+                assert_eq!(
+                    previous, *kind,
+                    "{kind:?} and {previous:?} both render `{headline}`, so a reader \
+                     cannot tell which operation a plan is for — and the plan's own \
+                     `kind` field is what a `--json` consumer keys on"
+                );
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            representatives.len(),
+            "every kind should have contributed one distinct headline"
+        );
     }
 
     #[test]
@@ -2713,6 +2903,50 @@ mod tests {
             has_line(&rendered, "      login added to the declaration"),
             "{rendered}"
         );
+    }
+
+    /// A snapshot with nothing in it produces no `Result` section at all.
+    ///
+    /// `hitch remove dev` is what reaches this, and it is the *only* thing that
+    /// does: every other mutation names an environment, so the snapshot has one.
+    /// `remove` is defined by making it stop being the case, which means the
+    /// `Result` section renders its heading and then has no line to put under
+    /// it. A reader who has just been told their environment was removed sees a
+    /// heading that looks like the beginning of an answer, and gets none.
+    ///
+    /// The receipt is still complete: the effect line above carries the whole
+    /// fact (`remove environment 'dev' from the declaration`), so nothing is
+    /// lost by dropping a section that cannot say anything.
+    #[test]
+    fn an_empty_snapshot_leaves_no_result_section_to_be_empty() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.resulting_state = Some(RepositoryStateSnapshot {
+            environments: Vec::new(),
+            ..snapshot(EnvironmentHealth::Realised)
+        });
+        let rendered = render_receipt(&r);
+        assert!(
+            !rendered.contains("Result"),
+            "a heading with no lines under it reads as a broken render, not as an \
+             empty answer:\n{rendered}"
+        );
+        // And the receipt is still an answer rather than a stub.
+        assert_eq!(rendered.lines().next(), Some("Applied"), "{rendered}");
+    }
+
+    /// With one environment the section is there, and the heading is not alone.
+    ///
+    /// The counterpart to the test above, and the reason it is not vacuous: the
+    /// section does not vanish for a reason the *receipt* needs — the guard is
+    /// on the snapshot's contents, so a receipt carrying a real snapshot still
+    /// opens it.
+    #[test]
+    fn a_snapshot_with_an_environment_still_renders_the_result_section() {
+        let mut r = receipt(OperationOutcome::Applied);
+        r.resulting_state = Some(snapshot(EnvironmentHealth::Realised));
+        let rendered = render_receipt(&r);
+        assert!(rendered.contains("\nResult\n"), "{rendered}");
+        assert!(has_line(&rendered, "  ✓ dev   realised"), "{rendered}");
     }
 
     #[test]

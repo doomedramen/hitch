@@ -7,6 +7,8 @@ pub mod cleanup_tests;
 pub mod conflicts_tests;
 pub mod crash_recovery_tests;
 pub mod diff_tests;
+pub mod document_shape_tests;
+pub mod exit_code_inventory_tests;
 pub mod guard_tests;
 pub mod init_tests;
 pub mod json_support_tests;

@@ -20,9 +20,14 @@ mod tests {
     use crate::test_framework::*;
     use hitch::commands::global_context::{GlobalContext, GlobalFlags};
     use hitch::core::state::EnvironmentHealth;
+    use hitch::operations::cleanup::{apply_cleanup_plan, plan_cleanup};
     use hitch::operations::declaration::{
         apply_declaration_plan, plan_approved_declaration_change, plan_demote, plan_promote,
         DeclarationChange, DeclarationPlanDetail, DeclarationPlanOptions,
+    };
+    use hitch::operations::metadata::{
+        apply_metadata_plan, plan_add_environment, plan_lock, plan_remove_environment,
+        plan_set_environment, plan_unlock, EnvironmentSet,
     };
     use hitch::operations::model::{
         AppliedEffect, DependentRebuildOutcome, OperationOutcome, OperationPlan, PlanApplyError,
@@ -2355,8 +2360,283 @@ mod tests {
             let release_receipt = apply_release(env, &release, false)?;
             assert_no_restated_warning(&release, &release_receipt);
 
+            // ── The seven P8 mutations ──
+            //
+            // The three above are the advisory families that existed when the
+            // contract was written. These are the ones a fourth through seventh
+            // planner could reintroduce the shape on, so they are swept here
+            // rather than trusted to their own files.
+            //
+            // Only *some* of the seven can carry a plan warning, and that is
+            // itself part of the claim: `lock`, `unlock` and `add` have nothing
+            // to predict, so the arms below assert their receipts carry no
+            // warning at all — which is a real statement (a non-owed warning
+            // would be a fact discovered while applying that belongs in the plan
+            // or in the resulting state) and not a vacuous pass.
+
+            // A promoted-branch advisory from the remove planner.
+            make_feature(env, "feat-live")?;
+            declare_branches(env, "dev", &["feat-live"])?;
+            let remove = plan_remove_environment(&context_for(env, false)?, "dev", false)?;
+            assert!(
+                remove
+                    .warnings
+                    .iter()
+                    .any(|w| w.message.contains("promoted branch")),
+                "this arm is vacuous unless the plan predicts the branch loss: {:?}",
+                remove.warnings
+            );
+            let remove_receipt =
+                apply_metadata_plan(&context_for(env, false)?, &remove, &mut |_| {})?;
+            assert_no_restated_warning(&remove, &remove_receipt);
+            // Re-declared so the `set` arm below has an environment to edit.
+            declare_branches(env, "dev", &[])?;
+
+            // A pending-approval-request advisory from the set planner.
+            pending_request(env)?;
+            let set = plan_set_environment(
+                &context_for(env, false)?,
+                "dev",
+                &EnvironmentSet {
+                    min_approvals: Some(2),
+                    ..Default::default()
+                },
+            )?;
+            assert!(
+                set.warnings
+                    .iter()
+                    .any(|w| w.message.contains("pending approval request")),
+                "this arm is vacuous unless the plan predicts the pending request: {:?}",
+                set.warnings
+            );
+            let set_receipt = apply_metadata_plan(&context_for(env, false)?, &set, &mut |_| {})?;
+            assert_no_restated_warning(&set, &set_receipt);
+
+            for (label, receipt) in [
+                (
+                    "lock",
+                    apply_metadata_plan(
+                        &context_for(env, false)?,
+                        &plan_lock(&context_for(env, false)?, "dev")?,
+                        &mut |_| {},
+                    )?,
+                ),
+                (
+                    "unlock",
+                    apply_metadata_plan(
+                        &context_for(env, false)?,
+                        &plan_unlock(&context_for(env, false)?, "dev")?,
+                        &mut |_| {},
+                    )?,
+                ),
+            ] {
+                assert!(
+                    receipt.warnings.is_empty(),
+                    "a {label} applies one closure and learns nothing, so a warning \
+                     here is a fact with nowhere to belong: {:?}",
+                    receipt.warnings
+                );
+            }
+            let add_plan = plan_add_environment(&context_for(env, false)?, "staging", None)?;
+            let add_receipt =
+                apply_metadata_plan(&context_for(env, false)?, &add_plan, &mut |_| {})?;
+            assert!(
+                add_receipt.warnings.is_empty(),
+                "and an add has nothing to predict either: {:?}",
+                add_receipt.warnings
+            );
+
+            // `approve`, which shares the declaration planner, so its receipt
+            // is the same one the demote arm above already proved carries no
+            // restatement — asserted here for the kind, not the site.
+            let approved = plan_approved_declaration_change(
+                &context_for(env, false)?,
+                "dev",
+                DeclarationChange::ApprovedApply {
+                    request_id: "req-1".to_string(),
+                    operation: hitch::types::Operation::Promote,
+                    branches: vec!["feat-live".to_string()],
+                },
+                "req-1",
+                DeclarationPlanOptions { no_rebuild: true },
+                &mut |_| {},
+            )?;
+            let approved_receipt =
+                apply_declaration_plan(&context_for(env, false)?, &approved, &mut |_| {})?;
+            assert_no_restated_warning(&approved, &approved_receipt);
+            assert!(
+                approved_receipt.warnings.is_empty(),
+                "an approved apply that rebuilt cleanly owes nothing: {:?}",
+                approved_receipt.warnings
+            );
+
+            // The one operation whose receipt *should* carry a warning, and the
+            // reason the distinction exists: a refused `git branch -d` is a fact
+            // about the commit graph that no fingerprint could have protected,
+            // so the plan cannot predict it and the apply has to report it.
+            //
+            // This is the arm that would fail if `cleanup`'s plan started
+            // predicting the failure — which would be the double print, arriving
+            // from a new direction.
+            unmergeable_branch(env, "feat-stranded")?;
+            let cleanup = plan_cleanup(&context_for(env, false)?, None)?;
+            let cleanup_receipt = apply_cleanup_plan(&context_for(env, false)?, &cleanup)?;
+            assert!(
+                !cleanup_receipt.warnings.is_empty(),
+                "this arm is vacuous unless a refused delete produced an owed \
+                 warning: {:?}",
+                cleanup_receipt.warnings
+            );
+            assert_no_restated_warning(&cleanup, &cleanup_receipt);
+
             Ok::<(), anyhow::Error>(())
         })?;
+        Ok(())
+    }
+
+    /// Every construction of a receipt warning sets `owes_effect: true`.
+    ///
+    /// The other half of the contract `a_receipt_never_restates_a_plan_warning`
+    /// holds from one side. A receipt warning is by definition a fact discovered
+    /// while applying that the plan could not have known; the second field says
+    /// whether finishing that fact is work still owed. A producer that sets it
+    /// false is claiming the operation is finished and the warning is a note
+    /// about it — and there is no such thing: the note belongs in the plan (if
+    /// it was predictable) or in `resulting_state` (if it is a fact about where
+    /// things stand), both of which a reader is already looking at.
+    ///
+    /// Asserted by walking the source rather than by reaching every producer
+    /// from a test, and that is the whole reason: a refused `git branch -d` is
+    /// reachable, but a *declined* push needs a `pre-receive` hook in a bare
+    /// origin and a failed nested rebuild needs a base that failed its own — so
+    /// a runtime sweep would quietly cover one of the three and claim all of
+    /// them. The walk sees every site, reachable or not, and the reachability
+    /// of each is somebody else's test to hold.
+    ///
+    /// The *value* is checked, not the presence of the field. The compiler
+    /// already guarantees presence — `ExecutionWarning` has no `Default` and
+    /// both fields are required, so a literal that omits one does not compile.
+    /// What the compiler cannot see is the `false`, and that is the defect worth
+    /// catching.
+    #[test]
+    fn every_receipt_warning_owes_something() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/operations");
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
+            .expect("src/operations is readable")
+            .map(|e| e.expect("a readable dir entry").path())
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+            .collect();
+        files.sort();
+        for file in files {
+            let name = file
+                .file_name()
+                .expect("a file name")
+                .to_string_lossy()
+                .into_owned();
+            // The model defines the type and the doc comment that says why the
+            // non-owed branch is currently unreachable; the *producers* are the
+            // executors, and `cleanup.rs`'s single `owed()` helper is the one
+            // place that builds one without spelling the field out.
+            if name == "model.rs" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).expect("readable source");
+            let mut cursor = 0usize;
+            while let Some(at) = text[cursor..].find("ExecutionWarning {") {
+                let open = cursor + at + "ExecutionWarning {".len() - 1;
+                let line_no = text[..open].lines().count();
+                checked += 1;
+                // From the opening brace, counting depth, to its match. Anything
+                // looser — "does `owes_effect` appear nearby" — is a heuristic,
+                // and a heuristic over *this* claim is the difference between a
+                // guard and a comment, because the warning's own field is what
+                // makes a neighbouring line look like a construction.
+                let mut depth = 0usize;
+                let mut end = text.len();
+                for (offset, ch) in text[open..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = open + offset + ch.len_utf8();
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !text[open..end].contains("owes_effect: true") {
+                    offenders.push(format!("{name}:{line_no}"));
+                }
+                cursor = end;
+            }
+        }
+
+        assert!(
+            checked >= 5,
+            "the walk found only {checked} receipt-warning construction sites, so \
+             it is not covering the producers it claims to"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these receipt warnings do not say whether they owe an effect. A \
+             receipt warning is a fact discovered while applying, so the question \
+             is whether completing it is work still owed — build it through \
+             `cleanup.rs`'s `owed()` helper, or spell the field out: {offenders:?}"
+        );
+    }
+
+    /// A file the merge engine would refuse to fold, so `git branch -d` refuses
+    /// it. Distinct from `conflicting_pair`, which builds a *pair* for a build
+    /// to hold: this one is a single branch off `main` that `main` does not
+    /// contain, which is the ordinary shape of a promoted-then-demoted feature.
+    fn unmergeable_branch(env: &TestEnvironment, name: &str) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "-b", name])?;
+        env.fs.write_file(&format!("{name}.txt"), "unmerged")?;
+        env.git.run(&["add", "-f", &format!("{name}.txt")])?;
+        env.git
+            .run(&["commit", "-m", &format!("{name}: unmerged work")])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    /// An approval request sitting `Pending` against `dev`, which is what makes
+    /// `hitch set`'s "this will be measured against these settings" advisory
+    /// fire. Written straight into `hitch.json` because the *fact* under test is
+    /// the pending request, not the way one is filed.
+    fn pending_request(env: &TestEnvironment) -> anyhow::Result<()> {
+        let mut config: serde_json::Value = serde_json::from_str(&git_plain(
+            &env.temp_dir,
+            &["show", "hitch-metadata:hitch.json"],
+        )?)?;
+        config["approval_requests"] = serde_json::json!([{
+            "id": "req-pending",
+            "environment": "dev",
+            "branch": "feat-a",
+            "operation": "Promote",
+            "status": "Pending",
+            "requested_by": "someone@example.com",
+            "requested_at": "2026-01-01T00:00:00Z",
+            "approvals": [],
+            "rebuild_snapshot": {
+                "base_branch": "main",
+                "base_sha": "0".repeat(40),
+                "branch_shas": {},
+                "merge_conflicts": false
+            },
+            "snapshot_min_approvals": 1
+        }]);
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git
+            .run(&["commit", "-m", "test: file a pending approval request"])?;
+        env.git.run(&["checkout", "main"])?;
         Ok(())
     }
 

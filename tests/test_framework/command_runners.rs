@@ -206,6 +206,15 @@ impl HitchCommandResult {
         self.output.status.code()
     }
 
+    /// The argv this ran with, for a failure message.
+    ///
+    /// The injected `--no-push`/`--yes`/`--verbose` are in here too, which is
+    /// the point: a test that expected a refusal and got a success usually
+    /// wants to see that `--yes` was appended for it.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
     /// Assert that command succeeded
     pub fn assert_success(self) -> Self {
         if !self.success() {
@@ -448,6 +457,15 @@ impl GitCommandResult {
     /// Get exit code
     pub fn exit_code(&self) -> Option<i32> {
         self.output.status.code()
+    }
+
+    /// The argv this ran with, for a failure message.
+    ///
+    /// The injected `--no-push`/`--yes`/`--verbose` are in here too, which is
+    /// the point: a test that expected a refusal and got a success usually
+    /// wants to see that `--yes` was appended for it.
+    pub fn args(&self) -> &[String] {
+        &self.args
     }
 
     /// Assert that command succeeded
