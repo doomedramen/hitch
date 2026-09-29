@@ -1111,20 +1111,15 @@ an environment build ejects and continues. Collapsing them would take the
 eject-and-continue policy away from builds or the all-or-nothing property away
 from releases.
 
-`preflight_compatibility_report` is **not yet** a display-only function, and
-the remaining mutation that depends on it is `hitch resolve`, not `rebuild`
-and not `release`.
-`commands/resolve.rs:131` and `:180` use it to decide Mode A (rebase the branch
-onto the base) versus Mode B (peer conflict), and to refuse outright when it
-reports no conflict at all — so a preflight/composition disagreement would
-there pick the wrong resolution mode, not merely print a stale preview. The
-read-only callers are `conflicts.rs:44` and, via the offline
-`preflight_compatibility_report_local`, `status.rs:238` and `tree.rs:138`; those
-are legitimate, since a display preflight is allowed to approximate. Routing
-`resolve`'s mode selection through the shared primitive is **still not done**,
-and it is now the *only* one left: P1 scoped itself to `rebuild`'s dry-run, P4
-built the planner `resolve` would need to choose a mode from, and P5 closed
-release's. Do not add further dependants in the meantime.
+No mutation reads `preflight_compatibility_report` any more. `hitch resolve`
+chooses Mode A (held partner is the base) versus Mode B (a peer) and refuses
+"nothing to resolve" from `predict_composition(..).held`, the same composition a
+rebuild runs, offline (unlike the preflight it replaced, it does not sync). The remaining
+callers are display-only (`conflicts.rs`, and via `_local` `status.rs`,
+`tree.rs`); Task 5 of P10 migrates them and deletes the preflight, so once it
+lands this paragraph should say only that no tree-based oracle exists. Known
+quirk shared by both oracles: `conflicts_with` names the last-composed branch,
+so a branch that collides with the base after a clean peer reads as Mode B.
 Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_replayed_resolutions`
 (resolve_tests) and `test_dry_run_and_real_build_agree_on_held_branches`
 (rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose

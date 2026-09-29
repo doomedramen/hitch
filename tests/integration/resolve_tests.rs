@@ -1074,4 +1074,186 @@ mod tests {
 
         Ok(())
     }
+
+    fn commit_file(env: &TestEnvironment, file: &str, content: &str) -> anyhow::Result<()> {
+        env.fs.write_file(file, content)?;
+        env.git.run(&["add", "-f", file])?;
+        env.git.run(&["commit", "-m", file])?;
+        Ok(())
+    }
+
+    fn branch_off_main(
+        env: &TestEnvironment,
+        name: &str,
+        file: &str,
+        content: &str,
+    ) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "-b", name, "main"])?;
+        commit_file(env, file, content)?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    fn declare(env: &TestEnvironment, base: &str, branches: &[&str]) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let mut config: serde_json::Value = serde_json::from_str(&env.fs.read_file("hitch.json")?)?;
+        config["environments"]["dev"]["base"] = serde_json::json!(base);
+        config["environments"]["dev"]["branches"] = serde_json::json!(branches);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git.run(&["commit", "-m", "test: declare"])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    /// The mode decision reads `(branch, conflicts_with, files)` of the target's
+    /// held entry. These are the verdicts the tree-based `preflight_compatibility_report`
+    /// gave for the same repositories (compared side by side before it was
+    /// removed from `resolve`); the composition agreed in every one, including
+    /// when the target conflicts with the accumulated composition but not with
+    /// the last-composed branch's own files.
+    #[test]
+    fn test_resolve_mode_selection_verdicts_match_the_old_preflight() -> anyhow::Result<()> {
+        use hitch::commands::global_context::{GlobalContext, GlobalFlags};
+        use hitch::types::Environment;
+        use hitch::utils::logging::Logger;
+        use hitch::utils::prelude::predict_composition;
+        use std::sync::Arc;
+
+        const S: &str = "one\ntwo\nthree\nfour\nfive\n";
+        const A: &str = "A\ntwo\nthree\nfour\nfive\n";
+        const C: &str = "C\ntwo\nthree\nfour\nfive\n";
+        const MAIN: &str = "MAIN\ntwo\nthree\nfour\nfive\n";
+
+        fn held(
+            build: impl Fn(&TestEnvironment) -> anyhow::Result<Vec<&'static str>>,
+        ) -> anyhow::Result<Vec<(String, String, Vec<String>)>> {
+            let framework = HitchTestFramework::new()?;
+            let mut out = Vec::new();
+            framework.with_test_environment(TestSetup::HitchInit, |env| {
+                let branches = build(env)?;
+                let ctx = GlobalContext::new_at_path(
+                    env.temp_dir.to_str().unwrap(),
+                    GlobalFlags {
+                        verbose: false,
+                        no_push: true,
+                        assume_yes: true,
+                        json: false,
+                    },
+                    Arc::new(Logger::new()),
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let mut e = Environment::new("main".to_string());
+                e.branches = branches.iter().map(|b| b.to_string()).collect();
+                out = predict_composition(&ctx, &e, "dev")?
+                    .held
+                    .into_iter()
+                    .map(|c| (c.branch, c.conflicts_with, c.conflicted_files))
+                    .collect();
+                Ok::<(), anyhow::Error>(())
+            })?;
+            Ok(out)
+        }
+        let entry = |b: &str, w: &str, f: &str| (b.to_string(), w.to_string(), vec![f.to_string()]);
+
+        // Mode A: the base moved after the branch diverged.
+        assert_eq!(
+            held(|env| {
+                commit_file(env, "shared.txt", S)?;
+                branch_off_main(env, "a", "shared.txt", A)?;
+                commit_file(env, "shared.txt", MAIN)?;
+                Ok(vec!["a"])
+            })?,
+            vec![entry("a", "main", "shared.txt")]
+        );
+        // Mode B: two peers.
+        assert_eq!(
+            held(|env| {
+                commit_file(env, "shared.txt", "base\n")?;
+                branch_off_main(env, "a", "shared.txt", "from-a\n")?;
+                branch_off_main(env, "b", "shared.txt", "from-b\n")?;
+                Ok(vec!["a", "b"])
+            })?,
+            vec![entry("b", "a", "shared.txt")]
+        );
+        // Three branches: c collides with a, which is not the last-composed
+        // branch (b). Both oracles name the last-composed one.
+        assert_eq!(
+            held(|env| {
+                commit_file(env, "shared.txt", S)?;
+                branch_off_main(env, "a", "shared.txt", A)?;
+                branch_off_main(env, "b", "b.txt", "b\n")?;
+                branch_off_main(env, "c", "shared.txt", C)?;
+                Ok(vec!["a", "b", "c"])
+            })?,
+            vec![entry("c", "b", "shared.txt")]
+        );
+        // Nothing to resolve.
+        assert!(held(|env| {
+            commit_file(env, "shared.txt", S)?;
+            branch_off_main(env, "a", "a.txt", "a\n")?;
+            Ok(vec!["a"])
+        })?
+        .is_empty());
+        Ok(())
+    }
+
+    /// The old preflight failed on an unresolvable base with a bare
+    /// "revision not found"; the composition's pinning names the base and the
+    /// fetch to run.
+    #[test]
+    fn test_resolve_with_a_missing_base_says_how_to_fix_it() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            commit_file(env, "shared.txt", "base\n")?;
+            branch_off_main(env, "a", "shared.txt", "from-a\n")?;
+            declare(env, "no-such-base", &["a"])?;
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev"])
+                .execute()?
+                .assert_failure()
+                .assert_stderr_contains("Base branch 'no-such-base' does not exist")
+                .assert_stderr_contains("git fetch origin no-such-base");
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_with_nothing_held_says_nothing_to_resolve() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            commit_file(env, "shared.txt", "base\n")?;
+            branch_off_main(env, "a", "a.txt", "a\n")?;
+            declare(env, "main", &["a"])?;
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev"])
+                .execute()?
+                .assert_failure()
+                .assert_stderr_contains("nothing to resolve");
+            env.hitch
+                .run()
+                .args(&["resolve", "dev", "--branch", "a"])
+                .execute()?
+                .assert_failure()
+                .assert_stderr_contains("does not currently conflict");
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
 }

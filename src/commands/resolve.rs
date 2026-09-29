@@ -2,8 +2,8 @@ use crate::commands::global_context::GlobalContext;
 use crate::types::Environment;
 use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{
-    access_metadata_read_only, force_push_with_deploy_key_if_configured,
-    preflight_compatibility_report, publish_environment_build, CompatibilityConflict,
+    access_metadata_read_only, force_push_with_deploy_key_if_configured, predict_composition,
+    publish_environment_build, CompatibilityConflict,
 };
 use anyhow::Result;
 use clap::Args;
@@ -127,8 +127,7 @@ pub fn run(args: ResolveCommand, context: &GlobalContext) -> Result<()> {
         ));
     }
 
-    let conflicts =
-        preflight_compatibility_report(context, &environment.base, &environment.branches)?;
+    let conflicts = held_branches(context, &args.env_name, &environment)?;
     let conflict = conflicts
         .into_iter()
         .find(|c| c.branch == branch)
@@ -164,6 +163,17 @@ pub fn run(args: ResolveCommand, context: &GlobalContext) -> Result<()> {
     }
 }
 
+/// The branches a build of `environment` would hold right now, read from the
+/// same composition a rebuild runs. Offline: it does not sync, so it describes
+/// the local (or last-fetched) refs, as `hitch resolve` always has.
+fn held_branches(
+    context: &GlobalContext,
+    env_name: &str,
+    environment: &Environment,
+) -> Result<Vec<CompatibilityConflict>> {
+    Ok(predict_composition(context, environment, env_name)?.held)
+}
+
 /// Figure out which promoted branch to operate on: the explicit `--branch`,
 /// or — if there's exactly one currently held — that one. Ambiguous or
 /// empty cases ask the user to be explicit rather than guessing.
@@ -176,8 +186,7 @@ fn resolve_target_branch(
         return Ok(b.clone());
     }
 
-    let conflicts =
-        preflight_compatibility_report(context, &environment.base, &environment.branches)?;
+    let conflicts = held_branches(context, &args.env_name, environment)?;
 
     match conflicts.len() {
         0 => Err(anyhow::anyhow!(
