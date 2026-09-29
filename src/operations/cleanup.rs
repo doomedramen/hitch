@@ -321,7 +321,7 @@ pub fn plan_cleanup(
         // being. `--yes` is the answer, and it is what every other destructive
         // operation in the CLI already takes.
         ConfirmationRequirement::required(format!(
-            "this deletes {} ref{} that hitch does not own",
+            "this deletes {} item{} that hitch does not own",
             found,
             if found == 1 { "" } else { "s" }
         ))

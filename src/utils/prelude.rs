@@ -386,10 +386,10 @@ where
             Ok(content) => content,
             Err(e) => {
                 // If file doesn't exist, create default config
-                context.log_verbose(&format!(
-                    "hitch.json not found or unreadable ({}), creating default configuration",
-                    e
-                ));
+                context.log_warning(
+                    "hitch's settings file was not found or could not be read, creating default configuration",
+                );
+                context.log_verbose(&format!("Reading hitch.json failed: {}", e));
                 let default_config = HitchConfig::new();
                 serde_json::to_string_pretty(&default_config)
                     .context("Failed to serialize default hitch configuration")?
@@ -452,7 +452,8 @@ where
                          then re-run, or push manually with: git push origin hitch-metadata",
                     );
                 } else {
-                    context.log_warning(&format!("Failed to push metadata to remote: {}", e));
+                    context.log_warning("Failed to push hitch's settings to remote");
+                    context.log_verbose(&format!("Push error: {}", e));
                 }
             } else {
                 context.log_verbose("✓ Metadata pushed to remote");

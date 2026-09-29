@@ -485,7 +485,7 @@ pub fn plan_set_environment(
         // never be.
         confirmation: if context.should_push() && !changes.is_empty() {
             ConfirmationRequirement::required(
-                "write the updated declaration and push hitch-metadata to origin",
+                "write the updated declaration and publish it to origin",
             )
         } else {
             ConfirmationRequirement::not_required()

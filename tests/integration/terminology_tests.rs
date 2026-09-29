@@ -93,12 +93,22 @@ mod tests {
         reason: &'static str,
     }
 
-    const ALLOWED: &[Allowed] = &[Allowed {
-        needle: "hitch-metadata",
-        line_contains: "git push origin hitch-metadata",
-        reason: "a pasteable remedy: the user must run this exact git command \
-                 (Constraint 11, exception 2)",
-    }];
+    const ALLOWED: &[Allowed] = &[
+        Allowed {
+            needle: "hitch-metadata",
+            line_contains: "git push origin hitch-metadata",
+            reason: "a pasteable remedy: the user must run this exact git command \
+                     (Constraint 11, exception 2)",
+        },
+        Allowed {
+            needle: "hitch-metadata",
+            line_contains: "git checkout hitch-metadata && git pull",
+            reason: "a pasteable reconcile remedy for a diverged remote \
+                     (Constraint 11, exception 2)",
+        },
+    ];
+    // `detached HEAD` (the user's own checkout, in git's own term) contains no
+    // forbidden token, so it needs no entry.
 
     fn is_word_char(c: char) -> bool {
         c.is_alphanumeric() || c == '_'
@@ -132,10 +142,6 @@ mod tests {
     fn violations(step: &str, text: &str) -> Vec<String> {
         let mut out = Vec::new();
         for line in text.lines() {
-            // A pasteable remedy line may name a real git command.
-            if line.trim_start().starts_with("git ") {
-                continue;
-            }
             for needle in hits(line) {
                 let allowed = ALLOWED.iter().any(|a| {
                     assert!(!a.reason.is_empty());
@@ -154,17 +160,34 @@ mod tests {
         Ok,
         Fail,
         Code(i32),
+        /// A prompt step: which way the refusal exits varies by command, and the
+        /// text is what is under test.
+        Any,
     }
 
     struct Scenario<'a> {
         env: &'a TestEnvironment,
         verbose: bool,
+        /// Run without the harness's `--no-push`, so push-owing strings print.
+        push: bool,
         transcript: Vec<(String, String)>,
     }
 
     impl Scenario<'_> {
         fn step(&mut self, expect: Expect, args: &[&str]) -> anyhow::Result<()> {
-            let mut run = self.env.hitch.run().args(args);
+            self.step_with(true, expect, args)
+        }
+
+        /// `yes: false` makes the gate print its plan and question, then refuse
+        /// for want of a terminal: the only way to see a prompt's text.
+        fn step_with(&mut self, yes: bool, expect: Expect, args: &[&str]) -> anyhow::Result<()> {
+            let mut run = self
+                .env
+                .hitch
+                .run()
+                .with_yes(yes)
+                .with_no_push(!self.push)
+                .args(args);
             if self.verbose {
                 run = run.verbose();
             }
@@ -175,6 +198,7 @@ mod tests {
                 Expect::Ok => code == Some(0),
                 Expect::Fail => code == Some(1),
                 Expect::Code(c) => code == Some(c),
+                Expect::Any => code.is_some(),
             };
             assert!(
                 ok,
@@ -225,6 +249,7 @@ mod tests {
             let mut s = Scenario {
                 env,
                 verbose,
+                push: false,
                 transcript: Vec::new(),
             };
 
@@ -276,6 +301,79 @@ mod tests {
         })
     }
 
+    /// The same check over commands that owe a push, which the main scenario
+    /// never reaches because the harness injects `--no-push`.
+    fn run_push_scenario() -> anyhow::Result<Vec<(String, String)>> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::None, |env| {
+            let mut s = Scenario {
+                env,
+                verbose: false,
+                push: true,
+                transcript: Vec::new(),
+            };
+            s.step_with(true, Expect::Ok, &["init"])?;
+            env.setup_git_for_hitch()?;
+
+            let bare = env.temp_dir.parent().unwrap().join(format!(
+                "{}-origin",
+                env.temp_dir.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::create_dir_all(&bare)?;
+            #[allow(clippy::disallowed_methods)]
+            let init = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&bare)
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(init.status.success());
+            env.git
+                .run(&["remote", "add", "origin", &bare.to_string_lossy()])?
+                .assert_success();
+
+            make_feature(env, "feat-a", "a.txt", "a\n")?;
+            make_feature(env, "feat-c", "c.txt", "c\n")?;
+            env.git
+                .run(&["push", "origin", "main", "feat-a", "feat-c"])?;
+            env.git.run(&["push", "origin", "hitch-metadata"])?;
+
+            s.step(Expect::Ok, &["add", "dev"])?;
+            s.step(Expect::Ok, &["promote", "feat-a", "dev"])?;
+            s.step(Expect::Ok, &["rebuild", "dev"])?;
+            // Prompts: each owes a push, so each prints its confirmation reason.
+            s.step_with(false, Expect::Any, &["set", "dev", "--on-conflict", "halt"])?;
+            s.step_with(false, Expect::Any, &["promote", "feat-c", "dev"])?;
+            s.step_with(false, Expect::Any, &["rebuild", "dev"])?;
+            s.step_with(false, Expect::Any, &["remove", "dev"])?;
+            s.step_with(false, Expect::Any, &["release", "dev", "main"])?;
+            s.step(Expect::Ok, &["set", "dev", "--on-conflict", "halt"])?;
+            s.step(Expect::Ok, &["status"])?;
+            s.step(Expect::Ok, &["log"])?;
+            Ok(s.transcript)
+        })
+    }
+
+    #[test]
+    fn push_owing_output_names_no_mechanism() -> anyhow::Result<()> {
+        let transcript = run_push_scenario()?;
+        assert!(
+            transcript
+                .iter()
+                .any(|(_, t)| t.contains("publish it to origin")),
+            "the push scenario must reach a push-owing prompt or it proves nothing"
+        );
+        let bad: Vec<String> = transcript
+            .iter()
+            .flat_map(|(step, text)| violations(step, text))
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "push-time output leaked mechanism words:\n{}",
+            bad.join("\n")
+        );
+        Ok(())
+    }
+
     #[test]
     fn default_output_names_no_mechanism() -> anyhow::Result<()> {
         let transcript = run_scenario(false)?;
@@ -294,12 +392,15 @@ mod tests {
     #[test]
     fn verbose_output_still_carries_mechanism() -> anyhow::Result<()> {
         let transcript = run_scenario(true)?;
-        let any = transcript
+        let promote = transcript
             .iter()
-            .any(|(_, text)| text.lines().any(|l| !hits(l).is_empty()));
+            .find(|(step, _)| step.starts_with("promote feat-a dev"))
+            .expect("scenario promotes feat-a");
+        // Moved to verbose by this task, not deleted.
         assert!(
-            any,
-            "--verbose must still surface at least one mechanism term"
+            promote.1.contains("locked by") && promote.1.contains("unlocked"),
+            "--verbose must still narrate the operation's own lock:\n{}",
+            promote.1
         );
         Ok(())
     }

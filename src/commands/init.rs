@@ -69,10 +69,8 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     if context.should_push() {
         context.log_verbose("Pushing hitch-metadata branch to remote...");
         if let Err(e) = context.git().push_branch("hitch-metadata") {
-            context.log_warning(&format!(
-                "Failed to push hitch's settings branch to remote: {}",
-                e
-            ));
+            context.log_warning("Failed to push hitch's settings branch to remote");
+            context.log_verbose(&format!("Push error: {}", e));
             context.log_warning("You can push manually later with: git push origin hitch-metadata");
         } else {
             context.log_success("hitch's settings branch pushed to remote");

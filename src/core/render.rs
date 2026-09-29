@@ -346,7 +346,7 @@ fn previous(old: Option<&String>) -> String {
 /// thing, and the honest way to present one is to say what it is for rather
 /// than print a path the user has never seen.
 fn short_ref(refname: &str) -> String {
-    if refname == "refs/heads/hitch-metadata" {
+    if refname == "refs/heads/hitch-metadata" || refname == "refs/remotes/origin/hitch-metadata" {
         return "settings".to_string();
     }
     if let Some(branch) = refname.strip_prefix("refs/heads/") {
@@ -2954,6 +2954,7 @@ mod tests {
         assert_eq!(short_ref("refs/remotes/origin/dev"), "origin/dev");
         assert_eq!(short_ref("refs/tags/v1"), "tag v1");
         assert_eq!(short_ref("refs/heads/hitch-metadata"), "settings");
+        assert_eq!(short_ref("refs/remotes/origin/hitch-metadata"), "settings");
     }
 
     // ---- unaffected and warnings -----------------------------------------
