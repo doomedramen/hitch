@@ -35,7 +35,12 @@ environment branch from that declaration rather than accumulating manual
 merges. Config lives as `hitch.json` on a dedicated `hitch-metadata` branch.
 
 A secondary crate, `crates/hitch-desktop`, is a Tauri + React desktop GUI —
-out of scope unless a task explicitly touches it.
+out of scope unless a task explicitly touches it. It **no longer compiles
+against the core**: P10 deleted the adapters it consumed
+(`core::{timeline,details,workspace_index,workspace}`), by the user's decision
+(deviation 1 of `docs/superpowers/plans/2026-09-25-explainable-ux-P10-docs-and-legacy-removal.md`).
+The repair stream rebuilds it on `ActivityLog`, `RepositoryStateSnapshot`,
+`MatrixModel` and `WhyExplanation`.
 
 Read `README.md` for the user-facing model and `SKILL.md` for the condensed
 agent-facing command reference. `docs/merge-conflict-handling-plan.md` is the
@@ -255,9 +260,6 @@ covered.
     the release target is not recorded anywhere, so the log cannot name it.
     `hitch log` takes no repo lock (read-only, in `command_is_mutating`'s
     `false` arm).
-  - `timeline.rs` is now a thin adapter over `activity.rs` for the frozen
-    desktop crate (`TimelineItem` keeps its fields, gains `event`). It drops
-    `skipped`/`truncated`. **P10 deletes it** once the desktop reads `event`.
   - `state.rs` is **the** authority on "does this environment need a
     rebuild, and what actually moved". `build_state_snapshot` returns a
     `RepositoryStateSnapshot` — Desired read live from refs, Actual read
@@ -283,10 +285,6 @@ covered.
     `From<MatrixCell>`: `ActualMembership` describes an outcome, and §14's
     questions ("already in the base") are facts about a journey, which the
     outcome cannot answer.
-  - `workspace_index.rs`'s `build_workspace_index_model`/`WorkspaceIndexModel`
-    have no CLI command caller — they're consumed by `crates/hitch-desktop`'s
-    Tauri backend (`src-tauri/src/main.rs`), not `src/commands/*.rs`.
-    `details.rs` and `status.rs` are the other two view builders.
   - `render.rs` is **the only place in the codebase allowed to choose words**
     for a plan, a receipt, a status matrix, or a `hitch why` explanation.
     `render_plan<I>` / `render_receipt` / `render_matrix` / `render_why` /
@@ -561,8 +559,8 @@ is consulted, and `test_hitch_status_detects_base_branch_changes` /
 `test_hitch_status_multiple_envs_with_changed_base` used to be `#[ignore]`d as
 "timing-sensitive" for exactly this reason — they are live now and their
 `sleep(2)` is gone. Do not reintroduce a commit-date read into any
-verdict: `get_commit_timestamp` is deleted (`core/timeline.rs` is now an
-adapter over `activity.rs`, which takes dates from `list_first_parent_history`).
+verdict: `get_commit_timestamp` is deleted (`hitch log`'s
+`activity.rs` takes dates from `list_first_parent_history`).
 
 **`removed ⊆ changed_inputs` is an invariant of `health_from_record`, and the
 Result block depends on it.** `health_from_record` walks the *recorded* pins

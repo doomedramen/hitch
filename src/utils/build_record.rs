@@ -381,10 +381,9 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    /// Test-only plain-git helper, mirroring the one in
-    /// `src/core/workspace_index.rs`: a unit test in `src/` cannot reach the
-    /// integration harness in `tests/test_framework/`, and must not spawn git
-    /// with an inherited terminal stdin.
+    /// Test-only plain-git helper, mirroring the integration harness's: a
+    /// unit test in `src/` cannot reach `tests/test_framework/`, and must not
+    /// spawn git with an inherited terminal stdin.
     fn run_git(repo: &Path, args: &[&str]) -> String {
         #[allow(clippy::disallowed_methods)]
         let out = Command::new("git")
