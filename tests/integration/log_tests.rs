@@ -801,4 +801,150 @@ mod tests {
         });
         Ok(())
     }
+
+    // -----------------------------------------------------------------
+    // The command itself
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn hitch_log_tells_the_story() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feature/a")?;
+            make_feature(env, "feature/b")?;
+            promote(env, "feature/a", "dev");
+            promote(env, "feature/b", "dev");
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let out = env
+                .hitch
+                .run()
+                .args(&["log"])
+                .execute()?
+                .assert_success()
+                .stdout();
+            assert!(out.contains("Today"), "{out}");
+            assert!(out.contains("added feature/a to dev"), "{out}");
+            assert!(out.contains("rebuilt dev"), "{out}");
+            assert!(!out.contains("Locked"), "{out}");
+            assert!(!out.contains("metadata commit"), "{out}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_json_is_one_document_with_snake_case_enums() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feature/a")?;
+            promote(env, "feature/a", "dev");
+
+            let result = env.hitch.run().args(&["--json", "log"]).execute()?;
+            let stdout = result.assert_success().stdout();
+            let doc: serde_json::Value = serde_json::from_str(&stdout)?;
+            assert_eq!(doc["schema_version"], 1);
+            let kind = doc["log"]["entries"][0]["events"][0]["kind"]
+                .as_str()
+                .expect("kind is a string");
+            assert_eq!(kind, kind.to_lowercase(), "kind is snake_case: {kind}");
+            let mut found = Vec::new();
+            // Actor names are people's names, capitalised by nature; the
+            // contract is about the enums, which live in `events`.
+            for entry in doc["log"]["entries"].as_array().unwrap() {
+                pascal_case_tokens(&entry["events"], &mut found);
+            }
+            found.sort();
+            found.dedup();
+            assert!(
+                found.is_empty(),
+                "leaks Rust type names: {found:?}\n{stdout}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_does_not_take_the_repo_lock() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let git_dir = env.temp_dir.join(".git");
+            let _held = hitch::utils::repo_lock::RepoLock::acquire(&git_dir, "test")?;
+            // The lock really is held: a mutating command must be refused.
+            env.hitch
+                .run()
+                .args(&["add", "qa"])
+                .execute()?
+                .assert_failure();
+            env.hitch.run().args(&["log"]).execute()?.assert_success();
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_unknown_env_is_an_error_with_a_next_step() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let result = env
+                .hitch
+                .run()
+                .args(&["log", "--env", "nope"])
+                .execute()?
+                .assert_failure();
+            let err = result.stderr();
+            assert!(err.contains("nope"), "{err}");
+            assert!(err.contains("dev"), "lists existing environments: {err}");
+            assert!(err.contains("hitch status"), "{err}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_of_a_removed_environment_is_still_valid() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            env.hitch
+                .run()
+                .args(&["remove", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["log", "--env", "dev"])
+                .execute()?
+                .assert_success();
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_verbose_shows_the_metadata_commit() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let out = env
+                .hitch
+                .run()
+                .args(&["log", "--verbose"])
+                .execute()?
+                .assert_success()
+                .stdout();
+            assert!(out.contains("metadata commit"), "{out}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
 }

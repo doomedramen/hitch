@@ -13,10 +13,12 @@ pub mod command_runners;
 pub mod file_system_helpers;
 pub mod fixtures;
 pub mod framework;
+pub mod json_helpers;
 pub mod mocking;
 
 pub use assertions::AssertionHelpers;
 pub use command_runners::{GitCommandRunner, HitchCommandRunner};
 pub use file_system_helpers::FileSystemHelpers;
 pub use framework::{HitchTestFramework, TestEnvironment};
+pub use json_helpers::pascal_case_tokens;
 pub use mocking::MockCapabilities;

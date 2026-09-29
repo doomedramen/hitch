@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod guard;
 pub mod init;
 pub mod lock;
+pub mod log;
 pub mod pr;
 pub mod promote;
 pub mod push;

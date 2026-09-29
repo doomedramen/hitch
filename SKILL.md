@@ -91,6 +91,8 @@ hitch status                            # Show status of all environments
 hitch status --verbose                  # Detailed status
 hitch status --diff                     # Show config changes
 hitch tree                              # Show branch hierarchy
+hitch log                               # What happened: promotes, rebuilds, releases, locks, approvals
+hitch log --env dev --branch feature/x -n 50   # Filter / page (--json for a document)
 ```
 
 ### Lock/Unlock

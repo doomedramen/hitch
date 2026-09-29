@@ -38,7 +38,7 @@ pub struct Cli {
     ///
     /// Honours this today: `rebuild`, `promote`, `demote`, `release`, `lock`,
     /// `unlock`, `set`, `add`, `remove`, `cleanup`, `approvals approve`,
-    /// `status`, `why` — every mutating command, plus the two read-only ones. A
+    /// `status`, `why`, `log` — every mutating command, plus the three read-only ones. A
     /// command that does not support it leaves stdout **empty** rather than
     /// printing prose into a stream the caller is about to parse: under
     /// `--json` the diagnostic sink sends every `log_*` to stderr, so the way to
@@ -46,8 +46,8 @@ pub struct Cli {
     ///
     /// For a mutating command the document is `{"schema_version", "plan",
     /// "receipt"}`, and `receipt` is `null` for a `--dry-run`. For a read-only
-    /// command it is `{"schema_version", "<view>"}` — `status` and `why` have
-    /// no "after" half, and a `null` receipt would say "nothing happened", which
+    /// command it is `{"schema_version", "<view>"}` — `status`, `why` and `log`
+    /// have no "after" half, and a `null` receipt would say "nothing happened", which
     /// is true and useless. Enum values are `snake_case` in the read-only
     /// documents. A mutating command that needs confirmation but was not given
     /// `--yes` fails rather than prompting: a program that blocks on a terminal
@@ -91,6 +91,8 @@ pub enum Commands {
     /// A name that is both an environment and a promoted branch is an error
     /// naming both readings rather than a guess.
     Why(commands::why::WhyCommand),
+    /// Show what happened to your environments — who promoted, rebuilt, released, locked and approved what (not a git log)
+    Log(commands::log::LogCommand),
     /// Lock environment to prevent deployments
     Lock(commands::lock::LockCommand),
     /// Unlock environment to allow deployments

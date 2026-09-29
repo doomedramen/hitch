@@ -81,39 +81,6 @@ mod tests {
         Ok(serde_json::from_str(stdout)?)
     }
 
-    /// Every capitalised token in the document, sorted and deduplicated.
-    ///
-    /// The P7 decision is that every enum in this envelope is `snake_case`,
-    /// because a variant's Rust name is not a wire contract anyone should be
-    /// depending on. A collector over the whole document — rather than an
-    /// assertion on the four enums this file knows about — is what makes a *new*
-    /// enum without the rename fail here too.
-    fn pascal_case_tokens(value: &serde_json::Value, into: &mut Vec<String>) {
-        match value {
-            serde_json::Value::String(s) => {
-                for token in s.split(['_', '-', ' ']) {
-                    if token.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                        into.push(token.to_string());
-                    }
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    pascal_case_tokens(item, into);
-                }
-            }
-            serde_json::Value::Object(fields) => {
-                for (key, field) in fields {
-                    pascal_case_tokens(field, into);
-                    if key.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                        into.push(key.clone());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     // -----------------------------------------------------------------
     // Form 1: `hitch why <branch>` — the branch everywhere
     // -----------------------------------------------------------------

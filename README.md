@@ -580,6 +580,7 @@ hitch --no-push ...
 | `hitch resolve dev`           | Guided conflict resolution                            |
 | `hitch status`                | Show environment state                                |
 | `hitch tree`                  | Show the environment/branch hierarchy                 |
+| `hitch log`                   | Show what happened to your environments               |
 | `hitch release qa main`       | Merge QA's promoted features into `main`              |
 | `hitch lock qa`               | Freeze changes to an environment                      |
 | `hitch unlock qa`             | Unfreeze it                                           |

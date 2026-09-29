@@ -194,17 +194,17 @@ fn every_documented_json_command_exists_in_the_command_tree() {
 }
 
 /// The list is not a subset of the whole CLI — it is the mutating commands plus
-/// the two read-only ones, and the test says so in a form that a new read-only
+/// the three read-only ones, and the test says so in a form that a new read-only
 /// command would have to acknowledge.
 ///
-/// This is the half a membership comparison cannot express. `status` and `why`
+/// This is the half a membership comparison cannot express. `status`, `why` and `log`
 /// are the read-only commands with a document, and they are the reason the
 /// comment describes two envelope shapes rather than one; if a third read-only
 /// view were added it would have to be listed here, which is the point.
 #[test]
-fn the_two_read_only_json_commands_are_status_and_why() {
+fn the_read_only_json_commands_are_status_why_and_log() {
     let documented = documented_json_commands();
-    for name in ["status", "why"] {
+    for name in ["status", "why", "log"] {
         assert!(
             documented.contains(name),
             "`{name}` emits a `--json` document and must be in the comment: \

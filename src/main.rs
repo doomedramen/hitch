@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status(_) => "status",
         Commands::Tree(_) => "tree",
         Commands::Why(_) => "why",
+        Commands::Log(_) => "log",
         Commands::Lock(_) => "lock",
         Commands::Unlock(_) => "unlock",
         Commands::Pr(_) => "pr",
@@ -145,6 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Status(args) => commands::status::run(args, &context).map_err(|e| e.into()),
         Commands::Tree(args) => commands::tree::run(args, &context).map_err(|e| e.into()),
         Commands::Why(args) => commands::why::run(args, &context).map_err(|e| e.into()),
+        Commands::Log(args) => commands::log::run(args, &context).map_err(|e| e.into()),
         Commands::Lock(args) => commands::lock::run(args, &context).map_err(|e| e.into()),
         Commands::Unlock(args) => commands::unlock::run(args, &context).map_err(|e| e.into()),
         Commands::Pr(args) => commands::pr::run(args, &context).map_err(|e| e.into()),
@@ -178,6 +180,7 @@ fn command_is_mutating(command: &Commands) -> bool {
         // the repository lock would be unavailable exactly when someone most
         // wants to know what the in-flight operation did.
         | Commands::Why(_)
+        | Commands::Log(_)
         | Commands::Diff(_)
         | Commands::Doctor(_)
         | Commands::Setup(_)

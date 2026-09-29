@@ -121,24 +121,23 @@ covered.
   module), `src/cli.rs` (add the `Commands` variant), `src/main.rs` (add to
   both the `command_name` match and the dispatch match, and to
   `command_is_mutating` if it's read-only). The global flags live here too:
-  `--json` is `global = true` and its doc comment **names the thirteen commands
+  `--json` is `global = true` and its doc comment **names the fourteen commands
   that honour it** (`rebuild`, `promote`, `demote`, `release`, `lock`, `unlock`,
-  `set`, `add`, `remove`, `cleanup`, `approvals approve`, `status`, `why` —
-  every mutating command plus the two read-only ones) and says that a command
+  `set`, `add`, `remove`, `cleanup`, `approvals approve`, `status`, `why`, `log` —
+  every mutating command plus the three read-only ones) and says that a command
   without support leaves stdout **empty** rather than printing prose. Both halves
   of that are load-bearing and the second is easy to get wrong in the direction
   that looks safer: "says so" implies a diagnostic on stdout, and the mechanism
   is the opposite — under `--json` the `log_*` sinks all go to stderr, so a
   command with no support says nothing there either. `tests/integration/json_support_tests.rs`
-  parses the thirteen names out of the doc comment's own backticks and compares
+  parses the fourteen names out of the doc comment's own backticks and compares
   them as sets, both directions, against the command files in `src/commands/`
   that actually reach `emit_json`/`emit_plan`/`emit_receipt` — so neither a
-  dropped command nor an invented one survives. The two read-only ones use a
+  dropped command nor an invented one survives. The three read-only ones use a
   **one-half envelope**, `{"schema_version": 1, "<view>": …}`, not the
   mutations' `{"plan", "receipt"}` — a read-only view has no "after", and a
   `null` receipt would say "nothing happened", which is true and useless. Every
-  enum in those two envelopes is `snake_case`, and a collector in
-  `tests/integration/why_tests.rs` walks the whole document and fails on any
+  enum in those envelopes is `snake_case`, and a shared collector (`pascal_case_tokens`, `tests/test_framework/json_helpers.rs`) walks the document and fails on any
   `PascalCase` token, so a new enum cannot forget the rename.
 - `src/commands/*.rs` — one file per CLI command/subcommand, thin: arg
   parsing (`clap::Args` struct) + orchestration. Business logic belongs in
@@ -240,6 +239,13 @@ covered.
   applied all-or-nothing. Its reader, `read_state`, is the sole input to
   `src/core/state.rs`'s Actual side.
 - `src/core/` — read-only view builders (workspace/status/state models).
+  - `activity.rs` (behind `hitch log`) is a pure event model (`derive_events`
+    diffs two configs into typed `HitchEvent`s) plus one reader,
+    `build_activity`, walking `hitch-metadata` first-parent history. Lock
+    brackets that hitch wrote around its own operation are collapsed out (only
+    manual lock/unlock survive); a build record attaches to a rebuild entry only
+    when `metadata_sha`..stamp provably identifies that one rebuild. `hitch log`
+    takes no repo lock (read-only, in `command_is_mutating`'s `false` arm).
   - `state.rs` is **the** authority on "does this environment need a
     rebuild, and what actually moved". `build_state_snapshot` returns a
     `RepositoryStateSnapshot` — Desired read live from refs, Actual read
@@ -541,7 +547,8 @@ is consulted, and `test_hitch_status_detects_base_branch_changes` /
 "timing-sensitive" for exactly this reason — they are live now and their
 `sleep(2)` is gone. Do not reintroduce `get_commit_timestamp` into any
 verdict: it has exactly one production caller left,
-`core/timeline.rs:96`, which formats a date for display.
+`core/timeline.rs:96`, which formats a date for display (P9 Task 8 is meant to
+reduce `timeline.rs` to an adapter over `activity.rs`; check before assuming).
 
 **`removed ⊆ changed_inputs` is an invariant of `health_from_record`, and the
 Result block depends on it.** `health_from_record` walks the *recorded* pins
