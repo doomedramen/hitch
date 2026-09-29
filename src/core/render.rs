@@ -36,6 +36,7 @@
 //! mode of a display layer is not crashing, it is inventing.
 
 use crate::commands::global_context::GlobalContext;
+use crate::core::activity::{ActivityLog, ApprovalDirection, HitchEvent, RebuildOutcome};
 use crate::core::state::{EnvironmentHealth, RepositoryStateSnapshot};
 use crate::core::status::{MatrixModel, MatrixSummaryRow};
 use crate::core::why::{
@@ -43,7 +44,7 @@ use crate::core::why::{
     WhyFeatureInEnvironment, WhyMembership, WhyReason,
 };
 use crate::operations::model::{
-    AppliedEffect, ConfirmationRequirement, EnvironmentProjection, ExecutionReceipt,
+    AppliedEffect, ConfirmationRequirement, EnvironmentProjection, ExecutionReceipt, HoldPair,
     OperationOutcome, OperationPlan, PlannedBranch, PlannedBranchState, PlannedEffect,
 };
 use crate::utils::output::OutputLevel;
@@ -1967,6 +1968,214 @@ pub fn confirm_plan(
     }
 }
 
+/// One event as one sentence: no actor, no time, no glyph.
+///
+/// Only `ApprovalRequested` carries a direction, so the later approval events
+/// say "the change to" rather than guessing add-versus-remove.
+pub fn render_event(event: &HitchEvent) -> String {
+    match event {
+        HitchEvent::EnvironmentCreated { environment, base } => {
+            format!("created environment {environment} from {base}")
+        }
+        HitchEvent::EnvironmentRemoved { environment } => {
+            format!("removed environment {environment}")
+        }
+        HitchEvent::BaseChanged {
+            environment,
+            from,
+            to,
+        } => format!("changed {environment}'s base from {from} to {to}"),
+        HitchEvent::Promoted {
+            environment,
+            branch,
+        } => format!("added {branch} to {environment}"),
+        HitchEvent::Demoted {
+            environment,
+            branch,
+        } => format!("removed {branch} from {environment}"),
+        HitchEvent::Locked { environment, .. } => format!("locked {environment}"),
+        HitchEvent::Unlocked { environment } => format!("unlocked {environment}"),
+        HitchEvent::Rebuilt {
+            environment,
+            outcome: RebuildOutcome::WithHolds { held, .. },
+        } if !held.is_empty() => {
+            let mut names: Vec<&str> = Vec::new();
+            for pair in held {
+                if !names.contains(&pair.branch.as_str()) {
+                    names.push(&pair.branch);
+                }
+            }
+            format!("rebuilt {environment}, holding {}", names.join(", "))
+        }
+        HitchEvent::Rebuilt { environment, .. } => format!("rebuilt {environment}"),
+        HitchEvent::Released { environment } => format!("released {environment}"),
+        HitchEvent::ApprovalRequested {
+            environment,
+            branch,
+            direction,
+            ..
+        } => match direction {
+            ApprovalDirection::Promote => format!("asked to add {branch} to {environment}"),
+            ApprovalDirection::Demote => format!("asked to remove {branch} from {environment}"),
+        },
+        HitchEvent::ApprovalVoted {
+            environment,
+            branch,
+            approvals,
+            required,
+            ..
+        } => {
+            format!("approved the change to {branch} in {environment} ({approvals} of {required})")
+        }
+        HitchEvent::ApprovalGranted {
+            environment,
+            branch,
+            ..
+        } => format!("the change to {branch} in {environment} is approved"),
+        HitchEvent::ApprovalRejected {
+            environment,
+            branch,
+            ..
+        } => format!("rejected the change to {branch} in {environment}"),
+        HitchEvent::ApprovalApplied {
+            environment,
+            branch,
+            ..
+        } => format!("applied the approved change: {branch} to {environment}"),
+        HitchEvent::ApprovalCancelled {
+            environment,
+            branch,
+            ..
+        } => format!("cancelled the request for the change to {branch} in {environment}"),
+    }
+}
+
+fn activity_hold_sentence(pair: &HoldPair) -> String {
+    format!(
+        "{} was held \u{2014} it conflicts with {}",
+        pair.branch, pair.conflicts_with
+    )
+}
+
+/// The deployment story, newest first. Pure: `now` is only used to place day
+/// headings. The "not rebuilt since" line is a statement about this log, not a
+/// verdict — whether the environment needs a rebuild belongs to `core::state`.
+pub fn render_activity(
+    log: &ActivityLog,
+    now: chrono::DateTime<chrono::FixedOffset>,
+    verbose: bool,
+) -> String {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    if log.entries.is_empty() && log.skipped.is_empty() && !log.truncated {
+        return "No activity yet.\n".to_string();
+    }
+
+    // entry index -> environments whose newest touching entry is a declaration change
+    let mut pointers: BTreeMap<usize, BTreeSet<&str>> = BTreeMap::new();
+    let mut decided: BTreeSet<&str> = BTreeSet::new();
+    for (index, entry) in log.entries.iter().enumerate() {
+        let envs: BTreeSet<&str> = entry.events.iter().map(|e| e.environment()).collect();
+        for env in envs {
+            if decided.contains(env) {
+                continue;
+            }
+            decided.insert(env);
+            let mut rebuilt = false;
+            let mut declared = false;
+            for event in entry.events.iter().filter(|e| e.environment() == env) {
+                match event {
+                    HitchEvent::Rebuilt { .. } => rebuilt = true,
+                    HitchEvent::Promoted { .. }
+                    | HitchEvent::Demoted { .. }
+                    | HitchEvent::BaseChanged { .. } => declared = true,
+                    _ => {}
+                }
+            }
+            if declared && !rebuilt {
+                pointers.entry(index).or_default().insert(env);
+            }
+        }
+    }
+
+    let offset = *now.offset();
+    let today = now.date_naive();
+    let mut out = String::new();
+    let mut current_day = None;
+    for (index, entry) in log.entries.iter().enumerate() {
+        let local = entry.when.with_timezone(&offset);
+        let day = local.date_naive();
+        if current_day != Some(day) {
+            if current_day.is_some() {
+                out.push('\n');
+            }
+            let heading = if day == today {
+                "Today".to_string()
+            } else if today.pred_opt() == Some(day) {
+                "Yesterday".to_string()
+            } else {
+                local.format("%a %-d %b %Y").to_string()
+            };
+            out.push_str(&heading);
+            out.push('\n');
+            current_day = Some(day);
+        }
+        let time = local.format("%H:%M");
+        let pad = "         ";
+        let mut lines: Vec<String> = Vec::new();
+        for event in &entry.events {
+            lines.push(render_event(event));
+            if let HitchEvent::Rebuilt {
+                outcome: RebuildOutcome::WithHolds { held, .. },
+                ..
+            } = event
+            {
+                lines.extend(held.iter().map(activity_hold_sentence));
+            }
+        }
+        if let Some(envs) = pointers.get(&index) {
+            for env in envs {
+                lines.push(format!(
+                    "{env} has not been rebuilt since \u{2014} see hitch status"
+                ));
+            }
+        }
+        for (n, line) in lines.iter().enumerate() {
+            if n == 0 {
+                out.push_str(&format!("  {time}  {} {line}", entry.actor));
+                if verbose {
+                    let short: String = entry.commit.chars().take(7).collect();
+                    out.push_str(&format!("  (metadata commit {short})"));
+                }
+            } else {
+                out.push_str(&format!("{pad}{line}"));
+            }
+            out.push('\n');
+        }
+        if lines.is_empty() {
+            out.push_str(&format!("  {time}  {}\n", entry.actor));
+        }
+    }
+
+    if !log.skipped.is_empty() || log.truncated {
+        if !log.entries.is_empty() {
+            out.push('\n');
+        }
+        if !log.skipped.is_empty() {
+            let n = log.skipped.len();
+            out.push_str(&format!(
+                "{n} change{} to hitch's settings could not be read and {} not shown.\n",
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "is" } else { "are" }
+            ));
+        }
+        if log.truncated {
+            out.push_str("Older activity not shown \u{2014} use --limit to see more.\n");
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3704,5 +3913,360 @@ mod tests {
             rendered.contains("QA   desired 3 · actual 2"),
             "{rendered:?}"
         );
+    }
+
+    mod activity_words {
+        use super::*;
+        use crate::core::activity::{ActivityEntry, SkippedCommit};
+        use chrono::FixedOffset;
+
+        fn s(x: &str) -> String {
+            x.to_string()
+        }
+
+        fn rebuilt(outcome: RebuildOutcome) -> HitchEvent {
+            HitchEvent::Rebuilt {
+                environment: s("dev"),
+                outcome,
+            }
+        }
+
+        fn approval_fields() -> (String, String, String) {
+            (s("r1"), s("prod"), s("feature/a"))
+        }
+
+        #[test]
+        fn every_event_has_its_sentence() {
+            let (request_id, environment, branch) = approval_fields();
+            let cases: Vec<(HitchEvent, &str)> = vec![
+                (
+                    HitchEvent::EnvironmentCreated {
+                        environment: s("dev"),
+                        base: s("main"),
+                    },
+                    "created environment dev from main",
+                ),
+                (
+                    HitchEvent::EnvironmentRemoved {
+                        environment: s("dev"),
+                    },
+                    "removed environment dev",
+                ),
+                (
+                    HitchEvent::BaseChanged {
+                        environment: s("dev"),
+                        from: s("main"),
+                        to: s("develop"),
+                    },
+                    "changed dev's base from main to develop",
+                ),
+                (
+                    HitchEvent::Promoted {
+                        environment: s("dev"),
+                        branch: s("feature/a"),
+                    },
+                    "added feature/a to dev",
+                ),
+                (
+                    HitchEvent::Demoted {
+                        environment: s("dev"),
+                        branch: s("feature/a"),
+                    },
+                    "removed feature/a from dev",
+                ),
+                (
+                    HitchEvent::Locked {
+                        environment: s("dev"),
+                        by: Some(s("bob")),
+                    },
+                    "locked dev",
+                ),
+                (
+                    HitchEvent::Unlocked {
+                        environment: s("dev"),
+                    },
+                    "unlocked dev",
+                ),
+                (rebuilt(RebuildOutcome::Unrecorded), "rebuilt dev"),
+                (
+                    rebuilt(RebuildOutcome::Clean {
+                        included: vec![s("a")],
+                    }),
+                    "rebuilt dev",
+                ),
+                (
+                    rebuilt(RebuildOutcome::WithHolds {
+                        included: vec![],
+                        held: vec![HoldPair {
+                            branch: s("dashboard"),
+                            conflicts_with: s("payments"),
+                        }],
+                    }),
+                    "rebuilt dev, holding dashboard",
+                ),
+                (
+                    HitchEvent::Released {
+                        environment: s("dev"),
+                    },
+                    "released dev",
+                ),
+                (
+                    HitchEvent::ApprovalRequested {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                        direction: ApprovalDirection::Promote,
+                    },
+                    "asked to add feature/a to prod",
+                ),
+                (
+                    HitchEvent::ApprovalRequested {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                        direction: ApprovalDirection::Demote,
+                    },
+                    "asked to remove feature/a from prod",
+                ),
+                (
+                    HitchEvent::ApprovalVoted {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                        approvals: 1,
+                        required: 2,
+                    },
+                    "approved the change to feature/a in prod (1 of 2)",
+                ),
+                (
+                    HitchEvent::ApprovalGranted {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                    },
+                    "the change to feature/a in prod is approved",
+                ),
+                (
+                    HitchEvent::ApprovalRejected {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                    },
+                    "rejected the change to feature/a in prod",
+                ),
+                (
+                    HitchEvent::ApprovalApplied {
+                        request_id: request_id.clone(),
+                        environment: environment.clone(),
+                        branch: branch.clone(),
+                    },
+                    "applied the approved change: feature/a to prod",
+                ),
+                (
+                    HitchEvent::ApprovalCancelled {
+                        request_id,
+                        environment,
+                        branch,
+                    },
+                    "cancelled the request for the change to feature/a in prod",
+                ),
+            ];
+            for (event, expected) in cases {
+                assert_eq!(render_event(&event), expected);
+            }
+        }
+
+        fn now() -> chrono::DateTime<FixedOffset> {
+            FixedOffset::east_opt(3600)
+                .unwrap()
+                .with_ymd_and_hms(2026, 9, 29, 10, 0, 0)
+                .unwrap()
+        }
+
+        fn entry(
+            y: i32,
+            mo: u32,
+            d: u32,
+            h: u32,
+            mi: u32,
+            events: Vec<HitchEvent>,
+        ) -> ActivityEntry {
+            ActivityEntry {
+                commit: s("abcdef1234567"),
+                when: Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap(),
+                actor: s("martin"),
+                events,
+            }
+        }
+
+        fn promoted() -> HitchEvent {
+            HitchEvent::Promoted {
+                environment: s("dev"),
+                branch: s("feature/a"),
+            }
+        }
+
+        fn log(entries: Vec<ActivityEntry>) -> ActivityLog {
+            ActivityLog {
+                entries,
+                skipped: vec![],
+                truncated: false,
+            }
+        }
+
+        #[test]
+        fn days_group_across_midnight_in_now_offset() {
+            // now is UTC+1: 23:30Z on the 28th is 00:30 on the 29th (Today).
+            let rendered = render_activity(
+                &log(vec![
+                    entry(
+                        2026,
+                        9,
+                        28,
+                        23,
+                        30,
+                        vec![rebuilt(RebuildOutcome::Unrecorded)],
+                    ),
+                    entry(
+                        2026,
+                        9,
+                        28,
+                        12,
+                        0,
+                        vec![rebuilt(RebuildOutcome::Unrecorded)],
+                    ),
+                    entry(
+                        2026,
+                        9,
+                        27,
+                        12,
+                        0,
+                        vec![rebuilt(RebuildOutcome::Unrecorded)],
+                    ),
+                    entry(2026, 9, 20, 8, 5, vec![rebuilt(RebuildOutcome::Unrecorded)]),
+                ]),
+                now(),
+                false,
+            );
+            let expected = "Today\n  00:30  martin rebuilt dev\n\nYesterday\n  13:00  martin rebuilt dev\n\nSun 27 Sep 2026\n  13:00  martin rebuilt dev\n\nSun 20 Sep 2026\n  09:05  martin rebuilt dev\n";
+            assert_eq!(rendered, expected);
+        }
+
+        #[test]
+        fn extra_events_and_holds_are_continuation_lines() {
+            let rendered = render_activity(
+                &log(vec![entry(
+                    2026,
+                    9,
+                    29,
+                    8,
+                    0,
+                    vec![
+                        HitchEvent::Unlocked {
+                            environment: s("qa"),
+                        },
+                        rebuilt(RebuildOutcome::WithHolds {
+                            included: vec![],
+                            held: vec![HoldPair {
+                                branch: s("dashboard"),
+                                conflicts_with: s("payments"),
+                            }],
+                        }),
+                    ],
+                )]),
+                now(),
+                false,
+            );
+            assert_eq!(
+                rendered,
+                "Today\n  09:00  martin unlocked qa\n         rebuilt dev, holding dashboard\n         dashboard was held \u{2014} it conflicts with payments\n"
+            );
+        }
+
+        #[test]
+        fn footers_and_empty() {
+            assert_eq!(
+                render_activity(&log(vec![]), now(), false),
+                "No activity yet.\n"
+            );
+            let mut l = log(vec![entry(
+                2026,
+                9,
+                29,
+                8,
+                0,
+                vec![rebuilt(RebuildOutcome::Unrecorded)],
+            )]);
+            l.skipped = vec![
+                SkippedCommit {
+                    commit: s("x"),
+                    reason: s("bad"),
+                },
+                SkippedCommit {
+                    commit: s("y"),
+                    reason: s("bad"),
+                },
+            ];
+            l.truncated = true;
+            let rendered = render_activity(&l, now(), false);
+            assert!(rendered.ends_with(
+                "\n2 changes to hitch's settings could not be read and are not shown.\nOlder activity not shown \u{2014} use --limit to see more.\n"
+            ), "{rendered:?}");
+            l.skipped.truncate(1);
+            l.truncated = false;
+            assert!(render_activity(&l, now(), false)
+                .contains("1 change to hitch's settings could not be read and is not shown."));
+        }
+
+        #[test]
+        fn verbose_adds_the_commit_and_plain_never_does() {
+            let l = log(vec![entry(
+                2026,
+                9,
+                29,
+                8,
+                0,
+                vec![rebuilt(RebuildOutcome::Unrecorded)],
+            )]);
+            assert!(
+                render_activity(&l, now(), true).contains("rebuilt dev  (metadata commit abcdef1)")
+            );
+            assert!(!render_activity(&l, now(), false).contains("commit"));
+        }
+
+        #[test]
+        fn not_rebuilt_since_pointer_present_and_absent() {
+            let with = render_activity(
+                &log(vec![entry(2026, 9, 29, 8, 0, vec![promoted()])]),
+                now(),
+                false,
+            );
+            assert!(with
+                .contains("         dev has not been rebuilt since \u{2014} see hitch status\n"));
+
+            let later_rebuild = render_activity(
+                &log(vec![
+                    entry(2026, 9, 29, 9, 0, vec![rebuilt(RebuildOutcome::Unrecorded)]),
+                    entry(2026, 9, 29, 8, 0, vec![promoted()]),
+                ]),
+                now(),
+                false,
+            );
+            assert!(!later_rebuild.contains("has not been rebuilt"));
+
+            let same_entry = render_activity(
+                &log(vec![entry(
+                    2026,
+                    9,
+                    29,
+                    8,
+                    0,
+                    vec![promoted(), rebuilt(RebuildOutcome::Unrecorded)],
+                )]),
+                now(),
+                false,
+            );
+            assert!(!same_entry.contains("has not been rebuilt"));
+        }
     }
 }
