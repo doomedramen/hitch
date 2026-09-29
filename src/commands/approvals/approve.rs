@@ -1,5 +1,10 @@
 use crate::commands::global_context::GlobalContext;
-use crate::types::{HitchConfig, RollbackInfo, RollbackOperation};
+use crate::core::render::{confirm_plan, emit_receipt, render_plan};
+use crate::operations::declaration::{
+    apply_declaration_plan, plan_approved_declaration_change, DeclarationChange,
+    DeclarationPlanOptions,
+};
+use crate::types::HitchConfig;
 use crate::utils::prelude::{modify_metadata, with_locked_env};
 use anyhow::Result;
 use clap::Args;
@@ -74,23 +79,17 @@ pub fn run(args: ApproveArgs, context: &GlobalContext) -> Result<()> {
     let request_details = validate_and_approve(context, &args, &request_id, &environment_name)?;
 
     // Step 4: If the (frozen) threshold is now met, execute the operation.
+    //
+    // "Executing …" used to be printed here, one line above the plan that
+    // followed it. It said the same thing as that plan — a promotion is a
+    // promotion — so it was a second voice for the same operation, and the only
+    // thing it added was the word "Executing", which the plan's own heading and
+    // the receipt's "Applied" section both carry. The approval's *own* narration
+    // below is kept, because the request's transition from Pending to Applied is
+    // a fact about the approval rather than about the declaration, and nothing
+    // else in the document says it.
     let mut executed = false;
     if request_details.threshold_met(min_approvals) {
-        context.log_info("");
-        context.log_info(&format!(
-            "Approvals: {}/{} - Threshold met!",
-            request_details.approvals.len(),
-            min_approvals
-        ));
-        context.log_info("");
-        context.log_info(&format!(
-            "Executing {}...",
-            if request_details.operation == crate::types::Operation::Promote {
-                "promotion"
-            } else {
-                "demotion"
-            }
-        ));
         executed = execute_approved_operation(context, &request_id, &environment_name)?;
     }
 
@@ -123,6 +122,22 @@ fn short_id(id: &str) -> &str {
 /// no double-approval, status == Pending, snapshot unchanged) are performed on the
 /// locked, freshly-read config inside `approve_request`/`validate_snapshot` — this
 /// function deliberately does NOT re-check them on a stale pre-lock clone.
+///
+/// **No rollback, and that is the whole change.** There used to be one:
+/// `attempt_approval_rollback` restored a snapshot of the environment taken at
+/// the start of the closure, on the error path. But a closure `Err` means
+/// `modify_metadata` never committed anything, so the snapshot described a
+/// repository this operation had not modified — and restoring it cost an extra
+/// `hitch-metadata` commit on every refused approval, writing back a config
+/// identical to the one already there. The same defect the promote/demote path
+/// carried, found here by the same reasoning: a repair narrated for something
+/// that was never broken is paid for in commits, and this branch's history is
+/// part of the deployment pipeline.
+///
+/// What a refusal still costs is two commits — the lock and its unlock, because
+/// `with_locked_env` commits the lock before the closure and the unlock on the
+/// way out. Those are the visible-lock signal the crash-recovery tests read, and
+/// they are not tidied away.
 fn validate_and_approve(
     context: &GlobalContext,
     args: &ApproveArgs,
@@ -132,23 +147,8 @@ fn validate_and_approve(
     context.log_info("");
     context.log_info("Recording approval...");
 
-    let branch = crate::utils::prelude::get_approval_request_by_id(context, request_id)?
-        .branch
-        .clone();
-
-    let mut rollback_info = RollbackInfo::new(
-        RollbackOperation::Promote, // Use Promote as default for approval operations
-        environment_name.to_string(),
-        branch,
-    );
-
-    let result = with_locked_env(context, environment_name, || {
+    with_locked_env(context, environment_name, || {
         modify_metadata(context, |config: &mut HitchConfig| {
-            // Store the original environment state for rollback.
-            if let Some(env) = config.get_environment(environment_name) {
-                rollback_info.previous_state = Some(env.clone());
-            }
-
             // Validate snapshot freshness on the locked, freshly-read request
             // before recording an approval that could never execute.
             let snapshot = crate::utils::approvals::find_approval_request(config, request_id)?
@@ -196,24 +196,44 @@ fn validate_and_approve(
 
             Ok(())
         })
-    });
+    })?;
 
-    match result {
-        Ok(()) => Ok(crate::utils::prelude::get_approval_request_by_id(
-            context, request_id,
-        )?),
-        Err(e) => {
-            if let Err(rollback_err) = attempt_approval_rollback(context, &rollback_info) {
-                context.log_error(&format!(
-                    "CRITICAL: Failed to rollback approval changes: {}",
-                    rollback_err
-                ));
-            }
-            Err(e)
-        }
-    }
+    crate::utils::prelude::get_approval_request_by_id(context, request_id)
 }
 
+/// Apply the declaration change a met approval threshold authorised.
+///
+/// The ordinary plan → gate → apply → receipt shape, through the same
+/// [`plan_declaration_change`] promote and demote use. The difference is the
+/// *authorisation*, not the mechanism: the approval is the gate, so
+/// `DeclarationChange::ApprovedApply` is what keeps this planner from asking
+/// again, and the `ApprovalStatus::Approved` re-drive arm is what makes a
+/// partially applied approval safe to retry.
+///
+/// **The order is load-bearing, and it is the reverse of the order this used to
+/// use.** The old sequence marked the request `Applied` in the *same*
+/// `modify_metadata` transaction as the declaration edit, and then ran a rebuild.
+/// That has no plan to show and no receipt to print, because the edit had already
+/// happened by the time anything could describe it — and it is why this command
+/// was the last one in the CLI narrating a nested `StepLogger` transcript in the
+/// gap where a plan and a receipt belong.
+///
+/// Two orders are possible here and only one of them survives a crash:
+///
+/// - *Mark applied first.* Then a process that dies before the edit leaves the
+///   request `Applied` with its own change missing — and `run` refuses an
+///   `Applied` request outright, so there is no command that finishes the job.
+///   A self-inflicted wedge with no way out.
+/// - *Mark applied last* (this one). Then a crash anywhere before the final
+///   write leaves the request `Approved`, and `hitch approve <id>` re-drives it:
+///   the re-run's plan reports `NoChange` because the branch is already declared,
+///   and it still applies, so the rebuild — the part that was owed — happens.
+///   Idempotent and self-healing.
+///
+/// Planning inside the lock is forced rather than chosen, for the same reason
+/// promote's is: `with_locked_env` commits the lock to `hitch-metadata` *before*
+/// running its closure, and `PlanFingerprint` carries `metadata_sha`, so a plan
+/// built outside would refuse itself the moment it was validated.
 fn execute_approved_operation(
     context: &GlobalContext,
     request_id: &str,
@@ -224,220 +244,61 @@ fn execute_approved_operation(
         request_id
     ));
 
-    // Create rollback info for the actual operation
     let request = crate::utils::prelude::get_approval_request_by_id(context, request_id)?;
-    let mut rollback_info = RollbackInfo::new(
-        match request.operation {
-            crate::types::Operation::Promote => RollbackOperation::Promote,
-            crate::types::Operation::Demote => RollbackOperation::Demote,
-        },
-        environment_name.to_string(),
-        request.branch.to_string(),
-    );
+    let change = DeclarationChange::ApprovedApply {
+        operation: request.operation,
+        branches: vec![request.branch.clone()],
+        request_id: request_id.to_string(),
+    };
 
-    // Execute the operation with rollback protection
-    context.log_info(&format!("Locking environment '{}'...", environment_name));
-    let result = with_locked_env(context, environment_name, || {
-        context.log_info(&format!("Environment '{}' locked", environment_name));
+    let (plan, receipt) = with_locked_env(context, environment_name, || {
+        // The request's own claim about the world it was filed against, checked
+        // on the freshly-read request rather than the pre-lock clone. This is the
+        // *request's* freshness — "what you reviewed has not changed" — and it is
+        // a different question from the plan's, which asks whether this apply is
+        // still current. It used to live inside the `modify_metadata` closure,
+        // where it was a pre-check ahead of a write that is no longer there.
+        let snapshot = crate::utils::prelude::get_approval_request_by_id(context, request_id)?
+            .rebuild_snapshot;
+        crate::utils::snapshot::validate_snapshot(context, &snapshot)?;
 
-        context.log_info("");
-        context.log_info("Updating environment metadata...");
+        let plan = plan_approved_declaration_change(
+            context,
+            environment_name,
+            change,
+            request_id,
+            DeclarationPlanOptions { no_rebuild: false },
+            &mut |_| {},
+        )?;
 
-        // The declaration edit and the request's own status change are one
-        // transaction, and they are the operation's durable effect.
+        if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
+            return Ok((plan, None));
+        }
+
+        // The declaration edit and the nested rebuild, as one operation. The
+        // rebuild's own plan and receipt are nested inside this one and are
+        // deliberately not printed: the receipt's
+        // `DependentEnvironmentRebuild` effect is what reports it, including any
+        // branches it held and any work it still owes.
+        let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
+
+        // Last, and only because it is the only ordering a crash survives: the
+        // request is `Applied` once its change is real, not before.
         modify_metadata(context, |config| {
-            // Store current environment state for rollback
-            if let Some(env) = config.get_environment(environment_name) {
-                rollback_info.previous_state = Some(env.clone());
-            }
-
-            // Validate snapshot before execution
-            let request_for_validation =
-                crate::utils::prelude::get_approval_request_by_id(context, request_id)?;
-            crate::utils::snapshot::validate_snapshot(
-                context,
-                &request_for_validation.rebuild_snapshot,
-            )?;
-
-            // Apply the approved declaration change
-            apply_declaration_change(context, config, request_id)?;
-
-            // Mark request as applied
-            crate::utils::approvals::mark_request_applied(config, request_id)?;
-
-            Ok(())
+            crate::utils::approvals::mark_request_applied(config, request_id)
         })?;
 
-        // And only then, against the declaration that change actually
-        // committed. See `rebuild_after_approval` for why this cannot be
-        // inside the closure above.
-        rebuild_after_approval(context, environment_name)
-    });
+        Ok((plan, Some(receipt)))
+    })?;
 
-    match result {
-        Ok(()) => {
-            context.log_info(&format!("Environment '{}' unlocked", environment_name));
-            context.log_verbose("✓ Operation executed successfully");
+    match receipt {
+        Some(receipt) => {
+            emit_receipt(context, &plan, &receipt)?;
             Ok(true)
         }
-        Err(e) => {
-            // Attempt rollback
-            if let Err(rollback_err) = attempt_operation_rollback(context, &rollback_info) {
-                context.log_error(&format!(
-                    "CRITICAL: Failed to rollback operation: {}",
-                    rollback_err
-                ));
-            }
-            Err(e)
-        }
+        // Declined at the gate. The plan and the answer were already shown, the
+        // request stays `Approved` so the re-drive arm can resume, and nothing
+        // was written. Exit 0: declining is not a failure.
+        None => Ok(false),
     }
-}
-
-/// The declaration change the request describes, applied to an in-flight
-/// `hitch.json`.
-///
-/// Purely a metadata edit. The rebuild that follows it is
-/// [`rebuild_after_approval`]'s job, and keeping the two apart is what makes the
-/// rebuild possible to run at the right time — see that function's doc comment.
-fn apply_declaration_change(
-    context: &GlobalContext,
-    config: &mut crate::types::HitchConfig,
-    request_id: &str,
-) -> Result<()> {
-    let request = crate::utils::prelude::get_approval_request_by_id(context, request_id)?;
-
-    match request.operation {
-        crate::types::Operation::Promote => {
-            // Add branch to environment
-            let environment = config
-                .get_environment_mut(&request.environment)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Environment '{}' not found", request.environment)
-                })?;
-
-            if !environment.branches.contains(&request.branch) {
-                environment.add_branch(request.branch.clone());
-                context.log_info(&format!(
-                    "Branch '{}' added to environment '{}'",
-                    request.branch, request.environment
-                ));
-            } else {
-                context.log_verbose(&format!(
-                    "Branch '{}' already in environment '{}'",
-                    request.branch, request.environment
-                ));
-            }
-        }
-        crate::types::Operation::Demote => {
-            // Remove branch from environment
-            let environment = config
-                .get_environment_mut(&request.environment)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Environment '{}' not found", request.environment)
-                })?;
-
-            environment.remove_branch(&request.branch);
-            context.log_info(&format!(
-                "Branch '{}' removed from environment '{}'",
-                request.branch, request.environment
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-/// Build the environment the approval just changed, and report a failure as an
-/// owed effect rather than undoing the approval.
-///
-/// **Why this is outside the `modify_metadata` closure.** That closure runs
-/// *before* its transaction commits — it is handed a `&mut HitchConfig` and
-/// writes the file afterwards — and the rebuild reads the declaration back off
-/// `refs/heads/hitch-metadata`. A rebuild called from inside the closure
-/// therefore composes the *pre-approval* declaration: the branch is added to
-/// `hitch.json`, the environment is rebuilt without it, and the two disagree
-/// until something unrelated triggers another build. That was a live bug, not a
-/// hypothetical; the regression test is
-/// `test_automatic_application_on_threshold`'s `cat-file` assertion.
-///
-/// **Why a failure here does not roll the declaration back.** The declaration
-/// edit and the request's move to `Applied` have already committed by this
-/// point, and a rebuild can fail *after* it has already moved the environment
-/// branch — at which point `rollback_metadata_changes` would restore a
-/// declaration describing a branch that is in the branch. So the same contract
-/// `apply_declaration_plan` uses for promote and demote applies here: the
-/// declaration persists, the environment is left unbuilt, the message names the
-/// command that settles it, and the exit code stays 0. Rollback remains
-/// reachable for the one failure it can actually repair — the metadata write
-/// itself.
-fn rebuild_after_approval(context: &GlobalContext, environment_name: &str) -> Result<()> {
-    context.log_info("");
-    context.log_info("Rebuilding environment...");
-    // `Log`, unlike every other caller. `hitch approve` is the one command that
-    // still reaches a rebuild without a plan of its own, so the `StepLogger`
-    // transcript is the only account of the composition it can show. That is a
-    // gap in `approve`, not a property of the transcript — the fix is for
-    // `approve` to plan, and the honest route is a `plan_declaration_change` for
-    // the approved request's change, applied *after* the approval commits.
-    match crate::utils::prelude::rebuild_environment(
-        context,
-        environment_name,
-        crate::utils::prelude::StepNarration::Log(context.output.clone()),
-    ) {
-        Ok(outcome) => {
-            if !outcome.held.is_empty() {
-                context.log_warning(&format!(
-                    "Rebuilt '{}' with {} branch(es) held: {}",
-                    environment_name,
-                    outcome.held.len(),
-                    outcome
-                        .held
-                        .iter()
-                        .map(|c| c.branch.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            Ok(())
-        }
-        Err(e) => {
-            context.log_warning(&format!(
-                "The approval was applied to '{}' but rebuilding it failed:\n    {}\n    \
-                 The declaration is saved; the environment is not built. To build it:\n      \
-                 hitch rebuild {}",
-                environment_name, e, environment_name
-            ));
-            Ok(())
-        }
-    }
-}
-
-fn attempt_approval_rollback(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
-    context.log_warning("Attempting to rollback approval changes...");
-
-    modify_metadata(context, |config| {
-        if let (Some(previous_state), Some(env)) = (
-            &rollback_info.previous_state,
-            config.get_environment_mut(&rollback_info.env_name),
-        ) {
-            *env = previous_state.clone();
-            context.log_info("Restored previous environment state");
-        }
-        Ok(())
-    })
-}
-
-fn attempt_operation_rollback(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
-    context.log_warning("Attempting to rollback operation...");
-
-    modify_metadata(context, |config| {
-        if let (Some(previous_state), Some(env)) = (
-            &rollback_info.previous_state,
-            config.get_environment_mut(&rollback_info.env_name),
-        ) {
-            *env = previous_state.clone();
-            context.log_info("Restored previous environment state");
-        }
-        Ok(())
-    })
 }

@@ -58,12 +58,14 @@ pub fn rollback_metadata_changes(
 /// that caused the original failure.
 fn restore_previous_state(context: &GlobalContext, rollback_info: &RollbackInfo) -> Result<()> {
     // Only the full-configuration snapshot. The single-`Environment` fallback
-    // that used to sit below this is dead for every current caller — promote and
-    // demote capture a snapshot and set nothing else — and it was worse than
-    // dead: with no state of either kind it warned and returned `Ok(())`, so
-    // the caller went on to report `Declaration restored — nothing was changed`
-    // about a restore that had not been attempted. A rollback that cannot happen
-    // is an error, not a quiet success.
+    // that used to sit below this is gone, and with it `RollbackInfo`'s
+    // `previous_state` field: that field existed only for the fallback, and its
+    // only writers were the two `attempt_*_rollback` helpers in
+    // `commands/approvals/approve.rs`, both of which restored a snapshot of an
+    // environment the operation had never modified. Deleting those deleted the
+    // field's last writer — and a rollback that cannot happen is an error, not a
+    // quiet success, so this reports one rather than warning and returning `Ok(())`
+    // about a restore it never attempted.
     let previous_config = rollback_info
         .previous_config
         .clone()
@@ -93,10 +95,10 @@ pub fn capture_config_state(context: &GlobalContext) -> Result<Option<HitchConfi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Environment, RollbackOperation};
+    use crate::types::RollbackOperation;
 
     #[test]
-    fn test_rollback_info_creation() {
+    fn a_rollback_info_carries_nothing_to_restore_until_it_is_armed() {
         let rollback_info = RollbackInfo::new(
             RollbackOperation::Promote,
             "dev".to_string(),
@@ -109,23 +111,11 @@ mod tests {
         ));
         assert_eq!(rollback_info.env_name, "dev");
         assert_eq!(rollback_info.branch, "feature-branch");
-        assert!(rollback_info.previous_state.is_none());
-    }
-
-    #[test]
-    fn test_rollback_info_with_state() {
-        let env = Environment::new("main".to_string());
-        let mut rollback_info = RollbackInfo::new(
-            RollbackOperation::Demote,
-            "staging".to_string(),
-            "old-feature".to_string(),
+        assert!(
+            rollback_info.previous_config.is_none(),
+            "a snapshot captured unconditionally is a snapshot of a repository the \
+             operation never touched, so rolling back to it costs two metadata \
+             commits to report a repair that did not happen. The apply arms this."
         );
-
-        rollback_info.previous_state = Some(env.clone());
-
-        assert!(matches!(rollback_info.operation, RollbackOperation::Demote));
-        assert_eq!(rollback_info.env_name, "staging");
-        assert_eq!(rollback_info.branch, "old-feature");
-        assert!(rollback_info.previous_state.is_some());
     }
 }

@@ -171,12 +171,17 @@ pub struct RollbackInfo {
     pub env_name: String,
     /// The branch being promoted/demoted
     pub branch: String,
-    /// The environment state before the operation (single-environment fallback)
-    pub previous_state: Option<Environment>,
     /// The FULL configuration before the operation. Rollback restores this whole
     /// snapshot so that changes beyond the target environment (e.g. an approval
     /// request appended to `approval_requests`, or edits to other environments)
     /// are also reverted, not just the one `Environment`.
+    ///
+    /// `None` until the operation is about to write — see the armed-snapshot rule
+    /// on `commands::promote::run`. There used to be a second field,
+    /// `previous_state`, holding a single `Environment`; it existed for a restore
+    /// path that was itself dead, and its only writers were two helpers in
+    /// `commands::approvals/approve.rs` that restored an environment the
+    /// operation had never modified.
     pub previous_config: Option<HitchConfig>,
     /// When the operation was started
     #[allow(dead_code)]
@@ -189,7 +194,6 @@ impl RollbackInfo {
             operation,
             env_name,
             branch,
-            previous_state: None,
             previous_config: None,
             timestamp: Utc::now(),
         }

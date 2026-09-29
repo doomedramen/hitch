@@ -21,8 +21,8 @@ mod tests {
     use hitch::commands::global_context::{GlobalContext, GlobalFlags};
     use hitch::core::state::EnvironmentHealth;
     use hitch::operations::declaration::{
-        apply_declaration_plan, plan_demote, plan_promote, DeclarationPlanDetail,
-        DeclarationPlanOptions,
+        apply_declaration_plan, plan_approved_declaration_change, plan_demote, plan_promote,
+        DeclarationChange, DeclarationPlanDetail, DeclarationPlanOptions,
     };
     use hitch::operations::model::{
         AppliedEffect, DependentRebuildOutcome, OperationOutcome, OperationPlan, PlanApplyError,
@@ -1056,6 +1056,57 @@ mod tests {
         apply_declaration_plan(&context_for(env, push)?, plan, &mut |_| {})
     }
 
+    /// The plan `hitch approve` builds for a request whose threshold is met.
+    ///
+    /// Reached from here rather than through the CLI for the same reason
+    /// `a_release_that_owes_a_dependent_rebuild_still_releases` is: the failure
+    /// under test is arranged *between* the plan and the apply, and the CLI runs
+    /// the two back to back inside one process, so a test that wanted to break
+    /// the environment in that window would have nothing to break it with. The
+    /// CLI's own shape — that this plan is built inside the environment lock and
+    /// applied after the gate — is covered in `approval_workflow_tests.rs`.
+    fn approved_apply_plan(
+        env: &TestEnvironment,
+        environment: &str,
+        branch: &str,
+        request_id: &str,
+        operation: hitch::types::Operation,
+        push: bool,
+    ) -> anyhow::Result<DeclarationPlan> {
+        plan_approved_declaration_change(
+            &context_for(env, push)?,
+            environment,
+            DeclarationChange::ApprovedApply {
+                operation,
+                branches: vec![branch.to_string()],
+                request_id: request_id.to_string(),
+            },
+            request_id,
+            DeclarationPlanOptions { no_rebuild: false },
+            &mut |_| {},
+        )
+    }
+
+    /// Repoint `environment`'s base at a branch created for the purpose.
+    ///
+    /// Its only user needs a base that exists when a plan is built and is gone
+    /// by the time the apply runs, which means the base is never a plan input —
+    /// see the test that uses it for why that is the honest shape of the
+    /// failure rather than a contrivance.
+    fn set_base(env: &TestEnvironment, environment: &str, base: &str) -> anyhow::Result<()> {
+        env.git.run(&["branch", base, "main"])?;
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let mut config: serde_json::Value = serde_json::from_str(&env.fs.read_file("hitch.json")?)?;
+        config["environments"][environment]["base"] = serde_json::json!(base);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "hitch.json"])?;
+        env.git
+            .run(&["commit", "-m", "test: repoint the environment's base"])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
     fn release_plan(
         env: &TestEnvironment,
         environment: &str,
@@ -1088,6 +1139,37 @@ mod tests {
             .get(environment)
             .map(|e| e.branches.clone())
             .unwrap_or_default())
+    }
+
+    /// The plan's description of its declaration edit — the row under "Will change"
+    /// that names the `hitch-metadata` commit, which for this operation is *the*
+    /// effect.
+    ///
+    /// Compared as a whole string, not with `contains`, because the failure mode
+    /// it exists to catch is a malformed one: a branch list and its verb both
+    /// interpolated, where an empty list leaves a double space (`promote  into
+    /// 'dev'`). `contains` is blind to that, because the substring it was looking
+    /// for is present either way.
+    fn declaration_row<I: serde::Serialize>(plan: &OperationPlan<I>) -> String {
+        plan.effects
+            .iter()
+            .find_map(|e| match e {
+                PlannedEffect::MetadataChange { description, .. } => Some(description.clone()),
+                _ => None,
+            })
+            .expect("a declaration change's plan always has a declaration row")
+    }
+
+    /// A branch's tip, or `""` when it does not exist — so a test can assert on
+    /// "left exactly as it was" without branching on absence first.
+    fn branch_sha(env: &TestEnvironment, branch: &str) -> anyhow::Result<String> {
+        let out = env.git.run(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])?;
+        Ok(out.stdout().trim().to_string())
     }
 
     /// The `AppliedEffect` for a dependent environment, so a test can assert on
@@ -1503,6 +1585,204 @@ mod tests {
                 vec!["feat-a".to_string(), "feat-c".to_string()],
                 "the stale demote must not have removed feat-c — the only edit \
                  that landed is the one its plan actually made"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// The approval's contract when the environment it just edited cannot be
+    /// built.
+    ///
+    /// The declaration edit *is* the operation's durable effect and it lands
+    /// before the nested rebuild is attempted, so a rebuild that then fails is
+    /// **owed work**, not a reason to undo a change that is already committed
+    /// and correct. The same contract promote, demote and release all use, and
+    /// it is not a convenience: `rollback_metadata_changes` restores a
+    /// *whole-config* snapshot, and a nested rebuild can fail *after* it has
+    /// moved the environment branch — at which point that snapshot describes a
+    /// repository state which never existed.
+    ///
+    /// The environment is broken by **deleting its base**, not a promoted
+    /// branch, and the reason is the difference between two kinds of stale
+    /// rather than a convenience. A promoted branch is in this plan's
+    /// fingerprint, so removing one would be a `StalePlan` refusal — the
+    /// contract already covered by `a_stale_promote_plan_refuses_and_names_what_changed`
+    /// — and never a rebuild failure. The base is not an input of *this* plan;
+    /// it is an input of the *nested* one, which fingerprints itself. So this is
+    /// the ordinary real-world version of the same race: the base branch is
+    /// deleted between when a plan is built and when it is applied.
+    #[test]
+    fn an_approved_promotion_whose_environment_cannot_be_built_is_owed_not_undone(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-late")?;
+            env.hitch
+                .run()
+                .args(&["add", "prod"])
+                .execute()?
+                .assert_success();
+            set_base(env, "prod", "throwaway-base")?;
+            declare_branches(env, "prod", &[])?;
+
+            let plan = approved_apply_plan(
+                env,
+                "prod",
+                "feat-late",
+                "req-1",
+                hitch::types::Operation::Promote,
+                false,
+            )?;
+            assert!(
+                !plan.effects.is_empty(),
+                "the declaration edit is the operation's durable effect, so the \
+                 plan must predict it: {:?}",
+                plan.effects
+            );
+            assert!(
+                !plan.warnings.iter().any(|w| w.is_blocking()),
+                "an approved apply is past the approval gate by construction, so \
+                 nothing here may block: {:?}",
+                plan.warnings
+            );
+
+            let prod_before = branch_sha(env, "prod")?;
+            // The base disappears between the plan and the apply.
+            env.git.run(&["branch", "-D", "throwaway-base"])?;
+
+            let receipt = apply_declaration(env, &plan, false)?;
+
+            assert_eq!(
+                receipt.outcome,
+                OperationOutcome::Applied,
+                "the declaration edit landed and is correct; a rebuild that follows \
+                 it fails is owed work, not a failure of the operation"
+            );
+            assert_eq!(
+                declared(env, "prod")?,
+                vec!["feat-late".to_string()],
+                "the approved promotion must persist through a failed rebuild — \
+                 undoing it would leave the request Applied with its own change \
+                 missing, and there is no command that fixes that"
+            );
+            assert_eq!(
+                branch_sha(env, "prod")?,
+                prod_before,
+                "the environment must be left exactly as it was: unbuilt, rather \
+                 than half-built"
+            );
+            let owed: Vec<&str> = receipt
+                .warnings
+                .iter()
+                .filter(|w| w.owes_effect)
+                .map(|w| w.message.as_str())
+                .collect();
+            assert_eq!(
+                owed.len(),
+                1,
+                "exactly one owed effect, and it names the command that settles \
+                 it: {owed:?}"
+            );
+            assert!(
+                owed[0].contains("hitch rebuild prod"),
+                "an owed effect with no command is a dead end: {:?}",
+                owed[0]
+            );
+            // The verb, the branch list and the preposition all come from the
+            // *direction*, and this is the arm that proved it: a promotion is
+            // never described with the demotion's verb or preposition, however
+            // empty its own list is. Reading `added.is_empty()` to pick the list
+            // was a disguised "is this a demotion?" and could not tell a demotion
+            // from a promotion with nothing left to add — which is exactly what
+            // this environment's re-run is.
+            let declaration_row = declaration_row(&plan);
+            assert_eq!(
+                declaration_row, "promote feat-late into 'prod'",
+                "the declaration row names the branch it is declaring, the verb \
+                 its direction, and the environment it is declaring it into"
+            );
+
+            match dependent_outcome(&receipt.effects, "prod") {
+                Some(outcome @ DependentRebuildOutcome::Failed(_)) => {
+                    assert!(
+                        outcome.owes_effect(),
+                        "a failed dependent is owed work, not a silent omission: {outcome:?}"
+                    );
+                }
+                other => panic!("the receipt must say the dependent was owed, got: {other:?}"),
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// The re-drive arm: a second `hitch approve` after the first one already
+    /// edited the declaration must be a `NoChange` plan that still applies, not a
+    /// refusal.
+    ///
+    /// This is the property that makes an approval safe to retry, and it is
+    /// asymmetric with `hitch promote` on purpose. A user's own `hitch promote b
+    /// dev` against an already-promoted branch is a mistake worth reporting;
+    /// re-running an approved apply is the *designed* recovery for a partially
+    /// applied one, so an already-promoted branch is a `log_verbose` there and a
+    /// bail here. Getting that backwards turns the recovery path into the one
+    /// path that cannot recover.
+    #[test]
+    fn an_approved_promotion_re_run_after_a_partial_apply_is_a_no_change_plan() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            make_feature(env, "feat-retry")?;
+            declare_branches(env, "dev", &[])?;
+
+            let first = approved_apply_plan(
+                env,
+                "dev",
+                "feat-retry",
+                "req-1",
+                hitch::types::Operation::Promote,
+                false,
+            )?;
+            apply_declaration(env, &first, false)?;
+            assert_eq!(declared(env, "dev")?, vec!["feat-retry".to_string()]);
+
+            // The re-run reads the *committed* declaration, so the branch is
+            // already promoted and there is nothing to add.
+            let again = approved_apply_plan(
+                env,
+                "dev",
+                "feat-retry",
+                "req-1",
+                hitch::types::Operation::Promote,
+                false,
+            )?;
+            assert!(
+                again.detail.added.is_empty(),
+                "nothing left to add: {:?}",
+                again.detail.added
+            );
+            // The defect this pins: a promotion with nothing left to add has an
+            // empty `added` *and* an empty `removed`, so a branch list chosen by
+            // `added.is_empty()` — a test that reads as "is this a demotion?" —
+            // had nothing to print, and rendered `promote  into 'dev'`. The empty
+            // list has to be named rather than interpolated.
+            assert_eq!(
+                declaration_row(&again),
+                "promote nothing into 'dev'",
+                "an empty branch list is an answer, not a formatting hole"
+            );
+            let receipt = apply_declaration(env, &again, false)?;
+            assert_eq!(
+                receipt.outcome,
+                OperationOutcome::Applied,
+                "a re-run still applies — it rebuilds, which is the part that was \
+                 owed after a partial apply"
+            );
+            assert_eq!(
+                declared(env, "dev")?,
+                vec!["feat-retry".to_string()],
+                "and the declaration is unchanged, so the retry is idempotent"
             );
             Ok::<(), anyhow::Error>(())
         })?;

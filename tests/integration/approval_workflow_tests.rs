@@ -286,7 +286,7 @@ mod tests {
             approve2_result
                 .assert_success()
                 .assert_stdout_contains("Approval threshold met")
-                .assert_stdout_contains("Executing")
+                .assert_stdout_contains("Approve feature/dashboard → production")
                 .assert_stdout_contains("approved and operation executed successfully");
 
             Ok::<(), anyhow::Error>(())
@@ -754,7 +754,13 @@ mod tests {
             approve2_result
                 .assert_success()
                 .assert_stdout_contains("Approval threshold met")
-                .assert_stdout_contains("Executing")
+                // "Executing promotion..." used to be printed here, one line
+                // above the plan. It is gone: the plan *is* that sentence, with
+                // the branch, the environment and both effects spelled out, and a
+                // summary printed immediately above a document that already
+                // contains it is a second voice for one operation. The assertion
+                // is the plan's own heading.
+                .assert_stdout_contains("Approve feature/auto-apply → production")
                 .assert_stdout_contains("approved and operation executed successfully");
 
             // Verify branch is now promoted
@@ -1318,6 +1324,212 @@ mod tests {
 
             Ok::<(), anyhow::Error>(())
         });
+
+        Ok(())
+    }
+
+    // ── the approve path's own plan and receipt ────────────────────
+
+    /// The request id of the one request in the list, so a test can approve it
+    /// without hard-coding a uuid.
+    fn pending_request_id(env: &TestEnvironment, branch: &str) -> anyhow::Result<String> {
+        let listed = env.hitch.run().args(&["approvals", "list"]).execute()?;
+        let out = listed.stdout();
+        Ok(out
+            .lines()
+            .find(|line| line.contains(branch))
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap_or_else(|| panic!("no request for {branch} in:\n{out}"))
+            .to_string())
+    }
+
+    /// How many commits `hitch-metadata` has. The unit a refusal's *cost* is
+    /// measured in: every write to the declaration is a commit a reader of the
+    /// branch's history can see, including a write that changed nothing.
+    fn metadata_commits(env: &TestEnvironment) -> anyhow::Result<u32> {
+        let out = env
+            .git
+            .run(&["rev-list", "--count", "refs/heads/hitch-metadata"])?;
+        Ok(out.stdout().trim().parse()?)
+    }
+
+    /// `hitch approve` is a mutation, so it has a plan and a receipt like every
+    /// other one.
+    ///
+    /// It was the last command in the CLI with neither: it edited the
+    /// declaration inside a `modify_metadata` closure and then ran a rebuild
+    /// whose only account of itself was a `StepLogger` transcript, so nothing
+    /// structured said what it was about to do and nothing structured said what
+    /// it did. The plan is the same `plan_declaration_change` promote and demote
+    /// use, with the approval gate **skipped** — the approval is the gate, so
+    /// asking again would be asking the question that was just answered.
+    #[test]
+    fn an_approved_promotion_shows_a_plan_before_it_applies() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(env, "production", &["alice@example.com"], 1)?;
+
+            env.git.run(&["checkout", "-b", "feature/planned"])?;
+            env.fs.write_file("planned.js", "console.log('planned');")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add planned feature"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature/planned", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/planned")?;
+
+            env.git.config_user("Alice", "alice@example.com")?;
+            let approved = env
+                .hitch
+                .run()
+                .args(&["approvals", "approve", &request_id, "--json"])
+                .execute()?;
+            let stdout = approved.stdout();
+            let stderr = approved.stderr();
+            approved.assert_success();
+
+            // The structured claim, which is the one a program can read.
+            let doc: serde_json::Value = serde_json::from_str(&stdout)?;
+            let plan = &doc["plan"];
+            assert_eq!(
+                plan["kind"], "ApprovalApply",
+                "a plan whose kind disagreed with the change it was built from \
+                 would render a heading for one operation and apply another: {plan}"
+            );
+            assert_eq!(
+                plan["intent"]["ApplyApproval"]["request_id"],
+                request_id.as_str(),
+                "the plan names the request it is applying, so a receipt can be \
+                 correlated with the row in `hitch approvals`: {}",
+                plan["intent"]
+            );
+            assert_eq!(
+                plan["intent"]["ApplyApproval"]["branches"][0], "feature/planned",
+                "and the branch it is about to declare"
+            );
+            let effects = plan["effects"].to_string();
+            assert!(
+                effects.contains("promote feature/planned"),
+                "the declaration edit is the effect that matters, and the plan has \
+                 to name it rather than summarise the operation: {effects}"
+            );
+            // The receipt half. `operation` repeats the plan's `kind` on purpose:
+            // a receipt that named a different operation than the plan it is
+            // answering for would be a document about something else.
+            assert_eq!(doc["receipt"]["operation"], "ApprovalApply");
+            assert_eq!(doc["receipt"]["outcome"], "Applied");
+
+            // The same sentence in words. Under `--json` the rendered plan goes
+            // to stderr, so this is not a second run — it is the other half of
+            // the one run above, and asserting on it here is what keeps the two
+            // renderings from drifting apart.
+            assert!(
+                stderr.contains("Approve feature/planned → production"),
+                "the human rendering of the same plan: {stderr}"
+            );
+
+            // And the change actually landed, which is the point of a plan.
+            let config = env.read_hitch_config()?;
+            assert_eq!(
+                config.environments["production"].branches,
+                vec!["feature/planned".to_string()],
+                "the plan predicted the declaration; this checks it is true"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        Ok(())
+    }
+
+    /// A failed approval must not leave a rollback commit behind.
+    ///
+    /// It used to. `attempt_approval_rollback` restored a snapshot of the
+    /// environment the operation had **not touched** — the refusal happens
+    /// before any write — so every refused approval cost an extra `hitch-metadata`
+    /// commit restoring a config identical to the one already there. The cost was
+    /// the same one already fixed on the promote/demote path: a repair narrated
+    /// for something that was never broken, paid for in commits on a branch
+    /// whose history is part of the deployment pipeline.
+    ///
+    /// Two commits remain, and they are not optional: `with_locked_env` commits
+    /// the lock *before* the closure and the unlock on the way out, so a
+    /// refusal inside the closure still shows the lock appearing and clearing.
+    /// What must not be there is the **third** one. Do not "tidy" the constant
+    /// to zero — the visible-lock signal is what the crash-recovery tests read.
+    #[test]
+    fn a_failed_approval_writes_no_rollback_commit() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            create_approval_environment(
+                env,
+                "production",
+                &["alice@example.com", "bob@example.com"],
+                2,
+            )?;
+
+            env.git.run(&["checkout", "-b", "feature/stale"])?;
+            env.fs.write_file("stale.js", "console.log('stale');")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add stale feature"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "feature/stale", "production"])
+                .execute()?
+                .assert_success();
+            let request_id = pending_request_id(env, "feature/stale")?;
+
+            // Move the branch the request's snapshot pinned, so the approval is
+            // refused for a reason decided entirely before any write.
+            env.fs.write_file("mainline.js", "// mainline moved")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Mainline moves on"])?;
+            env.git.run(&["branch", "-f", "feature/stale", "main"])?;
+
+            let before = metadata_commits(env)?;
+            env.git.config_user("Alice", "alice@example.com")?;
+            env.hitch
+                .run()
+                .args(&["approvals", "approve", &request_id])
+                .execute()?
+                .assert_failure();
+            let after = metadata_commits(env)?;
+
+            assert_eq!(
+                after - before,
+                2,
+                "exactly the lock and its unlock. A third commit means a rollback \
+                 ran, and there was nothing to roll back: the refusal is decided \
+                 before any write. {before} → {after}"
+            );
+
+            // And the two facts the rollback could have damaged if it had run
+            // against a snapshot taken on the far side of the lock.
+            let config = env.read_hitch_config()?;
+            assert!(
+                !config.environments["production"].is_locked(),
+                "a rollback snapshot captured inside the lock records `locked: \
+                 true`, so restoring it puts the lock *back* and wedges the \
+                 environment for every later command"
+            );
+            assert_eq!(
+                config
+                    .approval_requests
+                    .iter()
+                    .find(|r| r.id == request_id)
+                    .map(|r| r.approvals.len()),
+                Some(0),
+                "the approval was refused, so it was not recorded"
+            );
+            Ok::<(), anyhow::Error>(())
+        })?;
 
         Ok(())
     }
