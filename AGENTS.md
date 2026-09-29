@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P7 are authored and complete; P8 is
+independently of this program. P0–P8 are authored and complete; P9 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 

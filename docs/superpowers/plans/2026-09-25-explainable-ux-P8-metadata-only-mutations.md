@@ -817,7 +817,7 @@
 - Consumes: everything above.
 - Produces: the documentation that would otherwise be wrong next week.
 
-- [ ] Build the **debug** binary (`cargo build -p hitch`, not `just build`) and
+- [x] Build the **debug** binary (`cargo build -p hitch`, not `just build`) and
   drive all seven commands against a throwaway repo in `/tmp` with
   `--yes --no-push`: `lock`/`unlock` including both refusals; `set --base` with
   and without a promoted-branch collision, with and without `--dry-run`; `add`
@@ -826,10 +826,10 @@
   output as a user would: the question is whether each one is a *plan* and a
   *receipt*, or still a narration with a receipt bolted on.
 
-- [ ] Gates, in order, all three clean: `just format`, `just format-check &&
+- [x] Gates, in order, all three clean: `just format`, `just format-check &&
   just lint`, `just test`.
 
-- [ ] `AGENTS.md`: in the architecture map, add `src/operations/metadata.rs` and
+- [x] `AGENTS.md`: in the architecture map, add `src/operations/metadata.rs` and
   `src/operations/cleanup.rs`; correct the `src/operations/` entry's "three
   mutating commands share one shape" to seven; record the new gotchas this phase
   produced — at minimum, "a metadata operation has no rollback, because its
@@ -840,11 +840,94 @@
   `OperationKind` variant list in the `src/operations/` entry, and the
   "six commands honour `--json`" list in the `src/cli.rs` entry.
 
-- [ ] The master plan: move P8 to **COMPLETE** with the test count and the
+- [x] The master plan: move P8 to **COMPLETE** with the test count and the
   deviations this plan recorded, add the commit list entries, and update "Where
   this work lives" plus the `P0–P7 are complete. P8 is next.` line at the top.
   P9's "What P8 hands P9" is authored **at** P9, not now, for the reason in the
   authoring note: its `file:lines` would be stale before it was read.
 
-- [ ] Add an `## As executed` section to this file recording what actually
+- [x] Add an `## As executed` section to this file recording what actually
   landed, every deviation from the plan above, and anything P9 inherits.
+
+---
+
+## As executed
+
+**Commits:** `3b02105` (Tasks 1–2), `ef4f4ef` (3–4), `a32df5b` (5), `7348d7e`
+(6), `5593aa0` (7), `2f9174c` (8), `33ea3f5` (9), `e217e6d` (10), `289c63f` and
+`dd9aff7` (11 — the second is titled "Task 12" in error). Suite at completion:
+169 lib + 577 integration + 1 `no_args_help`, all green; fmt and clippy clean.
+
+**Tasks 1–10 landed as planned**, with deviation 6 (`PlanWarning.remedy`)
+added during execution and recorded above. Task 11's manual walkthrough is
+where the phase earned its keep: the suite was green and the CLI still had nine
+defects, two of them serious. All fixed in `289c63f`, test-covered:
+
+- **`approve --json` without `--yes` wrote before refusing** — the vote and a
+  lock/unlock pair were committed, then the gate refused. The refusal now runs
+  before any write (and, per the review, *after* the read-only lookups, so an
+  already-applied request says so rather than "needs `--yes`").
+- **`cleanup` planned deletions that `git branch -d` then refused**, listed them
+  under Applied, re-listed them as ⧗ owed, and exited 0. The planner now uses
+  git's own predicate (`GitOperations::branch_is_merged`: ancestor of upstream,
+  else `HEAD`); an unmerged branch is *kept* with an advisory naming `git branch
+  -D` for the human. HEAD and the upstream are in the fingerprint. A delete that
+  still fails at apply time is an `ApplyFailure`, reported after the receipt
+  with exit 1 — never "owed", because nothing will retry it.
+- `set --base`'s Current line showed the proposed base; the effect now names
+  `old → new`. `set`/`remove`/`cleanup` dry-runs end with one preview note
+  (`emit_preview_note`).
+- `remove --force` still headlined the promoted-branch fact as "Needs your
+  decision". The warnings heading is now "Needs your decision" only when
+  confirmation or approval is actually required, else "Worth knowing" — a
+  change visible to every plan with advisories and no gate.
+- `cleanup`'s receipt printed a Result block of every environment; it has no
+  `resulting_state` now. `--json` always emits one document, including when
+  there is nothing to clean.
+- `approve` still narrated (`Approving request…`, `Fetching…`, `Request found`,
+  blank `ℹ️` lines, `applied successfully!`). Gone; the one line left is a vote
+  that did not meet the threshold, which has no plan to carry it.
+- A refusal printed its cause in the plan and again in `PolicyBlocked`'s
+  `Error:`. The cause is now said once, in the plan. **This amends deviation
+  6:** a refusal that only means "already so" (`unlock` of an unlocked
+  environment, `add` of an existing one) is `PlanWarning::with_nothing_to_do`,
+  and `PolicyBlocked.remedy` is an `Option` — there is no `To proceed:` line
+  followed by a non-action.
+
+An independent review of `289c63f` found four more, fixed in `dd9aff7`:
+`list_local_branches_with_prefix` leaked git's `+ ` worktree marker into
+branch names (cleanup advised `git branch -D + feat`), so it now reads
+`for-each-ref`; a branch checked out in any worktree is kept and named;
+cleanup deletes through `delete_branch_strict` (plain `-d`, never the
+worktree escalation to `-D --force` / `update-ref -d`); `approve --json --yes`
+below the threshold emits `{schema_version, plan: null, receipt: null,
+approval: {…}}` rather than nothing; and a failed delete appears in the JSON
+document as `failures`, not only on stderr.
+
+**Deviations from the tasks as written:** `emit_approval_recorded` /
+`render_approval_recorded` and `emit_receipt_with_failures` are new emitters the
+plan did not name, both in `render.rs` per the words-in-one-place rule.
+`apply_cleanup_plan` returns `CleanupRun { receipt, failures }` rather than a
+bare receipt. `StepNarration::Log` has no caller left, but it was **not**
+deleted: removing it means removing the `on_step` plumbing through
+`plan_rebuild` / `apply_rebuild_plan` / `compose_environment` and their tests,
+which is P10's legacy removal, not this phase.
+
+**What P9 inherits** (authored in full at P9, per the authoring note):
+
+- Dead `StepNarration` / `on_step` plumbing, above.
+- `with_locked_env` still prints `Environment 'x' locked by…` / `unlocked`
+  around every plan — a narration voice P8 did not touch.
+- Seen in passing, not P8's: an approval-gated `promote` says "requires
+  approval" once before its plan and again inside it, and its plan shows ⛔
+  "Why this cannot apply" before going on to file the request — a blocking
+  glyph on an outcome that is not a refusal. `promote` of a missing or
+  already-promoted branch prints only the lock/unlock lines around its error.
+- `GitOperations::delete_branch`'s worktree escalation still exists; its only
+  remaining callers force-delete hitch's own temp branches in `resolve.rs`, so
+  it is not reachable with user work today.
+- `remove --force --json` without `--yes` still exits 1: the `--json` gate
+  refuses for every command regardless of `--force`. Left as is; `--force`
+  answers the question, `--yes` authorises answering none, and conflating them
+  is a decision for the flag inventory, not a fix.
+
