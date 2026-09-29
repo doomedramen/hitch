@@ -53,7 +53,7 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P8 are authored and complete; P9 is
+independently of this program. P0–P9 are authored and complete; P10 is
 next. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
@@ -243,9 +243,21 @@ covered.
     diffs two configs into typed `HitchEvent`s) plus one reader,
     `build_activity`, walking `hitch-metadata` first-parent history. Lock
     brackets that hitch wrote around its own operation are collapsed out (only
-    manual lock/unlock survive); a build record attaches to a rebuild entry only
-    when `metadata_sha`..stamp provably identifies that one rebuild. `hitch log`
-    takes no repo lock (read-only, in `command_is_mutating`'s `false` arm).
+    manual lock/unlock survive). A build record attaches to the newest rebuild
+    of an env only when its `metadata_sha` is an ancestor-or-equal of that
+    commit **and** no first-parent commit in `metadata_sha..c^` changes the env's
+    `rebuilt_at` (any unreadable commit in the range → `Unrecorded`, never a
+    guess); this is a range check, not "the previous rebuild is in view", so it
+    works at the default `--limit`. Attachment runs before the `--branch`
+    filter (`Unrecorded` has no branches), and a branch-filtered log suppresses
+    the not-rebuilt pointer (`ActivityLog.branch_filtered`, `serde(skip)`).
+    `Released` is hoisted first in its commit so a release headlines its entry;
+    the release target is not recorded anywhere, so the log cannot name it.
+    `hitch log` takes no repo lock (read-only, in `command_is_mutating`'s
+    `false` arm).
+  - `timeline.rs` is now a thin adapter over `activity.rs` for the frozen
+    desktop crate (`TimelineItem` keeps its fields, gains `event`). It drops
+    `skipped`/`truncated`. **P10 deletes it** once the desktop reads `event`.
   - `state.rs` is **the** authority on "does this environment need a
     rebuild, and what actually moved". `build_state_snapshot` returns a
     `RepositoryStateSnapshot` — Desired read live from refs, Actual read
@@ -1317,7 +1329,12 @@ do not add config-based "mitigations" that silently change merge semantics.
 common commands and fails on `sha`/`oid`/`ref`/`refs/`/`cas`/`eject`/`journal`/
 `fingerprint`/`anchor`/`hitch-metadata`/... as case-insensitive words. New
 output extends that scenario; a hit gets past only via its `ALLOWED` table,
-each entry with a reason (pasteable `git …` lines are skipped outright).
+each entry with a reason (pasteable `git …` lines are skipped outright). A
+new allow-list entry needs a reason string, and the reason is reviewed like
+code. Path-shaped internal ref names (`build/<env>/…`, `release/…`, `prev/`,
+`backup/`, `publish/`, `state/`, `resolutions/` — see `REF_FAMILIES`) are
+forbidden in default output too; fixture branch names must avoid those seven
+family names.
 `hitch-metadata` renders as `settings` in effect rows (`short_ref`). An
 approval gate is a `Needs approval` / `⏳` section in `render_plan`, not the
 blocking `⛔` heading, though the model still calls it blocking.

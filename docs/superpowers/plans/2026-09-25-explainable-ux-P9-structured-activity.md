@@ -242,7 +242,7 @@ derives rather than defining a second pair type.
 Approval events carry `environment` and `branch` copied from the request, so
 `environment()` and `branches()` stay total with no config lookup.
 
-- [ ] **Write the failing tests first.** Build `HitchConfig` values in
+- [x] **Write the failing tests first.** Build `HitchConfig` values in
   memory; this is a pure function with no git. One test per current
   `timeline.rs` `format!` site, each asserting the typed event:
 
@@ -305,19 +305,19 @@ fn a_filter_on_dev_does_not_match_a_branch_called_feature_devtools() {
   Add a test that a single commit which both adds a vote and reaches the
   threshold yields `ApprovalVoted` then `ApprovalGranted`, in that order.
 
-- [ ] Run: `cargo test -p hitch --lib core::activity` and confirm the tests
+- [x] Run: `cargo test -p hitch --lib core::activity` and confirm the tests
   fail to compile, because the module does not exist yet.
 
-- [ ] Implement `derive_events` in the order Constraint 7 fixes:
+- [x] Implement `derive_events` in the order Constraint 7 fixes:
   `new.environments` sorted by name, then removed environments sorted, then
   approvals sorted by `id`. `derive_events` does **not** decide whether a lock
   is an operation's; it emits `Locked`/`Unlocked` faithfully. Collapsing happens
   in the reader (Task 3), which can see neighbouring commits.
 
-- [ ] Run the module's tests until they pass. Then run `just format && just
+- [x] Run the module's tests until they pass. Then run `just format && just
   format-check && just lint && just test`.
 
-- [ ] Commit: `P9 Task 1: typed HitchEvent model, derived purely from two configs`.
+- [x] Commit: `P9 Task 1: typed HitchEvent model, derived purely from two configs`.
 
 ---
 
@@ -377,7 +377,7 @@ merge against its second parent would replay someone else's history as though
 it happened here. The new primitive goes through `run_git_command`, never
 `Command::new` (master Constraint 3).
 
-- [ ] **Write the failing integration tests first.** Use the harness in
+- [x] **Write the failing integration tests first.** Use the harness in
   `tests/test_framework/` (`HitchTestFramework::new().with_test_environment(TestSetup::HitchInit, |env| …)`),
   driving real commands through `env.hitch` and then calling the *library*
   (`hitch::core::activity::build_activity`) on the test repo, or `hitch log
@@ -403,7 +403,7 @@ it happened here. The new primitive goes through `run_git_command`, never
     commit, merge it into `hitch-metadata` with `git merge --no-ff`, and assert
     that no event is attributed to the second parent's changes twice.
 
-- [ ] Implement. Walk newest→oldest, pairing each commit with its first parent
+- [x] Implement. Walk newest→oldest, pairing each commit with its first parent
   in the list, and read each `hitch.json` once. Reuse the existing
   `read_config_at`, moved from `timeline.rs` into `activity.rs` and made
   `pub(crate)`. Its comment in `src/utils/config_validation.rs:5-14` names
@@ -420,14 +420,14 @@ it happened here. The new primitive goes through `run_git_command`, never
   and set `truncated`. Entries with no events after filtering are dropped, and
   so are entries emptied by lock collapsing in Task 3.
 
-- [ ] Apply the typed filter (Constraint 6) per event:
+- [x] Apply the typed filter (Constraint 6) per event:
   - `environment: Some(e)` keeps events where `ev.environment() == e`;
   - `branch: Some(b)` keeps events where `ev.branches().contains(&b)`;
   - both keep the intersection.
 
   Add a test that `--env dev` excludes `Promoted { qa, feature/devtools }`.
 
-- [ ] `just format && just format-check && just lint && just test`. Commit:
+- [x] `just format && just format-check && just lint && just test`. Commit:
   `P9 Task 2: build_activity reads metadata history as typed entries`.
 
 ---
@@ -466,7 +466,7 @@ compiler finds every caller. There should be exactly two, `lock_environment`
 (called by `with_locked_env`) and `hitch lock`'s apply. If `lock_environment`
 has other callers, each one passes `Operation`.
 
-- [ ] **Failing tests first:**
+- [x] **Failing tests first:**
   - Serde: a `hitch.json` without `lock_purpose` deserializes with `None`. An
     unlocked environment serializes *without* the key, so older hitch versions
     see byte-identical JSON for unlocked environments. A locked one round-trips
@@ -488,7 +488,7 @@ has other callers, each one passes `Operation`.
     hand-write a legacy lock followed by an unlock 2 hours later, with nothing
     else touching that environment in between: both show.
 
-- [ ] Implement. `with_locked_env` → `Operation`, `hitch lock` → `Manual`.
+- [x] Implement. `with_locked_env` → `Operation`, `hitch lock` → `Manual`.
   Collapsing in `build_activity` is a post-pass over the per-commit events,
   newest to oldest, per environment:
   - A `Locked`/`Unlocked` event whose *new* config (or *old*, for `Unlocked`)
@@ -508,11 +508,11 @@ has other callers, each one passes `Operation`.
   when it sees a lock event for `e`. Keep `derive_events`' signature as Task 1
   defines it.
 
-- [ ] Check that `hitch status`, `hitch why` and the lock refusal messages
+- [x] Check that `hitch status`, `hitch why` and the lock refusal messages
   ("locked by X") are unchanged: `lock_purpose` is read by the log only.
   `just test` covers that.
 
-- [ ] Update `AGENTS.md`'s locking-discipline paragraph (Conventions): the
+- [x] Update `AGENTS.md`'s locking-discipline paragraph (Conventions): the
   persisted `locked` flag now records *why* in `lock_purpose`, and history uses
   it. Gates. Commit: `P9 Task 3: an operation's own lock leaves no event`.
 
@@ -549,7 +549,7 @@ outcome at `Unrecorded`. Map the record like this:
   `operations/declaration.rs` uses to fill `DependentEnvironmentRebuild.held`);
 - `held` empty → `Clean`, else `WithHolds`.
 
-- [ ] **Failing tests first:**
+- [x] **Failing tests first:**
   - `the_latest_rebuild_carries_its_holds`: set up the conflicting pair the
     existing hold tests use (grep `tests/integration/rebuild_tests.rs` for a
     helper creating two branches that conflict on one file), promote both, and
@@ -566,7 +566,7 @@ outcome at `Unrecorded`. Map the record like this:
     `test_an_environment_built_without_a_record_is_legacy_unknown` uses. Assert
     that the ref existed before deletion so the test cannot pass vacuously.
 
-- [ ] Implement as a post-pass after collapsing. Gates. Commit: `P9 Task 4:
+- [x] Implement as a post-pass after collapsing. Gates. Commit: `P9 Task 4:
   attach the build record to the one rebuild it provably describes`.
 
 ---
@@ -634,13 +634,13 @@ This is deviation 2's pointer. It is a statement about *this log*, and it is
 worded so it does not claim the environment needs a rebuild: that verdict
 belongs to `core::state`.
 
-- [ ] **Failing golden tests first**, one per table row, plus:
+- [x] **Failing golden tests first**, one per table row, plus:
   - day grouping across midnight with a fixed `now`;
   - a `WithHolds` rebuild's continuation lines;
   - `skipped`, `truncated` and empty footers;
   - verbose adds the commit and non-verbose never contains `commit`;
   - the "not rebuilt since" pointer, both present and absent.
-- [ ] Implement. Gates. Commit: `P9 Task 5: render the deployment story`.
+- [x] Implement. Gates. Commit: `P9 Task 5: render the deployment story`.
 
 ---
 
@@ -696,7 +696,7 @@ and ends with `hitch status` as the next step (AGENTS.md error convention). An
 environment that existed and was removed is valid, and its history is exactly
 what the reader wants.
 
-- [ ] **Failing tests first:**
+- [x] **Failing tests first:**
   - `hitch_log_tells_the_story`: create an environment, promote two branches,
     rebuild, then `hitch log`. Assert stdout contains `Today`, `added
     feature/a to dev`, and `rebuilt dev`, and does **not** contain `Locked` or
@@ -712,15 +712,15 @@ what the reader wants.
     still exits 0.
   - `hitch_log_unknown_env_is_an_error_with_a_next_step`.
   - `hitch_log_verbose_shows_the_metadata_commit`.
-- [ ] Implement and register (four places, as `AGENTS.md`'s `src/cli.rs` entry
+- [x] Implement and register (four places, as `AGENTS.md`'s `src/cli.rs` entry
   lists). Update the `--json` doc comment to add `log`: fourteen commands, three
   read-only ones, and "`status`, `why` and `log` have no 'after' half". Rename
   `the_two_read_only_json_commands_are_status_and_why` to
   `the_read_only_json_commands_are_status_why_and_log` and update its set.
-- [ ] Build the debug binary and run `hitch log`, `hitch log --env dev`,
+- [x] Build the debug binary and run `hitch log`, `hitch log --env dev`,
   `hitch log --json | jq .`, and `hitch log --verbose` against a throwaway
   repo. Read the output as a user would.
-- [ ] Update `AGENTS.md`: the `src/cli.rs` entry (fourteen, three read-only),
+- [x] Update `AGENTS.md`: the `src/cli.rs` entry (fourteen, three read-only),
   a `src/core/activity.rs` architecture-map entry (pure model plus one reader,
   and the lock-collapse and record-attachment rules in one line each), and the
   `core/timeline.rs` note (now an adapter; see Task 8). Gates. Commit:
@@ -777,7 +777,7 @@ others):**
 - Produces: `terminology_tests.rs`, which future phases extend when they add
   output.
 
-- [ ] **Write the enforcing test first.** One scenario script drives the
+- [x] **Write the enforcing test first.** One scenario script drives the
   common commands' normal paths, without `--verbose` or `--json`, against one
   repo:
   - `init`, `add qa`, promote two branches (one conflicting, so a hold occurs),
@@ -798,10 +798,10 @@ others):**
   subset with `--verbose` and asserts that at least one mechanism term *does*
   appear, which proves the verbose channel still carries it and that the
   suppression was a move, not a deletion.
-- [ ] Run it. It fails on the offenders above; that is the red.
-- [ ] Fix each offender as listed. Existing tests asserting the old strings
+- [x] Run it. It fails on the offenders above; that is the red.
+- [x] Fix each offender as listed. Existing tests asserting the old strings
   change with them. Keep that list in the commit message body.
-- [ ] Gates. Commit: `P9 Task 7: default output explains meaning, verbose
+- [x] Gates. Commit: `P9 Task 7: default output explains meaning, verbose
   explains mechanism`.
 
 ---
@@ -825,13 +825,13 @@ others):**
   (`None` for `GitCommit` items). That is the typed hook a future desktop
   migration reads instead of `summary`.
 
-- [ ] **Failing test first:** build an in-memory `ActivityLog` with one
+- [x] **Failing test first:** build an in-memory `ActivityLog` with one
   `Promoted { qa, feature/devtools }` entry and convert it through the adapter
   function (factor out `fn items_from_log(log: &ActivityLog, filter:
   &HitchEventFilter) -> Vec<TimelineItem>`, which is pure). An `Environment`
   scope with `environment: Some("dev")` yields nothing. Today's substring
   filter would yield one item.
-- [ ] Reimplement `build_hitch_events` as:
+- [x] Reimplement `build_hitch_events` as:
   1. `build_activity` with `limit: max_commits` and the filter's
      environment/branch mapped into `ActivityQuery`; `Any` maps to no filter;
   2. then one `TimelineItem` per *event*, not per entry, because the desktop
@@ -844,12 +844,12 @@ others):**
   `read_config_at`, which moved in Task 2. `hitch_limit` changes meaning from
   "metadata commits scanned" to "entries". Record that in the adapter's doc
   comment; the desktop passes 80 and gets at most 80 events' worth of entries.
-- [ ] Run `git diff --name-only main..HEAD -- crates/` and confirm it is empty.
+- [x] Run `git diff --name-only main..HEAD -- crates/` and confirm it is empty.
   Check the desktop's use sites by reading them
   (`crates/hitch-desktop/src-tauri/src/types.rs:122-180`). Every field it
   reads still exists, and adding `event` cannot break its struct-literal-free
   `From` impl.
-- [ ] Gates. Commit: `P9 Task 8: timeline.rs is an adapter over the event model`.
+- [x] Gates. Commit: `P9 Task 8: timeline.rs is an adapter over the event model`.
 
 ---
 
@@ -857,7 +857,7 @@ others):**
 
 **Files:** `AGENTS.md`, `docs/superpowers/plans/2026-09-25-explainable-ux-program.md`, this file.
 
-- [ ] Build the **debug** binary (`cargo build -p hitch`) and, in a throwaway
+- [x] Build the **debug** binary (`cargo build -p hitch`) and, in a throwaway
   repo under `/tmp`, run with `--yes --no-push` a realistic day:
   - create `dev` and `qa`;
   - promote three branches, two of them conflicting;
@@ -877,9 +877,9 @@ others):**
 
   Delegate this to a fresh agent with the same brief shape P8's Task 11 used.
   That walkthrough found nine defects a green suite had not.
-- [ ] Gates, in order, all clean: `just format`, `just format-check && just
+- [x] Gates, in order, all clean: `just format`, `just format-check && just
   lint`, `just test`.
-- [ ] `AGENTS.md`:
+- [x] `AGENTS.md`:
   - `core/activity.rs` in the architecture map (if Task 6 did not already add
     it);
   - `core/timeline.rs` as an adapter with a P10 deletion note;
@@ -890,7 +890,7 @@ others):**
     caller left, `core/timeline.rs:96`" — after Task 2 it moves to
     `core/activity.rs` or disappears, because `list_first_parent_history`
     carries the time.
-- [ ] Master plan: move P9 to **COMPLETE** with the test count, deviations,
+- [x] Master plan: move P9 to **COMPLETE** with the test count, deviations,
   and commit list entries. Update the header status line (`P0–P9 are complete.
   P10 is next.`) and "Where this work lives". P10's inheritance is authored
   at P10, for the usual reason. List for P10 at minimum:
@@ -898,5 +898,64 @@ others):**
   - delete `StepNarration` and the `on_step` plumbing (P8's inheritance);
   - reconsider the legacy lock heuristic once no un-purposed history is within
     anyone's default `--limit`.
-- [ ] Add `## As executed` to this file: what landed, every deviation from the
+- [x] Add `## As executed` to this file: what landed, every deviation from the
   tasks above, and what P10 inherits.
+
+## As executed
+
+**Commits** (`8c7ebb0` is the plan; suite at completion in the master plan):
+
+| Task | Commits |
+|---|---|
+| 1 event model | `5a81729` |
+| 2 reader | `6596fbb` |
+| 3 lock collapse | `101f352`, `6d828b8` |
+| 4 rebuild outcome | `46e4c07`, `0185bea` |
+| 5 words | `12c8fd9`, `3c5c787` |
+| 6 `hitch log` | `f80a48c`, `dfecbbb` |
+| 7 terminology | `12bb841`, `9c7d753`, `9e0f1da` |
+| 8 timeline adapter | `48fc111` |
+| 9 walkthrough fallout, docs | `c49d713`, `28f7794`, then the docs commit |
+
+**What landed.** `src/core/activity.rs`: typed `HitchEvent`, pure `derive_events`,
+one reader `build_activity` over `hitch-metadata` first-parent history, lock
+collapse driven by `Environment.lock_purpose`, build-record attachment.
+`render_event`/`render_activity` in `render.rs`. Read-only `hitch log`
+(`--env`, `--branch`, `--limit`, `--verbose`, `--json`; fourteenth `--json`
+command, third read-only). A terminology test that drives one scenario through the
+common commands and fails on mechanism words and path-shaped ref names, with a
+reasoned allow-list. `core/timeline.rs` is an adapter over the event model.
+
+**Rulings** (why / cost):
+- T2 tests strip Locked/Unlocked events before asserting; T3 restores the plan's exact assertions. Why: they are only true once T3 collapses operation locks. Cost: T2's tests were weaker for one task.
+- T4 attachment: a truncated walk with one visible rebuild resolves conservatively, and attachment precedes the branch filter. Why: wrong attachment is worse than `Unrecorded`; `Unrecorded` has no branches. Cost: none.
+- **Range rule replaces the plan's R2 condition.** Attach record `r` to the newest `Rebuilt{e}` at commit `c1` iff `r.metadata_sha` is ancestor-or-equal of `c1` and no first-parent commit in `metadata_sha..c1^` changes `e.rebuilt_at`; any unreadable commit in the range gives `Unrecorded`. Why: provable without the previous rebuild in view, so it works at the default `-n 20`; R2 made the feature silent in the common case. Cost: a crash between record and stamp could misattribute (reviewer argues it fails the ancestry condition).
+- T5 adds one private hold-sentence helper in `render.rs` and does not refactor existing render sites. Why: out of scope, risk to P6/P7 golden tests. Cost: a fourth hold wording until P10.
+- **All six approval variants carry `direction: ApprovalDirection`** (extends Task 1's interface). Why: the wording table needs it and "applied" is wrong for demotes. Cost: small churn.
+- The not-rebuilt-since pointer ignores Locked/Unlocked-only entries. Why: a manual lock does not rebuild. Cost: none.
+- T6 has no "why lock test" (the brief cited a nonexistent one); the test takes `RepoLock::acquire` in-test.
+- Walkthrough: D1-D4 fixed in P9; short SHAs stay in normal output (spec §17); D3's Applied triple, D5, D6 deferred as pre-P9 paths.
+- **D2: `Released` stays `released dev` with no target; it is hoisted to the front of its commit's events.** Why: the target is overridable and not persisted, and Constraint 3 allows only `lock_purpose` as a new field. Cost: the log does not say where `dev` was released to.
+
+**Deviations from the tasks as written:**
+- The spec's `RebuiltWithHolds` is `Rebuilt { outcome: WithHolds }`, not a separate variant (refines deviation 1).
+- Attachment uses the range rule above, not R2.
+- Approval direction on all variants; `Released` first and no `into`.
+- `Environment.lock_purpose` is the one new persisted field; `Environment::lock` takes the purpose.
+- D1: `ActivityLog.branch_filtered` is `serde(skip)`; a branch-filtered log prints no pointer.
+- D3: a vote and its grant in one entry render as one line.
+- D4: the anchors block reads "The new build is kept safe until it is published."; the terminology test also catches `<family>/<name>/` ref paths (`REF_FAMILIES`).
+- `Cargo.toml` gained a stray `2.0.0` bump in `101f352`; reverted in `6d828b8`. Origin unknown: an external process changed it mid-session.
+
+**Deferred minors:** new-env `continue` drops same-commit branch/lock events; `Rebuilt` branches for Clean/WithHolds untested and `--branch` matches only rebuilds with a known outcome; a rejection field set on an already-rejected request yields a second `ApprovalRejected`; look-ahead may record `skipped` beyond truncation and `truncated` is true when the limit lands on the last event-bearing commit; range-check unreadable commits beyond the walk count in `skipped`; `--branch` + limit counts filtered-out entries; a truncated-walk test leans on commit layout; `log --verbose` overrides global `--verbose` (as `why`); `cli.rs` `--json` doc lines are long; `branches_noun` hand-rolled plural; cleanup classified by `refs/hitch/` prefix; a `lock_unlock_tests` "settings" count is brittle; `Expect::Any` prompt steps do not assert prompt text; corrupt-config default warning is unit-tested only; adapter tests miss None-scope returns, Rebuilt-by-Branch and GitCommit `event == None`; single-commit `hitch-metadata` now yields `EnvironmentCreated`; unnecessary `#[allow(dead_code)]` at `timeline.rs`; `REF_FAMILIES` omits `pending-resync`; "new build is kept safe" wording also used for release; D3 scan is O(n^2); D1 `take(0)` idiom.
+
+### What P10 inherits
+- Delete the timeline adapter once the desktop reads `event`.
+- Delete `StepNarration` and the `on_step` plumbing (from P8).
+- Reconsider the 60 s legacy lock heuristic once no un-purposed history is within a default `--limit`.
+- `get_commit_timestamp` has no production caller; delete it.
+- The release target is not recorded; derive it from the release tag or record it.
+- D5: the release plan's "Will not change" list is wrong (duplicates, and lists environments it rebuilds).
+- D6: a conflict-refused promote narrates a rollback and names the wrong partner (`main` instead of `payments`); a release failure's remedy repeats the failing command.
+- An approval apply still shows as three log lines (D3, Applied triple).
+- The adapter drops `skipped`/`truncated`, so the desktop shows a partial timeline silently.
