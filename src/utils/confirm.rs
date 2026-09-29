@@ -49,7 +49,6 @@ impl Confirm for AlwaysYesConfirm {
 
 pub struct AlwaysNoConfirm;
 
-#[allow(dead_code)]
 impl Confirm for AlwaysNoConfirm {
     fn confirm(&self, _prompt: &str) -> Result<bool> {
         Ok(false)

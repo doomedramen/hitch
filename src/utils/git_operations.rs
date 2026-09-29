@@ -18,7 +18,6 @@ pub struct MergeConflictResult {
     /// Merge base information
     pub merge_base: Option<MergeBaseInfo>,
     /// The source branch that was being merged
-    #[allow(dead_code)]
     pub source_branch: String,
     /// The target branch (current branch)
     pub target_branch: String,
@@ -1014,29 +1013,6 @@ impl GitOperations {
 
         let sha = String::from_utf8(remote_output.stdout).context("Failed to parse commit SHA")?;
         Ok(sha.trim().to_string())
-    }
-
-    /// Get the timestamp for a commit
-    pub fn get_commit_timestamp(&self, sha: &str) -> Result<DateTime<Utc>> {
-        let output = self.run_git_command(&["log", "-1", "--format=%at", sha])?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to get timestamp for commit '{}': {}",
-                sha,
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-
-        let timestamp_str =
-            String::from_utf8(output.stdout).context("Failed to parse timestamp")?;
-        let timestamp_i64: i64 = timestamp_str
-            .trim()
-            .parse()
-            .context("Failed to parse timestamp as integer")?;
-
-        DateTime::from_timestamp(timestamp_i64, 0)
-            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", timestamp_i64))
     }
 
     pub fn list_local_branches(&self) -> Result<Vec<String>> {

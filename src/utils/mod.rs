@@ -14,7 +14,6 @@ pub mod logging;
 pub mod output;
 pub mod pr_status;
 pub mod prelude;
-pub mod progress;
 pub mod publish_journal;
 pub mod rebuild_lock;
 pub mod repo_lock;

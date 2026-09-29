@@ -200,7 +200,6 @@ pub struct RollbackInfo {
     /// operation had never modified.
     pub previous_config: Option<HitchConfig>,
     /// When the operation was started
-    #[allow(dead_code)]
     pub timestamp: DateTime<Utc>,
 }
 

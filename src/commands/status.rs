@@ -40,7 +40,7 @@ pub struct StatusCommand {
 pub fn run(args: StatusCommand, context: &GlobalContext) -> Result<()> {
     // Create a new context with the verbose flag
     let mut context = context.clone();
-    context.verbose = args.verbose;
+    context.verbose = context.verbose || args.verbose;
 
     context.log_verbose("Starting status command...");
 

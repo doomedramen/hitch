@@ -82,7 +82,6 @@ pub fn run(args: ReleaseCommand, context: &GlobalContext) -> Result<()> {
             &target_branch,
             options,
             PlanPurpose::Preview,
-            &mut |step| context.log_verbose(step),
         )?;
         emit_plan(context, &plan)?;
         return Ok(());
@@ -266,7 +265,6 @@ fn perform_release_core(
         target_branch,
         options,
         PlanPurpose::Confirm,
-        &mut |step| context.log_verbose(step),
     )?;
 
     // The discard precedes the return on *both* non-applying arms. Writing it as
@@ -290,6 +288,6 @@ fn perform_release_core(
     // step the apply would narrate — tagging, publishing, updating metadata,
     // pruning, rebuilding dependents — is a line in the receipt printed a few
     // lines below, in the same vocabulary as the plan the user just read.
-    let receipt = apply_release_plan(context, &plan, &mut |_| {})?;
+    let receipt = apply_release_plan(context, &plan)?;
     Ok(Some(ReleaseRun { plan, receipt }))
 }

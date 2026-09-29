@@ -816,7 +816,7 @@ mod tests {
     /// A hold inside a nested rebuild used to be reported *nowhere* once the
     /// transcript was gone: the nested build's own receipt — which is where
     /// `DependentRebuildOutcome::Rebuilt`'s doc said the holds were recorded —
-    /// is thrown away by `rebuild_environment_opts`, and the caller bound
+    /// is thrown away by `rebuild_environment`, and the caller bound
     /// `Ok(_)`. So a demote whose build silently held a branch reported a clean
     /// `✓ rebuild dev`, and only the `Result` block hinted at it.
     ///

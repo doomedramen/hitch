@@ -4,7 +4,7 @@
 //! covering branch management, merge operations, conflict detection, and edge cases.
 
 use anyhow::{Context, Result};
-use chrono::{Local, Utc};
+use chrono::Local;
 
 use crate::framework::TestSetup;
 use crate::test_framework::*;
@@ -1023,48 +1023,6 @@ mod tests {
             let sha = git_ops.get_branch_commit_sha("main")?;
             assert!(!sha.is_empty());
             assert_eq!(sha.len(), 40); // SHA-1 length
-
-            Ok::<(), anyhow::Error>(())
-        });
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_commit_timestamp() -> Result<()> {
-        let framework = HitchTestFramework::new()?;
-
-        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
-            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
-
-            // Create commit
-            git_ops.write_file("test.txt", "content")?;
-            git_ops.add_and_commit(&["test.txt"], "Test commit")?;
-
-            let sha = git_ops.get_branch_commit_sha("main")?;
-            let timestamp = git_ops.get_commit_timestamp(&sha)?;
-
-            // Timestamp should be recent (within last minute)
-            let now = Utc::now();
-            let duration = now.signed_duration_since(timestamp);
-            assert!(duration.num_seconds() <= 60);
-
-            Ok::<(), anyhow::Error>(())
-        });
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_commit_timestamp_invalid_sha() -> Result<()> {
-        let framework = HitchTestFramework::new()?;
-
-        let _ = framework.with_test_environment(TestSetup::GitOnly, |env| {
-            let git_ops = GitOperations::new_at_path(&env.temp_dir.to_string_lossy())?;
-
-            // Try with invalid SHA
-            let result = git_ops.get_commit_timestamp("invalid");
-            assert!(result.is_err());
 
             Ok::<(), anyhow::Error>(())
         });

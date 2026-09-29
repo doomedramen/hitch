@@ -986,7 +986,7 @@ pub enum AppliedEffect {
         /// `owes_effect`/`as_str`/`reason` must keep meaning what they say. But
         /// it was genuinely being lost: the nested rebuild's own receipt, where
         /// the holds used to be "recorded", is thrown away by
-        /// `rebuild_environment_opts`, so with the `StepLogger` transcript
+        /// `rebuild_environment`, so with the `StepLogger` transcript
         /// suppressed there was nowhere at all for a hold to appear except this.
         /// A fact with no reader is a fact the model is not really tracking.
         held: Vec<HoldPair>,
@@ -1016,7 +1016,7 @@ pub enum DependentRebuildOutcome {
     /// branches held still rebuilt, so the holds ride on the enclosing
     /// `AppliedEffect::DependentEnvironmentRebuild`'s `held` field rather than
     /// changing what the *outcome* was. (This doc used to point at the nested
-    /// build's own receipt, which `rebuild_environment_opts` throws away — so
+    /// build's own receipt, which `rebuild_environment` throws away — so
     /// the holds were recorded nowhere at all.)
     Rebuilt,
     /// Deliberately not done, and why. A skip is neither success nor failure.

@@ -241,7 +241,6 @@ fn execute_approved_operation(
             change,
             request_id,
             DeclarationPlanOptions { no_rebuild: false },
-            &mut |_| {},
         )?;
 
         if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
@@ -253,7 +252,7 @@ fn execute_approved_operation(
         // deliberately not printed: the receipt's
         // `DependentEnvironmentRebuild` effect is what reports it, including any
         // branches it held and any work it still owes.
-        let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
+        let receipt = apply_declaration_plan(context, &plan)?;
 
         // Last, and only because it is the only ordering a crash survives: the
         // request is `Applied` once its change is real, not before.

@@ -48,7 +48,7 @@ use crate::utils::command_helpers::{ensure_environment_exists, validate_branch_f
 use crate::utils::prelude::{
     access_metadata_read_only, create_approval_requests_for_operation,
     display_approval_request_created, modify_metadata, pre_promote_conflict_reason,
-    rebuild_environment, StepNarration,
+    rebuild_environment,
 };
 use crate::utils::validation::validate_name;
 
@@ -262,7 +262,6 @@ pub fn plan_promote(
     argument: &str,
     environment: &str,
     options: DeclarationPlanOptions,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<DeclarationPlanDetail>> {
     let resolved = resolve_to_branches(context, argument, environment, OperationKind::Promote)?;
     plan_declaration_change(
@@ -271,7 +270,6 @@ pub fn plan_promote(
         DeclarationChange::Add(resolved),
         argument,
         options,
-        on_step,
     )
 }
 
@@ -281,7 +279,6 @@ pub fn plan_demote(
     argument: &str,
     environment: &str,
     options: DeclarationPlanOptions,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<DeclarationPlanDetail>> {
     let resolved = resolve_to_branches(context, argument, environment, OperationKind::Demote)?;
     plan_declaration_change(
@@ -290,7 +287,6 @@ pub fn plan_demote(
         DeclarationChange::Remove(resolved),
         argument,
         options,
-        on_step,
     )
 }
 
@@ -319,14 +315,13 @@ pub fn plan_approved_declaration_change(
     change: DeclarationChange,
     argument: &str,
     options: DeclarationPlanOptions,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<DeclarationPlanDetail>> {
     debug_assert!(
         matches!(change, DeclarationChange::ApprovedApply { .. }),
         "the approved-apply entry point takes an approval-authorised change; anything else \
          would be a plan whose approval gate this planner skips for no reason"
     );
-    plan_declaration_change(context, environment, change, argument, options, on_step)
+    plan_declaration_change(context, environment, change, argument, options)
 }
 
 /// Expand an environment name into the branches promoted in it, or treat the
@@ -383,9 +378,7 @@ fn plan_declaration_change(
     change: DeclarationChange,
     argument: &str,
     options: DeclarationPlanOptions,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<DeclarationPlanDetail>> {
-    on_step("Validating promotion preconditions");
     let kind = change.kind();
     // Total, with no wildcard. A `_ => "demotion"` here would have labelled
     // every operation added after this code was written as a demotion, and the
@@ -799,7 +792,6 @@ pub fn validate_declaration_plan(
 pub fn apply_declaration_plan(
     context: &GlobalContext,
     plan: &OperationPlan<DeclarationPlanDetail>,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<ExecutionReceipt> {
     let started_at = chrono::Utc::now();
     validate_declaration_plan(context, plan).map_err(PlanApplyError::into_anyhow)?;
@@ -809,7 +801,6 @@ pub fn apply_declaration_plan(
     }
 
     let environment = plan.detail.environment.as_str();
-    on_step(&format!("Updating '{}' declaration", environment));
     context.log_verbose(&format!(
         "Updating environment '{}' with {} branch(es)...",
         environment,
@@ -892,7 +883,7 @@ pub fn apply_declaration_plan(
         // be a second and older vocabulary narrating work the reader has
         // already been told about, sitting between the two halves that
         // actually account for it.
-        match rebuild_environment(context, environment, StepNarration::Suppressed) {
+        match rebuild_environment(context, environment) {
             Ok(outcome) => {
                 context.log_verbose(&format!(
                     "✓ Environment '{}' rebuilt successfully",

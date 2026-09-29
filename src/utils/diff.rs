@@ -5,7 +5,6 @@
 
 use crate::types::{Environment, HitchConfig};
 use colored::*;
-use serde_json;
 use std::collections::{HashMap, HashSet};
 
 /// Represents a change in the configuration
@@ -243,13 +242,6 @@ pub fn create_summary(changes: &[ConfigChange]) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     }
-}
-
-/// Generates a JSON diff for API responses
-#[allow(dead_code)]
-pub fn json_diff(old_config: &HitchConfig, new_config: &HitchConfig) -> serde_json::Value {
-    let changes = diff_configs(old_config, new_config);
-    serde_json::to_value(&changes).unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(test)]
@@ -517,39 +509,6 @@ mod tests {
         assert!(summary.contains("1 Environments added"));
         assert!(summary.contains("1 Environments removed"));
         // Summary doesn't include environment names, just counts
-    }
-
-    #[test]
-    fn test_json_diff_output() {
-        let old = HitchConfig::default();
-        let mut new = HitchConfig::default();
-
-        // Add environment to new config
-        new.add_environment("prod".to_string(), Environment::new("main".to_string()))
-            .unwrap();
-
-        let json = json_diff(&old, &new);
-
-        // Should be valid JSON
-        assert!(json.is_array());
-
-        // Should have the change
-        if let Some(array) = json.as_array() {
-            assert_eq!(array.len(), 1);
-            if let Some(change) = array[0].as_object() {
-                // Check for the EnvironmentAdded variant with name field
-                assert!(change.contains_key("EnvironmentAdded"));
-                if let Some(env_added) = change.get("EnvironmentAdded") {
-                    assert!(env_added.is_object());
-                    if let Some(env_obj) = env_added.as_object() {
-                        assert_eq!(
-                            env_obj.get("name"),
-                            Some(&serde_json::Value::String("prod".to_string()))
-                        );
-                    }
-                }
-            }
-        }
     }
 
     #[test]

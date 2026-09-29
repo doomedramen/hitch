@@ -50,7 +50,6 @@ impl GlobalFlags {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct GlobalContext {
     pub verbose: bool,
     pub no_push: bool,
@@ -64,7 +63,6 @@ pub struct GlobalContext {
     pub confirm: Arc<dyn Confirm>,
 }
 
-#[allow(dead_code)]
 impl GlobalContext {
     pub fn new(
         flags: GlobalFlags,

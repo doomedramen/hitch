@@ -61,7 +61,7 @@ pub fn run(args: AddCommand, context: &GlobalContext) -> Result<()> {
         return Ok(());
     }
 
-    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    let receipt = apply_metadata_plan(context, &plan)?;
     emit_receipt(context, &plan, &receipt)?;
     Ok(())
 }

@@ -17,7 +17,6 @@ pub enum ConflictType {
     /// Both branches added the same file with different content
     AddAdd,
     /// Both branches renamed the file differently
-    #[allow(dead_code)]
     RenameRename,
     /// Unknown conflict type
     Unknown,
@@ -71,7 +70,6 @@ impl ConflictedFile {
 #[derive(Debug, Clone)]
 pub struct MergeBaseInfo {
     /// The commit hash of the merge base
-    #[allow(dead_code)]
     pub commit_hash: String,
     /// Short form of the commit hash
     pub short_hash: String,
@@ -96,119 +94,6 @@ impl MergeBaseInfo {
     pub fn with_date(mut self, date: String) -> Self {
         self.date = Some(date);
         self
-    }
-}
-
-/// Format a detailed conflict report
-///
-/// # Arguments
-/// * `source_branch` - The branch being merged (e.g., feature branch)
-/// * `target_branch` - The branch being merged into (e.g., environment branch)
-/// * `base_branch` - The base branch for rebuilds (e.g., main)
-/// * `env_name` - The environment name
-/// * `conflicts` - List of conflicted files with details
-/// * `merge_base` - Optional merge base information
-///
-/// A per-merge diagnostic carrying the merge base, per-file conflict types,
-/// and the conflicting content inline.
-/// **Currently unreferenced by production code.** This was the halt message
-/// `compose_environment` used to build, but it was only ever *reachable* when
-/// `--replay-resolutions` was set, because the `rebuild` command's separate
-/// pre-check intercepted every other halt first — so a halt under
-/// `OnConflict::Halt` printed two different reports depending on an unrelated
-/// flag. Phase P1 removed the pre-check and unified both paths on
-/// `prelude::format_compatibility_report_for_rebuild`, which is
-/// environment-level (it names the remedy directly) rather than
-/// merge-level.
-///
-/// Kept, rather than deleted, because it is `pub`, tested, and strictly
-/// richer than what replaced it. It is a deletion candidate, and a plausible
-/// input for the read-only display paths P7 re-plumbs. Nothing should call it
-/// to decide a mutation's outcome — that is exactly the mistake P1 removed.
-pub fn format_conflict_report(
-    source_branch: &str,
-    target_branch: &str,
-    base_branch: &str,
-    env_name: &str,
-    conflicts: &[ConflictedFile],
-    merge_base: Option<&MergeBaseInfo>,
-) -> String {
-    let mut report = String::new();
-
-    // Header
-    report.push_str(&format!(
-        "Merge conflict detected when merging '{}' into '{}'\n\n",
-        source_branch, target_branch
-    ));
-
-    // Merge base info
-    if let Some(base) = merge_base {
-        if let Some(date) = &base.date {
-            report.push_str(&format!("Merge base: {} ({})\n\n", base.short_hash, date));
-        } else {
-            report.push_str(&format!("Merge base: {}\n\n", base.short_hash));
-        }
-    }
-
-    // Conflicting files section
-    let file_count = conflicts.len();
-    report.push_str(&format!("Conflicting files ({}):\n", file_count));
-    report.push_str(&format!("{}\n\n", "=".repeat(56)));
-
-    for conflict in conflicts {
-        // File header with conflict type
-        report.push_str(&format!(
-            "  {} ({} - {})\n",
-            conflict.path,
-            format_conflict_type_short(&conflict.conflict_type),
-            conflict.conflict_type
-        ));
-        report.push_str(&format!("{}\n", "-".repeat(56)));
-
-        // Conflict content if available
-        if let Some(content) = &conflict.conflict_content {
-            // Indent the conflict content for readability
-            for line in content.lines() {
-                report.push_str(&format!("  {}\n", line));
-            }
-        } else {
-            report.push_str("  (Conflict content not available)\n");
-        }
-        report.push('\n');
-    }
-
-    report.push_str(&format!("{}\n\n", "=".repeat(56)));
-
-    // Resolution instructions
-    report.push_str("To resolve:\n");
-    report.push_str(&format!(
-        "1. Checkout the conflicting branch and rebase onto {}:\n",
-        base_branch
-    ));
-    report.push_str(&format!("   git checkout {}\n", source_branch));
-    report.push_str(&format!("   git rebase {}\n\n", base_branch));
-    report.push_str("2. Resolve conflicts in the files listed above\n\n");
-    report.push_str("3. Commit the resolution:\n");
-    report.push_str("   git add .\n");
-    report.push_str(&format!(
-        "   git commit -m \"Resolve merge conflicts with {}\"\n\n",
-        base_branch
-    ));
-    report.push_str("4. Retry the operation:\n");
-    report.push_str(&format!("   hitch rebuild {}\n", env_name));
-
-    report
-}
-
-/// Format conflict type as a short code
-fn format_conflict_type_short(conflict_type: &ConflictType) -> &'static str {
-    match conflict_type {
-        ConflictType::ModifyModify => "MM",
-        ConflictType::ModifyDelete => "MD",
-        ConflictType::DeleteModify => "DM",
-        ConflictType::AddAdd => "AA",
-        ConflictType::RenameRename => "RR",
-        ConflictType::Unknown => "??",
     }
 }
 
@@ -286,54 +171,5 @@ mod tests {
 
         let base_with_date = base.with_date("2024-12-01".to_string());
         assert_eq!(base_with_date.date, Some("2024-12-01".to_string()));
-    }
-
-    #[test]
-    fn test_format_conflict_report() {
-        let conflicts = vec![
-            ConflictedFile::with_content(
-                "src/config.rs".to_string(),
-                ConflictType::ModifyModify,
-                "<<<<<<< HEAD\nold_value\n=======\nnew_value\n>>>>>>> feature".to_string(),
-            ),
-            ConflictedFile::new("README.md".to_string(), ConflictType::ModifyDelete),
-        ];
-
-        let merge_base =
-            MergeBaseInfo::new("abc1234567890".to_string()).with_date("2024-12-01".to_string());
-
-        let report = format_conflict_report(
-            "feature-branch",
-            "hitch-tmp-main-123",
-            "main",
-            "dev",
-            &conflicts,
-            Some(&merge_base),
-        );
-
-        // Check report contains expected sections
-        assert!(report.contains("Merge conflict detected when merging 'feature-branch'"));
-        assert!(report.contains("Merge base: abc1234"));
-        assert!(report.contains("Conflicting files (2)"));
-        assert!(report.contains("src/config.rs"));
-        assert!(report.contains("README.md"));
-        assert!(report.contains("To resolve:"));
-        assert!(report.contains("git checkout feature-branch"));
-        assert!(report.contains("git rebase main"));
-        assert!(report.contains("hitch rebuild dev"));
-    }
-
-    #[test]
-    fn test_format_conflict_report_without_merge_base() {
-        let conflicts = vec![ConflictedFile::new(
-            "file.txt".to_string(),
-            ConflictType::Unknown,
-        )];
-
-        let report =
-            format_conflict_report("branch-a", "branch-b", "main", "staging", &conflicts, None);
-
-        assert!(!report.contains("Merge base:"));
-        assert!(report.contains("Conflicting files (1)"));
     }
 }

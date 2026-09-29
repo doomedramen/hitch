@@ -224,7 +224,7 @@ covered.
   `hitch resolutions`, and `hitch doctor`'s debt SLA.
 - `src/utils/build_record.rs` — what an environment branch's last build
   *actually* contained, written as JSON at `refs/hitch/state/<env>` and
-  written by `rebuild_environment_opts` (not by `commands/rebuild.rs`, so
+  written by `rebuild_environment_gated`'s plan/apply pair (not by `commands/rebuild.rs`, so
   `promote`/`demote`/`approve`/post-release-rebuild get a current record
   free — since P5 each of those reaches it as the *nested* rebuild its own
   planner performs, which is the same set of callers by a longer path). Since
@@ -322,7 +322,10 @@ covered.
   `src/utils/prelude.rs` is the one plan-then-apply *sequence*: it plans, hands
   the finished plan to a caller-supplied `FnOnce(&plan) -> Result<bool>` gate,
   and applies, returning `RebuildRun { plan, receipt }` with `Ok(None)` meaning
-  declined. A sixth operation should reach for it rather than write its own —
+  declined. `rebuild_environment(context, env)` is its ungated wrapper for a
+  nested rebuild (no replay, no policy override, plan and receipt discarded);
+  `--replay-resolutions`/`--on-conflict` go through the gated form. A sixth
+  operation should reach for it rather than write its own —
   the ordering it gets right (the `finally` that discards the anchor, and the
   discard on *both* non-applying arms) is exactly the kind of thing a
   hand-rolled copy gets wrong. `validate_metadata_plan` and
@@ -557,8 +560,8 @@ and `test_a_backdated_commit_still_counts_as_needs_rebuild` fail if the clock
 is consulted, and `test_hitch_status_detects_base_branch_changes` /
 `test_hitch_status_multiple_envs_with_changed_base` used to be `#[ignore]`d as
 "timing-sensitive" for exactly this reason — they are live now and their
-`sleep(2)` is gone. Do not reintroduce `get_commit_timestamp` into any
-verdict: it has no production caller left (`core/timeline.rs` is now an
+`sleep(2)` is gone. Do not reintroduce a commit-date read into any
+verdict: `get_commit_timestamp` is deleted (`core/timeline.rs` is now an
 adapter over `activity.rs`, which takes dates from `list_first_parent_history`).
 
 **`removed ⊆ changed_inputs` is an invariant of `health_from_record`, and the
@@ -688,7 +691,7 @@ already bitten or already guarded:
   `crash_recovery_tests.rs` already documents.
 - The commit is unreachable until the CAS lands, so the plan **anchors** it
   under `refs/hitch/build/<env>/<sha>` for the window between planning and
-  publishing, exactly as `rebuild_environment_opts` always did — moved earlier
+  publishing, exactly as the rebuild sequence always did — moved earlier
   in the sequence, not a new mechanism.
 - That anchor is a live leak, because nothing prunes `refs/hitch/build/*`
   (`cleanup`'s prunable set is `["backup", "prev"]` — see the `state/` entry
@@ -1120,24 +1123,19 @@ Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_re
 — the two paths legitimately word the same event differently.
 
 **A nested operation that sits between a plan and a receipt must narrate
-nothing, and the way to guarantee that is a suppressed-by-default parameter,
-not a flag each caller remembers to pass.** Four commands (`promote`, `demote`,
-`release`, and `hitch rebuild`'s nested calls) each build a plan above a nested
-rebuild and a receipt below it, and each was separately printing the nested
-rebuild's `StepLogger` transcript — `[1/6] Synchronizing branches`, `[2/6]
-Merging 'feature/payments'`, `✅ Rebuilding environment 'dev'` — into the gap
-between them. The in-tree comment on `rebuild_environment_opts` claimed the
-nested path printed the transcript *instead of* a plan and receipt; it did not,
-it printed it *in addition to* both, and then threw both away.
-`StepNarration::Suppressed` is now the default, so a caller that has a plan and
-a receipt of its own gets silence by omission. Since P8 gave `hitch approve` a
-plan, **every** caller passes `Suppressed` and `StepNarration::Log` has no call
-site at all — the variant, the enum, and the `on_step` callbacks threaded
-through `plan_rebuild`/`apply_rebuild_plan`/`compose_environment` are dead
-plumbing left for P10's legacy removal, not a hook to reach for. If you add a
-mutating command, it has a plan and a receipt, so it narrates nothing. Generalise: a second voice for the same operation is a bug even
-when it is individually accurate, and the parameters to thread are usually
-better off inverted so silence is the default.
+nothing.** Four commands (`promote`, `demote`, `release`, and `hitch rebuild`'s
+nested calls) each build a plan above a nested rebuild and a receipt below it,
+and each used to print the nested rebuild's step transcript — `[1/6]
+Synchronizing branches`, `[2/6] Merging 'feature/payments'` — into the gap
+between them, *in addition to* the plan and receipt. That transcript machinery
+(`StepNarration`, `StepLogger`, the `on_step` callbacks) is deleted; nothing in
+a plan or apply path takes a narration argument any more. The rule now: an
+executor or planner reports *mechanism* (what it is doing, in git terms) only
+through `context.log_verbose`, which prints under `--verbose` and nowhere
+else, and everything a user sees by default comes from `render.rs`. If you add
+a mutating command, it has a plan and a receipt, so its default output is
+those two documents and nothing between them. A second voice for the same
+operation is a bug even when it is individually accurate.
 
 **An `Ok(_)` on a nested build's conflicts is a dropped fact, and it renders as
 a false success.** `apply_declaration_plan` and `apply_release_plan` each ran a
@@ -1183,25 +1181,22 @@ the duplicate (correctly — it was a second opinion from a second merge path)
 turned the flag into a silent no-op, which is how it was found. Generalised: if
 a flag's effect is observable only via a check that runs *instead of* the real
 operation, the flag is not wired to the operation. The override is now threaded
-explicitly as `rebuild_environment_opts(.., on_conflict_override: Option<OnConflict>)`,
+explicitly as `rebuild_environment_gated(.., on_conflict_override: Option<OnConflict>, gate)`,
 `None` meaning "use the environment's policy" — which is every caller except
 that one flag.
 
 The same duplicate was why a halt under `OnConflict::Halt` printed **two
 different reports** depending on an unrelated flag: the pre-check emitted
 `format_compatibility_report_for_rebuild`, while the composition's in-loop halt
-emitted `utils::conflict_report::format_conflict_report`, and only
+emitted the since-deleted `format_conflict_report`, and only
 `--replay-resolutions` (which skipped the pre-check) ever reached the second.
 Both paths now halt inside `compose_environment` and render the former, which
 is why that formatter moved from `commands/rebuild.rs` into `prelude.rs` — the
 decider has to be able to render its own refusal. Consequence:
-`format_conflict_report` now has no production caller. It is kept (public,
-tested, strictly richer than what replaced it) and documented as a deletion
-candidate; nothing should call it to decide a mutation's outcome. P7 was its
-last plausible consumer and did not take it: the hold it renders is already in
-the plan's Composition section, with the branch, the partner, the file count and
-the remedy, so a second, differently-worded rendering of the same fact was a
-fourth copy rather than a richer view.
+`format_conflict_report` had no production caller and is deleted (P10); the hold
+it rendered is already in the plan's Composition section, with the branch, the
+partner, the file count and the remedy, so a second rendering would be a fourth
+copy of the same fact.
 
 **Composition happens in the object database, and must stay merge-identical.**
 `rebuild`/`release` build with `git merge-tree --write-tree -z` plus
@@ -1377,13 +1372,13 @@ Two things learned writing the first ('rebuild') of these tests:
   "did it converge" check and would fail/flake for a reason unrelated to
   recovery. The tree is pure content and timestamp-independent.
 - The "next `hitch` invocation" that triggers recovery needs `--force`:
-  `with_locked_env` locks the environment before `rebuild_environment_opts`
+  `with_locked_env` locks the environment before `rebuild_environment_gated`
   ever runs, and `maybe_abort_for_test` always fires deep inside that
   closure, so every abort point also skips the unlock-on-exit and leaves the
   environment persistently locked — a separate mechanism from the publish
   journal (see the locking-discipline entry in Conventions above). Note
   `--force` bypasses `with_locked_env` entirely (`rebuild.rs` calls
-  `rebuild_environment_opts` directly rather than through it when
+  `rebuild_environment_gated` directly rather than through it when
   `args.force`), so a `--force` recovery after a crash leaves the
   environment locked afterward too — clearing it needs a manual
   `hitch unlock`. This is arguably correct given `locked`'s documented role

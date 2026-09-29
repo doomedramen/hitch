@@ -1903,7 +1903,7 @@ mod tests {
     /// must be current afterwards.
     ///
     /// This is the assertion that catches someone building the record in
-    /// `src/commands/rebuild.rs` instead of in `rebuild_environment_opts`, where
+    /// `src/commands/rebuild.rs` instead of in `rebuild_environment`, where
     /// `promote`/`demote`/`approve`/post-release-rebuild cannot reach it. That
     /// mistake would look perfectly correct in every rebuild test and be
     /// silently wrong in production: `promote` would move `dev` and leave the

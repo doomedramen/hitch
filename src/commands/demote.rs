@@ -64,7 +64,7 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
         // Preview, planned outside the lock — see `promote::run` for why that
         // inversion is safe, and why it would stop being safe if the planner
         // ever consulted `is_locked()`.
-        let plan = plan_demote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+        let plan = plan_demote(context, &args.branch, &args.env_name, options)?;
         emit_plan(context, &plan)?;
         return Ok(());
     }
@@ -85,13 +85,13 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
     let snapshot = crate::utils::rollback::capture_config_state(context)?;
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            let plan = plan_demote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+            let plan = plan_demote(context, &args.branch, &args.env_name, options)?;
 
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
             rollback_info.previous_config = snapshot;
-            let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
+            let receipt = apply_declaration_plan(context, &plan)?;
             Ok((plan, Some(receipt)))
         })
     });

@@ -1,7 +1,6 @@
 use crate::commands::global_context::GlobalContext;
 use crate::types::{Environment, HitchConfig, LockPurpose, OnConflict};
 use crate::utils::git_operations::GitOperations;
-use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -636,7 +635,7 @@ pub struct CompositionResult {
 /// Compose an environment's promoted branches into a single commit, entirely
 /// in the object database. This is the *only* place hitch decides what a build
 /// contains; `hitch rebuild`, `hitch rebuild --dry-run`, and every caller that
-/// goes through `rebuild_environment_opts` all land here.
+/// goes through `rebuild_environment_gated` all land here.
 ///
 /// `git merge-tree --write-tree` runs the same ORT merge a real `git merge`
 /// does but writes only trees, so there is no worktree to create, no leak on a
@@ -667,7 +666,6 @@ pub fn compose_environment(
     on_conflict: OnConflict,
     replay: bool,
     require_signed_resolutions: bool,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<CompositionResult> {
     let git = context.git();
     let mut composed = inputs.base_sha.clone();
@@ -680,8 +678,6 @@ pub fn compose_environment(
         std::collections::HashSet::new();
 
     for (branch, sha) in &inputs.branches {
-        on_step(&format!("Merging '{}'", branch));
-
         let merge_message = format!("Hitch: merge {} into {}", branch, env_name);
         let outcome = git.merge_tree_compose(&composed, sha)?;
 
@@ -772,7 +768,7 @@ pub fn compose_environment(
 /// build from.
 ///
 /// Takes an already-resolved `&Environment` rather than an environment name
-/// on purpose. Both callers need the config anyway — `rebuild_environment_opts`
+/// on purpose. Both callers need the config anyway — `rebuild_environment`
 /// for the step count and conflict policy, the dry-run for the same — so
 /// reading it here too would mean a second metadata transaction under the
 /// lock and a window in which the two reads could disagree. More importantly
@@ -898,10 +894,13 @@ pub(crate) fn format_compatibility_report_for_rebuild(
 /// Rebuild an environment by composing its promoted branches into a new
 /// environment branch.
 ///
-/// The zero-argument sibling of [`rebuild_environment_opts`], and the entry
-/// point for callers that want a rebuild with no replay and no policy override:
-/// the dependent rebuilds inside `operations::declaration` and
-/// `operations::release`, and `approvals/approve.rs`.
+/// The entry point for callers that want a rebuild with no replay and no policy
+/// override, and no plan or receipt of their own to show: the dependent rebuilds
+/// inside `operations::declaration` and `operations::release`, and
+/// `approvals/approve.rs`. The plan and receipt are discarded; a hold reaches
+/// the enclosing receipt through [`RebuildOutcome::held`]. Callers that need
+/// `--replay-resolutions` or `--on-conflict` go through
+/// [`rebuild_environment_gated`].
 ///
 /// The `isolated worktree` this used to mention is gone. Composition happens in
 /// the object database via `merge_tree_compose` + `commit_tree` — no worktree,
@@ -928,71 +927,13 @@ pub(crate) fn format_compatibility_report_for_rebuild(
 /// branches still returns `Ok`, with the held branches named in
 /// [`RebuildOutcome::held`]. That is a deliberate contract, and it is why
 /// `hitch rebuild` maps it to exit code 2 rather than treating it as a failure.
-pub fn rebuild_environment(
-    context: &GlobalContext,
-    env_name: &str,
-    narration: StepNarration,
-) -> Result<RebuildOutcome> {
-    rebuild_environment_opts(context, env_name, false, None, narration)
-}
-
-/// `rebuild_environment` with the phase-5 replay opt-in. `replay = true`
-/// (only ever set by `hitch rebuild --replay-resolutions`) makes a
-/// conflicting branch first try a recorded, content-addressed resolution
-/// (see `crate::utils::resolutions`) before being held — turning a
-/// previously hand-resolved peer conflict back into a clean compose without
-/// re-resolving it. Every other caller passes `false`, so a plain rebuild never
-/// consults resolutions.
-///
-/// `on_conflict_override` is `hitch rebuild --on-conflict`. `None` means "use
-/// the environment's configured policy", which is every caller's intent
-/// except the CLI override.
-///
-/// This parameter did not used to exist, and the override did not used to
-/// reach the composition — `hitch rebuild dev --on-conflict halt` worked only
-/// because a *separate* pre-check in `commands/rebuild.rs` intercepted the
-/// conflict first and refused there. The composition itself always read
-/// `environment.on_conflict` from the config, so the flag had no effect on the
-/// code that actually merged. That pre-check is gone (see the note at its old
-/// site), which is what surfaced the gap: the override now has to be threaded
-/// here explicitly, where it is finally load-bearing.
-///
-/// **This is not the "rebuild without rendering a plan" path, and after P5 it
-/// is almost the only one left.** It *does* plan — `plan_rebuild` +
-/// `apply_rebuild_plan` are called below — but it throws the plan and the
-/// receipt away, leaving the caller's own plan or receipt as the only account
-/// of what happened. What survives it is one specific capability the other
-/// callers do not have: it accepts a replay opt-in and a conflict-policy
-/// override, so it can be the *nested* rebuild inside another operation.
-/// `apply_declaration_plan` (promote, demote) and `apply_release_plan` both
-/// call it for their dependent environments, and `approvals/approve.rs` calls
-/// the no-argument wrapper. Do not delete it thinking promote/demote/release/
-/// approve no longer route through it — they route through it *by way of*
-/// their own planners, and this is where the nesting terminates.
-///
-/// Because the plan and receipt are discarded, what this path narrates is the
-/// *only* thing its caller sees between its own plan and its own receipt — so
-/// `narration` is not cosmetic. It is why a hold is now carried out through
-/// [`RebuildOutcome::held`] into the enclosing receipt: with the transcript
-/// suppressed there is nothing else for it to appear in.
-pub fn rebuild_environment_opts(
-    context: &GlobalContext,
-    env_name: &str,
-    replay: bool,
-    on_conflict_override: Option<OnConflict>,
-    narration: StepNarration,
-) -> Result<RebuildOutcome> {
-    let run = rebuild_environment_gated(
-        context,
-        env_name,
-        replay,
-        on_conflict_override,
-        narration,
-        |_plan| Ok(true),
-    )?
-    .ok_or_else(|| {
-        anyhow::anyhow!("internal error: the ungated rebuild path declined to apply its own plan")
-    })?;
+pub fn rebuild_environment(context: &GlobalContext, env_name: &str) -> Result<RebuildOutcome> {
+    let run = rebuild_environment_gated(context, env_name, false, None, |_plan| Ok(true))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "internal error: the ungated rebuild path declined to apply its own plan"
+            )
+        })?;
 
     let held = run.plan.detail.held.clone();
     let replayed = run.plan.detail.replayed.clone();
@@ -1014,32 +955,6 @@ pub fn rebuild_environment_opts(
         }
     );
     Ok(RebuildOutcome { held, replayed })
-}
-
-/// Where a rebuild's step narration goes.
-///
-/// A named enum rather than a `bool`, because the two arms differ in *kind* and
-/// the reason matters at the call site: one narrates because nothing better will
-/// be shown, the other goes quiet because something better already is.
-///
-/// `StepLogger` narrates "Synchronizing branches / Merging auth / …", and the
-/// plan's Composition section says the same thing in one place, in declaration
-/// order, with the result — which is held, which is included, at which SHA.
-/// Printing both means every rebuild describes its merge twice, in two
-/// vocabularies, and the reader has to work out which one is the plan.
-///
-/// So `Suppressed` is the default posture and `Log` is the exception.
-/// `hitch rebuild` and the nested rebuilds inside promote, demote and release
-/// all suppress: each already renders a plan, and promote/demote/release then
-/// render a receipt. The one caller that takes `Log` is
-/// `approvals/approve.rs`, the single command that still reaches a rebuild
-/// without a plan of its own — a fallback, not a preference, and the reason that
-/// command is the last one still showing raw step output.
-pub enum StepNarration {
-    /// Narrate the steps to this sink.
-    Log(std::sync::Arc<dyn crate::utils::output::OutputSink>),
-    /// Say nothing; the caller is about to render a plan instead.
-    Suppressed,
 }
 
 /// A rebuild that planned and applied, with both halves handed back.
@@ -1085,7 +1000,6 @@ pub fn rebuild_environment_gated<G>(
     env_name: &str,
     replay: bool,
     on_conflict_override: Option<OnConflict>,
-    narration: StepNarration,
     gate: G,
 ) -> Result<Option<RebuildRun>>
 where
@@ -1103,40 +1017,21 @@ where
     let git_dir = std::path::PathBuf::from(context.git().get_git_dir());
     let _rebuild_lock = crate::utils::rebuild_lock::RebuildLock::acquire(&git_dir, env_name)?;
 
-    // Step logging spans planning *and* applying, so the caller owns one
-    // `StepLogger` and both halves report into it — a logger per phase would
-    // print two headers for one operation, and the header promises a step
-    // count that covers the whole thing.
-    let environment = access_metadata_read_only(context, |config| {
+    // Existence check up front so a missing environment fails before planning.
+    access_metadata_read_only(context, |config| {
         config
             .environments
             .get(env_name)
-            .cloned()
+            .map(|_| ())
             .ok_or_else(|| anyhow::anyhow!("Environment '{}' does not exist", env_name))
     })?;
-    let merge_steps = environment.branches.len().max(1);
-    let total_steps = 2 + merge_steps;
-    let mut logger = match narration {
-        StepNarration::Log(output) => Some(StepLogger::new_with_output(
-            format!("Rebuilding environment '{}'", env_name),
-            total_steps,
-            output,
-        )),
-        StepNarration::Suppressed => None,
-    };
-    let mut step = |message: &str| {
-        if let Some(logger) = logger.as_mut() {
-            logger.step(message.to_string());
-        }
-    };
 
     let options = crate::operations::rebuild::RebuildPlanOptions {
         replay,
         on_conflict: on_conflict_override,
     };
 
-    // Plan, then apply, with the plan's own step callback threaded into both.
-    // `apply_rebuild_plan` validates the fingerprint before anything moves, so
+    // Plan, then apply. `apply_rebuild_plan` validates the fingerprint before anything moves, so
     // a plan that has gone stale in the window between the two is refused
     // rather than landed.
     let plan = crate::operations::rebuild::plan_rebuild(
@@ -1144,16 +1039,11 @@ where
         env_name,
         options,
         crate::operations::rebuild::PlanPurpose::Confirm,
-        &mut |message| step(message),
     )?;
     let applied = match gate(&plan) {
-        Ok(true) => {
-            let receipt =
-                crate::operations::rebuild::apply_rebuild_plan(context, &plan, &mut |message| {
-                    step(message)
-                })?;
-            Some(receipt)
-        }
+        Ok(true) => Some(crate::operations::rebuild::apply_rebuild_plan(
+            context, &plan,
+        )?),
         // A declined gate is not a failure: nothing was applied, so the caller
         // reports success and the repository is exactly as it was.
         Ok(false) => {
@@ -1175,10 +1065,6 @@ where
             return Err(error);
         }
     };
-    if let Some(logger) = logger.as_mut() {
-        logger.complete();
-    }
-
     Ok(applied.map(|receipt| RebuildRun { plan, receipt }))
 }
 
@@ -1760,7 +1646,7 @@ pub(crate) fn publish_environment_build(
 ///   applied; under `--yes` (CI) the explicit flag is the authorization and
 ///   every application is logged loudly with its key and recorder.
 ///
-/// `require_signed` is read once by the caller (`rebuild_environment_opts`,
+/// `require_signed` is read once by the caller (`rebuild_environment`,
 /// from the `config` it already loaded via `access_metadata_read_only` at the
 /// top of the rebuild) rather than re-read here on every conflicting branch.
 /// This function used to call `access_metadata_read_only` itself, which reruns
@@ -1836,7 +1722,7 @@ fn try_replay_resolution(
     // is for a crash-recovery checkout.
     //
     // `current_head` is the SHA the caller already pinned for this branch at
-    // the top of the compose loop (see `rebuild_environment_opts`'s pinning
+    // the top of the compose loop (see `rebuild_environment`'s pinning
     // comment) — using it here, rather than re-resolving `refs/heads/branch`
     // live, keeps this check consistent with everything else the loop
     // composes: a ref moving mid-build cannot change what this function sees
@@ -2013,7 +1899,7 @@ mod try_replay_resolution_tests {
     ///
     /// `try_replay_resolution` no longer reads metadata itself (see its doc
     /// comment): `require_signed` is now a plain `bool` the caller
-    /// (`rebuild_environment_opts`) reads once via `access_metadata_read_only`
+    /// (`rebuild_environment`) reads once via `access_metadata_read_only`
     /// and passes down, so this function structurally cannot fail open on a
     /// metadata read error — it does no metadata I/O at all. The fail-closed
     /// property this test guards now lives entirely in that single read, so
@@ -2111,7 +1997,7 @@ mod try_replay_resolution_tests {
             conflicted_stages: stages,
         };
 
-        // The single read `rebuild_environment_opts` now relies on to learn
+        // The single read `rebuild_environment` now relies on to learn
         // whether signing is required must surface the metadata-health
         // failure, not silently resolve to "not required".
         let read_result =
@@ -3095,17 +2981,7 @@ mod compose_environment_tests {
         let head_before = git(repo, &["rev-parse", "HEAD"]);
         let status_before = git(repo, &["status", "--porcelain"]);
 
-        let no_steps = |_: &str| {};
-        let mut sink = no_steps;
-        let first = compose_environment(
-            &context,
-            &inputs,
-            "dev",
-            OnConflict::Eject,
-            false,
-            false,
-            &mut sink,
-        )?;
+        let first = compose_environment(&context, &inputs, "dev", OnConflict::Eject, false, false)?;
 
         // The conflict was actually detected and ejected — otherwise the
         // determinism assertions below would hold trivially.
@@ -3128,16 +3004,8 @@ mod compose_environment_tests {
         assert!(first.replayed.is_empty(), "replay was not requested");
 
         // Second call, byte-identical inputs, still a fresh collector.
-        let mut sink2 = no_steps;
-        let second = compose_environment(
-            &context,
-            &inputs,
-            "dev",
-            OnConflict::Eject,
-            false,
-            false,
-            &mut sink2,
-        )?;
+        let second =
+            compose_environment(&context, &inputs, "dev", OnConflict::Eject, false, false)?;
 
         assert_eq!(
             context

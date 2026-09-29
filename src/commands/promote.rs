@@ -74,7 +74,7 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
         // No `with_auto_stash` either. It stashes the working tree, so a
         // "changes nothing" flag that rearranged the user's uncommitted work
         // would not be describing itself honestly.
-        let plan = plan_promote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+        let plan = plan_promote(context, &args.branch, &args.env_name, options)?;
         emit_plan(context, &plan)?;
         return Ok(());
     }
@@ -119,12 +119,12 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     let snapshot = crate::utils::rollback::capture_config_state(context)?;
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
-            let plan = plan_promote(context, &args.branch, &args.env_name, options, &mut |_| {})?;
+            let plan = plan_promote(context, &args.branch, &args.env_name, options)?;
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
             rollback_info.previous_config = snapshot;
-            let receipt = apply_declaration_plan(context, &plan, &mut |_| {})?;
+            let receipt = apply_declaration_plan(context, &plan)?;
             Ok((plan, Some(receipt)))
         })
     });

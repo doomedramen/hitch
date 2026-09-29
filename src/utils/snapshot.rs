@@ -222,33 +222,3 @@ pub fn drifted_branches(context: &GlobalContext, snapshot: &RebuildSnapshot) -> 
 
     drifted
 }
-
-/// Format snapshot information for display
-#[allow(dead_code)]
-pub fn format_snapshot_info(snapshot: &RebuildSnapshot) -> String {
-    let mut info = String::new();
-
-    info.push_str(&format!(
-        "Base branch: {} ({})\n",
-        snapshot.base_branch,
-        &snapshot.base_sha[..7.min(snapshot.base_sha.len())]
-    ));
-
-    if !snapshot.branch_shas.is_empty() {
-        info.push_str("Branches to merge:\n");
-        for (branch, sha) in &snapshot.branch_shas {
-            info.push_str(&format!("  - {} ({})\n", branch, &sha[..7.min(sha.len())]));
-        }
-    }
-
-    info.push_str(&format!(
-        "Merge conflicts: {}\n",
-        if snapshot.merge_conflicts {
-            "Yes"
-        } else {
-            "No"
-        }
-    ));
-
-    info
-}

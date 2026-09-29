@@ -4,7 +4,7 @@ use crate::operations::model::OperationOutcome;
 use crate::operations::rebuild::{plan_rebuild, PlanPurpose, RebuildPlanOptions};
 use crate::types::OnConflict;
 use crate::utils::prelude::{
-    access_metadata_read_only, rebuild_environment_gated, with_locked_env, StepNarration,
+    access_metadata_read_only, rebuild_environment_gated, with_locked_env,
 };
 use anyhow::Result;
 use clap::Args;
@@ -110,13 +110,7 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
         // lock refusal above, and not the planner, is what enforces it. Were
         // the planner ever to gate on the lock, a preview would have to take the
         // lock too, and a read-only command would start mutating metadata.
-        let plan = plan_rebuild(
-            context,
-            &args.env_name,
-            options,
-            PlanPurpose::Preview,
-            &mut |_| {},
-        )?;
+        let plan = plan_rebuild(context, &args.env_name, options, PlanPurpose::Preview)?;
 
         emit_plan(context, &plan)?;
 
@@ -153,9 +147,6 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
             &args.env_name,
             options.replay,
             options.on_conflict,
-            // The plan says which branches compose and which are held, in one
-            // place; `StepLogger` would say it again in a second vocabulary.
-            StepNarration::Suppressed,
             gate,
         )?
     } else {
@@ -165,7 +156,6 @@ pub fn run(args: RebuildCommand, context: &GlobalContext) -> Result<bool> {
                 &args.env_name,
                 options.replay,
                 options.on_conflict,
-                StepNarration::Suppressed,
                 gate,
             )
         })?

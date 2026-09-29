@@ -18,10 +18,6 @@ pub struct RemoveCommand {
     /// Print the plan without applying it
     #[arg(long)]
     pub dry_run: bool,
-
-    /// Apply the plan without asking for confirmation
-    #[arg(long)]
-    pub yes: bool,
 }
 
 pub fn run(args: RemoveCommand, context: &GlobalContext) -> Result<()> {
@@ -49,7 +45,7 @@ pub fn run(args: RemoveCommand, context: &GlobalContext) -> Result<()> {
         return Ok(());
     }
 
-    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    let receipt = apply_metadata_plan(context, &plan)?;
     emit_receipt(context, &plan, &receipt)?;
     Ok(())
 }

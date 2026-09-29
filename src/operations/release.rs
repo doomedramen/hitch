@@ -51,7 +51,7 @@ use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{
     access_metadata_read_only, modify_metadata, preflight_compatibility_merge_tree, publish_branch,
     push_branch_with_deploy_key_if_configured, rebuild_environment, with_locked_env,
-    CompatibilityConflict, PublishOutcome, PushOutcome, StepNarration,
+    CompatibilityConflict, PublishOutcome, PushOutcome,
 };
 
 /// The per-operation options a caller chose. Not a clap type, for the same
@@ -169,7 +169,6 @@ pub fn plan_release(
     target: &str,
     options: ReleasePlanOptions,
     purpose: PlanPurpose,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<ReleasePlanDetail>> {
     let config = access_metadata_read_only(context, |c| Ok(c.clone()))?;
     let declared = config.environments.get(environment).ok_or_else(|| {
@@ -203,7 +202,7 @@ pub fn plan_release(
     // Synchronise, then pin. Everything below composes against these concrete
     // SHAs rather than the mutable branch names, so a ref moving mid-release
     // cannot change what gets merged.
-    on_step("Synchronizing branches for release...");
+    context.log_verbose("Synchronizing branches for release...");
     let mut sync = declared.branches.clone();
     sync.push(target.to_string());
     if purpose.synchronizes() {
@@ -258,7 +257,6 @@ pub fn plan_release(
         &target_sha_before,
         &mut released,
         options.squash,
-        on_step,
     )?;
 
     // Anchor the composed tip for the window between planning and publishing, so
@@ -520,7 +518,6 @@ fn compose_release(
     target_sha: &str,
     out: &mut [PlannedBranch],
     squash: bool,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<String> {
     let git = context.git();
     let mut composed = target_sha.to_string();
@@ -528,7 +525,7 @@ fn compose_release(
     for planned in out.iter_mut() {
         let branch = planned.branch.as_str();
         let sha = planned.sha.as_str();
-        on_step(&format!("Merging '{}' into '{}'...", branch, target));
+        context.log_verbose(&format!("Merging '{}' into '{}'...", branch, target));
         let merge_message = format!(
             "Hitch: release {} from {} to {}",
             branch, environment, target
@@ -1060,10 +1057,9 @@ pub fn validate_release_plan(
 pub fn apply_release_plan(
     context: &GlobalContext,
     plan: &OperationPlan<ReleasePlanDetail>,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<ExecutionReceipt> {
     let started_at = chrono::Utc::now();
-    let outcome = apply_validated_plan(context, plan, on_step, started_at);
+    let outcome = apply_validated_plan(context, plan, started_at);
     discard_release_plan(context, plan);
     outcome
 }
@@ -1071,7 +1067,6 @@ pub fn apply_release_plan(
 fn apply_validated_plan(
     context: &GlobalContext,
     plan: &OperationPlan<ReleasePlanDetail>,
-    on_step: &mut dyn FnMut(&str),
     started_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ExecutionReceipt> {
     // Converted rather than `?`-ed so the typed error crosses the
@@ -1085,7 +1080,6 @@ fn apply_validated_plan(
     //    rollback anchor — the reason `publish_branch` is called with
     //    `backup_timestamp: None` below — so it has to exist before the ref
     //    moves, not after.
-    on_step(&format!("Tagging '{}'", target));
     // Not narrated. The tag's *name* is the one thing here that the plan may
     // have got wrong — `create_release_tag` disambiguates a second-granularity
     // collision — so the effect line below is allowed to disagree with the
@@ -1108,7 +1102,6 @@ fn apply_validated_plan(
     //    a rewrite, and this branch is typically `main`/`production` — exactly
     //    what `hitch setup`'s branch-protection ruleset guards against direct
     //    force pushes. See `publish_branch`'s doc comment on `push_remedy`.
-    on_step(&format!("Publishing '{}'", target));
     let publish = publish_branch(
         context,
         target,
@@ -1194,7 +1187,6 @@ fn apply_validated_plan(
     //    would be a second decision point, and the base it would be evaluated
     //    against has by now moved — which is precisely the bug the module
     //    header warns about.
-    on_step("Updating release metadata");
     context.log_verbose("Updating release metadata...");
     let prunes = plan.detail.prunes.clone();
     modify_metadata(context, |config| {
@@ -1251,7 +1243,7 @@ struct DependentRebuildAttempt {
 /// receipt's effect list says `rebuild <env>` with the outcome and the holds,
 /// and a failure additionally gets an `ExecutionWarning` under "Still owed".
 /// Logging here as well meant every post-release rebuild announced itself three
-/// times — `on_step`, then a `log_success`/`log_warning`, then the receipt.
+/// times — a step line, then a `log_success`/`log_warning`, then the receipt.
 fn rebuild_dependents(
     context: &GlobalContext,
     plan: &OperationPlan<ReleasePlanDetail>,
@@ -1311,10 +1303,10 @@ fn rebuild_dependent(
     is_released_env: bool,
 ) -> (DependentRebuildOutcome, Vec<CompatibilityConflict>) {
     let result = if is_released_env {
-        rebuild_environment(context, environment, StepNarration::Suppressed)
+        rebuild_environment(context, environment)
     } else {
         with_locked_env(context, environment, || {
-            rebuild_environment(context, environment, StepNarration::Suppressed)
+            rebuild_environment(context, environment)
         })
     };
 

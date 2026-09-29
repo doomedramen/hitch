@@ -123,12 +123,12 @@ impl RebuildPlanDetail {
 }
 
 /// The per-operation options a caller chose. Deliberately not a clap type: the
-/// planner must be callable from tests, from `rebuild_environment_opts`, and
+/// planner must be callable from tests, from `rebuild_environment`, and
 /// from a future non-CLI surface without dragging an argument parser in.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RebuildPlanOptions {
     /// `hitch rebuild --replay-resolutions`. See
-    /// [`crate::utils::prelude::rebuild_environment_opts`] for why only the CLI
+    /// [`crate::utils::prelude::rebuild_environment_gated`] for why only the CLI
     /// ever sets this.
     pub replay: bool,
     /// `hitch rebuild --on-conflict`. `None` means the environment's own
@@ -137,17 +137,11 @@ pub struct RebuildPlanOptions {
 }
 
 /// Build the plan for rebuilding `env_name`.
-///
-/// `on_step`, when supplied, is called once per user-visible step. It exists
-/// so one `StepLogger` can span planning *and* applying: today the logger is
-/// created by the caller and its header promises a step count, and a logger
-/// per phase would print two headers for one operation.
 pub fn plan_rebuild(
     context: &GlobalContext,
     env_name: &str,
     options: RebuildPlanOptions,
     purpose: PlanPurpose,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<OperationPlan<RebuildPlanDetail>> {
     let config = crate::utils::prelude::access_metadata_read_only(context, |c| Ok(c.clone()))?;
     let environment = config
@@ -168,7 +162,6 @@ pub fn plan_rebuild(
     // SHAs rather than the mutable branch names, so a ref moving mid-build
     // cannot change what gets composed. Shared with the preview, which is why
     // a preview cannot pin differently from the build it previews.
-    on_step("Synchronizing branches");
     let pinned = pin_environment_inputs(context, &environment, purpose.synchronizes())?;
 
     // The remote environment tip, read *before* composing so the eventual push
@@ -189,12 +182,7 @@ pub fn plan_rebuild(
         on_conflict,
         options.replay,
         config.require_signed_resolutions,
-        on_step,
     )?;
-
-    if environment.branches.is_empty() {
-        on_step("No promoted branches to merge");
-    }
 
     let record = build_record_for(context, env_name, &pinned, &composition)?;
     let (state_ref, state_blob) = crate::utils::build_record::record_blob(context.git(), &record)?;
@@ -202,7 +190,7 @@ pub fn plan_rebuild(
         refname: state_ref,
         new_oid: state_blob,
         // Unconditional overwrite, deliberately — see the comment at the
-        // equivalent site in `rebuild_environment_opts` and the AGENTS.md
+        // equivalent site in `rebuild_environment` and the AGENTS.md
         // gotcha on `refs/hitch/state/*`. A `Create` here would fail the
         // second rebuild of every environment, wedging it after exactly one
         // successful build.
@@ -611,10 +599,9 @@ fn resolution_exists(git: &GitOperations, key: &str) -> bool {
 pub fn apply_rebuild_plan(
     context: &GlobalContext,
     plan: &OperationPlan<RebuildPlanDetail>,
-    on_step: &mut dyn FnMut(&str),
 ) -> Result<ExecutionReceipt> {
     let started_at = chrono::Utc::now();
-    let outcome = apply_validated_plan(context, plan, on_step, started_at);
+    let outcome = apply_validated_plan(context, plan, started_at);
     discard_plan(context, plan);
     outcome
 }
@@ -622,7 +609,6 @@ pub fn apply_rebuild_plan(
 fn apply_validated_plan(
     context: &GlobalContext,
     plan: &OperationPlan<RebuildPlanDetail>,
-    on_step: &mut dyn FnMut(&str),
     started_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ExecutionReceipt> {
     // Converted rather than `?`-ed so the typed error crosses the
@@ -630,14 +616,13 @@ fn apply_validated_plan(
     validate_plan(context, plan).map_err(PlanApplyError::into_anyhow)?;
 
     let env = &plan.detail.environment;
-    on_step(&format!("Publishing '{}'", env));
 
     // `state_edit` is reused verbatim. Rebuilding it here would be a second
     // decision point, and the record is a claim about *this* composition.
     //
     // `publish_environment_build` writes the `rebuilt_at` stamp itself, on
     // purpose: it is inside the same operation for `hitch resolve`'s Mode B and
-    // for `rebuild_environment_opts`, and a second write here would stamp the
+    // for `rebuild_environment`, and a second write here would stamp the
     // environment twice for one rebuild. The plan *describes* the stamp as one
     // of its effects; the executor's callee is what performs it.
     let publish = publish_environment_build(
@@ -649,10 +634,6 @@ fn apply_validated_plan(
         &plan.detail.remote_env_sha_before,
     )?;
 
-    // No trailing step here: the caller's `StepLogger` already promised a
-    // step *count*, and `logger.complete()` closes the progress display.
-    // Inventing a "Done" step would both inflate the count and put a line in
-    // the output that four other commands' tests would not expect.
     assemble_receipt(context, plan, publish, started_at)
 }
 

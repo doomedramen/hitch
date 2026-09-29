@@ -17,7 +17,7 @@ pub struct TreeCommand {
 pub fn run(args: TreeCommand, context: &GlobalContext) -> Result<()> {
     // Create a new context with the verbose flag
     let mut context = context.clone();
-    context.verbose = args.verbose;
+    context.verbose = context.verbose || args.verbose;
 
     context.log_verbose("Starting tree command...");
 

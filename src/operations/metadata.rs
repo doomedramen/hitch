@@ -782,7 +782,6 @@ pub fn validate_metadata_plan(
 pub fn apply_metadata_plan(
     context: &GlobalContext,
     plan: &OperationPlan<MetadataPlanDetail>,
-    _on_step: &mut dyn FnMut(&str),
 ) -> Result<ExecutionReceipt> {
     let started_at = chrono::Utc::now();
     validate_metadata_plan(context, plan).map_err(PlanApplyError::into_anyhow)?;

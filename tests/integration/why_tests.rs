@@ -974,4 +974,55 @@ mod tests {
 
         Ok(())
     }
+
+    /// `--verbose` is a global flag; the command must honour it on the context
+    /// even when its own copy of the flag is false (a caller that builds the
+    /// context directly, as here, never goes through clap's propagation).
+    #[test]
+    fn a_global_verbose_context_is_honoured_by_why() -> anyhow::Result<()> {
+        use clap::Parser;
+        use hitch::commands::global_context::{GlobalContext, GlobalFlags};
+        use hitch::utils::logging::Logger;
+        use hitch::utils::output::BufferedOutputSink;
+        use std::sync::Arc;
+
+        #[derive(Parser)]
+        struct Wrapper {
+            #[command(flatten)]
+            command: hitch::commands::why::WhyCommand,
+        }
+
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            let mut context = GlobalContext::new_at_path(
+                env.temp_dir.to_str().expect("utf-8 temp dir"),
+                GlobalFlags {
+                    verbose: true,
+                    no_push: true,
+                    assume_yes: true,
+                    json: false,
+                },
+                Arc::new(Logger::new()),
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let sink = BufferedOutputSink::new();
+            context.output = sink.clone();
+
+            let command = Wrapper::parse_from(["w", "dev"]).command;
+            hitch::commands::why::run(command, &context)?;
+
+            let lines: Vec<String> = sink.snapshot().into_iter().map(|l| l.message).collect();
+            assert!(
+                lines.iter().any(|l| l == "Starting why command..."),
+                "the global verbose flag was ignored: {lines:?}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
 }

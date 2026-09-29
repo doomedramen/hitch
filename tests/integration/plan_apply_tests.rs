@@ -93,12 +93,11 @@ mod tests {
             "dev",
             RebuildPlanOptions::default(),
             purpose,
-            &mut |_| {},
         )
     }
 
     fn apply(env: &TestEnvironment, plan: &Plan, push: bool) -> anyhow::Result<Receipt> {
-        apply_rebuild_plan(&context_for(env, push)?, plan, &mut |_| {})
+        apply_rebuild_plan(&context_for(env, push)?, plan)
     }
 
     type Receipt = hitch::operations::model::ExecutionReceipt;
@@ -1033,7 +1032,6 @@ mod tests {
             argument,
             environment,
             DeclarationPlanOptions { no_rebuild },
-            &mut |_| {},
         )
     }
 
@@ -1049,7 +1047,6 @@ mod tests {
             argument,
             environment,
             DeclarationPlanOptions { no_rebuild },
-            &mut |_| {},
         )
     }
 
@@ -1058,7 +1055,7 @@ mod tests {
         plan: &DeclarationPlan,
         push: bool,
     ) -> anyhow::Result<Receipt> {
-        apply_declaration_plan(&context_for(env, push)?, plan, &mut |_| {})
+        apply_declaration_plan(&context_for(env, push)?, plan)
     }
 
     /// The plan `hitch approve` builds for a request whose threshold is met.
@@ -1088,7 +1085,6 @@ mod tests {
             },
             request_id,
             DeclarationPlanOptions { no_rebuild: false },
-            &mut |_| {},
         )
     }
 
@@ -1125,7 +1121,6 @@ mod tests {
             target,
             options,
             PlanPurpose::Confirm,
-            &mut |_| {},
         )
     }
 
@@ -1134,7 +1129,7 @@ mod tests {
         plan: &ReleasePlan,
         push: bool,
     ) -> anyhow::Result<Receipt> {
-        apply_release_plan(&context_for(env, push)?, plan, &mut |_| {})
+        apply_release_plan(&context_for(env, push)?, plan)
     }
 
     fn declared(env: &TestEnvironment, environment: &str) -> anyhow::Result<Vec<String>> {
@@ -2322,7 +2317,6 @@ mod tests {
                 "feat-b",
                 "dev",
                 DeclarationPlanOptions { no_rebuild: true },
-                &mut |_| {},
             )?;
             assert!(
                 declaration
@@ -2333,7 +2327,7 @@ mod tests {
                 declaration.warnings
             );
             let declaration_receipt =
-                apply_declaration_plan(&context_for(env, false)?, &declaration, &mut |_| {})?;
+                apply_declaration_plan(&context_for(env, false)?, &declaration)?;
             assert_no_restated_warning(&declaration, &declaration_receipt);
 
             // A `--no-prune` consequence, from the release planner.
@@ -2386,8 +2380,7 @@ mod tests {
                 "this arm is vacuous unless the plan predicts the branch loss: {:?}",
                 remove.warnings
             );
-            let remove_receipt =
-                apply_metadata_plan(&context_for(env, false)?, &remove, &mut |_| {})?;
+            let remove_receipt = apply_metadata_plan(&context_for(env, false)?, &remove)?;
             assert_no_restated_warning(&remove, &remove_receipt);
             // Re-declared so the `set` arm below has an environment to edit.
             declare_branches(env, "dev", &[])?;
@@ -2409,7 +2402,7 @@ mod tests {
                 "this arm is vacuous unless the plan predicts the pending request: {:?}",
                 set.warnings
             );
-            let set_receipt = apply_metadata_plan(&context_for(env, false)?, &set, &mut |_| {})?;
+            let set_receipt = apply_metadata_plan(&context_for(env, false)?, &set)?;
             assert_no_restated_warning(&set, &set_receipt);
 
             for (label, receipt) in [
@@ -2418,7 +2411,6 @@ mod tests {
                     apply_metadata_plan(
                         &context_for(env, false)?,
                         &plan_lock(&context_for(env, false)?, "dev")?,
-                        &mut |_| {},
                     )?,
                 ),
                 (
@@ -2426,7 +2418,6 @@ mod tests {
                     apply_metadata_plan(
                         &context_for(env, false)?,
                         &plan_unlock(&context_for(env, false)?, "dev")?,
-                        &mut |_| {},
                     )?,
                 ),
             ] {
@@ -2438,8 +2429,7 @@ mod tests {
                 );
             }
             let add_plan = plan_add_environment(&context_for(env, false)?, "staging", None)?;
-            let add_receipt =
-                apply_metadata_plan(&context_for(env, false)?, &add_plan, &mut |_| {})?;
+            let add_receipt = apply_metadata_plan(&context_for(env, false)?, &add_plan)?;
             assert!(
                 add_receipt.warnings.is_empty(),
                 "and an add has nothing to predict either: {:?}",
@@ -2459,10 +2449,8 @@ mod tests {
                 },
                 "req-1",
                 DeclarationPlanOptions { no_rebuild: true },
-                &mut |_| {},
             )?;
-            let approved_receipt =
-                apply_declaration_plan(&context_for(env, false)?, &approved, &mut |_| {})?;
+            let approved_receipt = apply_declaration_plan(&context_for(env, false)?, &approved)?;
             assert_no_restated_warning(&approved, &approved_receipt);
             assert!(
                 approved_receipt.warnings.is_empty(),
@@ -2787,7 +2775,6 @@ mod tests {
                 "dev",
                 false,
                 None,
-                hitch::utils::prelude::StepNarration::Suppressed,
                 |_plan| Ok(false),
             )?;
             assert!(
@@ -3309,7 +3296,7 @@ mod tests {
                 let mut requested = set_args();
                 requested.add_approver = vec!["alice@example.com".to_string()];
                 let plan = set_plan(env, requested.clone())?;
-                apply_metadata_plan(&context_for(env, false)?, &plan, &mut |_| {})?;
+                apply_metadata_plan(&context_for(env, false)?, &plan)?;
 
                 // Second run: the approver is already there, so the resolved
                 // edit is empty. A planner built from the *flags* would name an
@@ -3326,7 +3313,7 @@ mod tests {
                     "so the environment will not look different either"
                 );
 
-                let receipt = apply_metadata_plan(&context_for(env, false)?, &second, &mut |_| {})?;
+                let receipt = apply_metadata_plan(&context_for(env, false)?, &second)?;
                 assert_eq!(
                     receipt.outcome,
                     OperationOutcome::NoChange,
@@ -3563,7 +3550,7 @@ mod tests {
                 ];
                 requested.requires_approval = Some(true);
                 let plan = set_plan(env, requested)?;
-                apply_metadata_plan(&context_for(env, false)?, &plan, &mut |_| {})?;
+                apply_metadata_plan(&context_for(env, false)?, &plan)?;
 
                 assert_eq!(
                     approvers_on_ref(env)?,

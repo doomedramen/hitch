@@ -39,7 +39,7 @@ pub fn run(args: LockCommand, context: &GlobalContext) -> Result<()> {
     // Step 3: Apply and report. The refusal — already locked — arrives as an
     // `Err` from here, not from a pre-check, so the plan above it is the one
     // the reader was just shown.
-    let receipt = apply_metadata_plan(context, &plan, &mut |_| {})?;
+    let receipt = apply_metadata_plan(context, &plan)?;
     emit_receipt(context, &plan, &receipt)?;
     Ok(())
 }

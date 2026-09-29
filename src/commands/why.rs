@@ -38,7 +38,7 @@ pub struct WhyCommand {
 
 pub fn run(args: WhyCommand, context: &GlobalContext) -> Result<()> {
     let mut context = context.clone();
-    context.verbose = args.verbose;
+    context.verbose = context.verbose || args.verbose;
 
     context.log_verbose("Starting why command...");
 
