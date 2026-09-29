@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod details;
 pub mod render;
 pub mod state;
