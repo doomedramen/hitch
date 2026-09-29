@@ -840,6 +840,72 @@ pub fn pin_environment_inputs(
     })
 }
 
+/// Resolve an environment's inputs from local refs alone, the way
+/// `build_state_snapshot` does: `refs/heads/<b>`, then the cached
+/// `refs/remotes/origin/<b>`, and nothing else. No `ls-remote`, no fetch.
+///
+/// A promoted branch that resolves nowhere is dropped from the pins rather
+/// than failing, which is what `preflight_compatibility_report_local` did
+/// (`continue`): that branch's own state (missing, stale) is what should
+/// explain it, not a prediction. An unresolvable *base* is an `Err`, because a
+/// composition needs a starting commit; the old `_local` variant returned "no
+/// conflicts" there, and a display caller that wants that back maps this `Err`
+/// to an empty list.
+fn pin_inputs_offline(context: &GlobalContext, environment: &Environment) -> Result<PinnedInputs> {
+    let git = context.git();
+    let live = |branch: &str| -> Option<String> {
+        git.rev_parse_opt(&format!("refs/heads/{}", branch))
+            .ok()
+            .flatten()
+            .or_else(|| {
+                git.rev_parse_opt(&format!("refs/remotes/origin/{}", branch))
+                    .ok()
+                    .flatten()
+            })
+    };
+    let base_sha = live(&environment.base).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Base branch '{}' does not exist locally or as a fetched remote branch.\n\
+             Fetch it with 'git fetch origin {}', then try again.",
+            environment.base,
+            environment.base
+        )
+    })?;
+    let branches = environment
+        .branches
+        .iter()
+        .filter_map(|b| live(b).map(|sha| (b.clone(), sha)))
+        .collect();
+    Ok(PinnedInputs {
+        base_name: environment.base.clone(),
+        base_sha,
+        branches,
+    })
+}
+
+/// What a build of `environment` would produce right now, from local refs.
+///
+/// Offline, lock-free, anchor-free; always holds, never halts; never replays.
+/// It is `compose_environment` over inputs pinned by [`pin_inputs_offline`], so
+/// a prediction and a build share one merge engine and cannot reach different
+/// verdicts about the same commits. `OnConflict::Eject` is passed whatever the
+/// environment's policy says, because the question is "what would be held" and
+/// `Halt` answers by returning `Err`. `replay` is false because every oracle
+/// this replaces was unaware of recorded resolutions, and
+/// `require_signed_resolutions` is false because it is only read when `replay`
+/// is true.
+///
+/// The composed commits it writes are unreachable and unanchored; that is safe
+/// only because nothing here outlives the call.
+pub fn predict_composition(
+    context: &GlobalContext,
+    environment: &Environment,
+    env_name: &str,
+) -> Result<CompositionResult> {
+    let inputs = pin_inputs_offline(context, environment)?;
+    compose_environment(context, &inputs, env_name, OnConflict::Eject, false, false)
+}
+
 /// The environment-level refusal printed when `OnConflict::Halt` stops a build.
 ///
 /// Lives here rather than in `commands/rebuild.rs` because `compose_environment`

@@ -16,6 +16,7 @@ pub mod lock_unlock_tests;
 pub mod log_tests;
 pub mod output_contract_tests;
 pub mod plan_apply_tests;
+pub mod predict_composition_tests;
 pub mod promote_demote_tests;
 pub mod push_tests;
 pub mod rebuild_tests;
