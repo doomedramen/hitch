@@ -433,4 +433,97 @@ mod tests {
         });
         Ok(())
     }
+
+    fn set_lock(c: &mut serde_json::Value, locked: bool, purpose: Option<&str>) {
+        let e = &mut c["environments"]["dev"];
+        e["locked"] = locked.into();
+        e["locked_by"] = if locked {
+            "someone@example.com".into()
+        } else {
+            serde_json::Value::Null
+        };
+        e["lock_purpose"] = match (locked, purpose) {
+            (true, Some(p)) => p.into(),
+            _ => serde_json::Value::Null,
+        };
+    }
+
+    #[test]
+    fn the_legacy_window_is_inclusive_at_sixty_seconds() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            commit_config(env, "2030-01-01T00:00:00Z", |c| set_lock(c, true, None))?;
+            commit_config(env, "2030-01-01T00:01:00Z", |c| set_lock(c, false, None))?;
+            assert!(lock_events(&activity(env, &query(50))?).is_empty());
+
+            commit_config(env, "2030-01-02T00:00:00Z", |c| set_lock(c, true, None))?;
+            commit_config(env, "2030-01-02T00:01:01Z", |c| set_lock(c, false, None))?;
+            assert_eq!(lock_events(&activity(env, &query(50))?).len(), 2);
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_legacy_bracket_open_at_the_limit_edge_is_kept() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            commit_config(env, "2030-01-01T00:00:00Z", |c| set_lock(c, true, None))?;
+            commit_config(env, "2030-01-01T00:00:01Z", |c| set_lock(c, false, None))?;
+            let log = activity(env, &query(1))?;
+            assert_eq!(log.entries.len(), 1);
+            assert!(matches!(
+                log.entries[0].events[..],
+                [HitchEvent::Unlocked { .. }]
+            ));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_manual_unlock_is_read_from_the_old_configs_purpose() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            commit_config(env, "2030-01-01T00:00:00Z", |c| {
+                set_lock(c, true, Some("manual"))
+            })?;
+            commit_config(env, "2030-01-01T00:00:01Z", |c| set_lock(c, false, None))?;
+            let log = activity(env, &query(50))?;
+            let locks = lock_events(&log);
+            assert_eq!(locks.len(), 2, "{locks:?}");
+            assert!(matches!(locks[0], HitchEvent::Unlocked { .. }));
+            assert!(matches!(locks[1], HitchEvent::Locked { .. }));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_readable_root_commit_still_creates_its_environments() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let good = env.fs.read_file("hitch.json")?;
+            env.git.run(&["checkout", "--orphan", "rewritten"])?;
+            env.git.run(&["rm", "-rf", "--cached", "."])?;
+            env.fs.write_file("hitch.json", &good)?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: readable root"])?;
+            env.git
+                .run(&["branch", "-f", "hitch-metadata", "rewritten"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let log = activity(env, &query(50))?;
+            assert!(log.skipped.is_empty());
+            assert!(events_of(&log).iter().any(|ev| matches!(ev,
+                HitchEvent::EnvironmentCreated { environment, .. } if environment == "dev")));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
 }

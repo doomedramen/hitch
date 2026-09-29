@@ -351,13 +351,13 @@ covered.
   rebuild specifically, a per-environment flock (`RebuildLock`) and the
   persisted `Environment.locked` metadata flag — three separate mechanisms
   for three separate concerns (cross-process serialization, rebuild-specific
-  serialization, human-facing "don't touch this env" signal). The persisted lock
-  also records *why* in `Environment.lock_purpose` (`Operation` from
+  serialization, human-facing "don't touch this env" signal). Know which
+  one(s) a new mutating operation actually needs. The persisted lock also
+  records *why* in `Environment.lock_purpose` (`Operation` from
   `with_locked_env`, `Manual` from `hitch lock`; `Environment::lock` takes it, so
   every caller must choose). `core::activity::build_activity` reads it to drop an
   operation's own lock/unlock bracket from history; pre-field history falls back
-  to a 60 s heuristic (`LEGACY_OPERATION_LOCK_WINDOW`). Nothing else reads it. Know which
-  one(s) a new mutating operation actually needs.
+  to a 60 s heuristic (`LEGACY_OPERATION_LOCK_WINDOW`). Nothing else reads it.
 - **The user's working tree is sacred**: nothing builds in the user's own
   checkout — no `checkout`/build/`checkout back` in the real repo, ever, and
   no command should ever be able to strand them on a branch they didn't ask
