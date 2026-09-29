@@ -1970,8 +1970,6 @@ pub fn confirm_plan(
 
 /// One event as one sentence: no actor, no time, no glyph.
 ///
-/// Only `ApprovalRequested` carries a direction, so the later approval events
-/// say "the change to" rather than guessing add-versus-remove.
 pub fn render_event(event: &HitchEvent) -> String {
     match event {
         HitchEvent::EnvironmentCreated { environment, base } => {
@@ -2023,30 +2021,63 @@ pub fn render_event(event: &HitchEvent) -> String {
             branch,
             approvals,
             required,
+            direction,
             ..
-        } => {
-            format!("approved the change to {branch} in {environment} ({approvals} of {required})")
-        }
+        } => format!(
+            "approved {} ({approvals} of {required})",
+            change_phrase(*direction, branch, environment)
+        ),
         HitchEvent::ApprovalGranted {
             environment,
             branch,
+            direction,
             ..
-        } => format!("the change to {branch} in {environment} is approved"),
+        } => format!(
+            "{} is approved",
+            change_phrase(*direction, branch, environment)
+        ),
         HitchEvent::ApprovalRejected {
             environment,
             branch,
+            direction,
             ..
-        } => format!("rejected the change to {branch} in {environment}"),
+        } => format!(
+            "rejected {}",
+            change_phrase(*direction, branch, environment)
+        ),
         HitchEvent::ApprovalApplied {
             environment,
             branch,
+            direction,
             ..
-        } => format!("applied the approved change: {branch} to {environment}"),
+        } => match direction {
+            ApprovalDirection::Promote => {
+                format!("applied the approved change: {branch} to {environment}")
+            }
+            ApprovalDirection::Demote => {
+                format!("applied the approved change: {branch} out of {environment}")
+            }
+        },
         HitchEvent::ApprovalCancelled {
             environment,
             branch,
+            direction,
             ..
-        } => format!("cancelled the request for the change to {branch} in {environment}"),
+        } => match direction {
+            ApprovalDirection::Promote => {
+                format!("cancelled the request to add {branch} to {environment}")
+            }
+            ApprovalDirection::Demote => {
+                format!("cancelled the request to remove {branch} from {environment}")
+            }
+        },
+    }
+}
+
+fn change_phrase(direction: ApprovalDirection, branch: &str, environment: &str) -> String {
+    match direction {
+        ApprovalDirection::Promote => format!("adding {branch} to {environment}"),
+        ApprovalDirection::Demote => format!("removing {branch} from {environment}"),
     }
 }
 
@@ -2078,6 +2109,14 @@ pub fn render_activity(
         let envs: BTreeSet<&str> = entry.events.iter().map(|e| e.environment()).collect();
         for env in envs {
             if decided.contains(env) {
+                continue;
+            }
+            if entry
+                .events
+                .iter()
+                .filter(|e| e.environment() == env)
+                .all(|e| matches!(e, HitchEvent::Locked { .. } | HitchEvent::Unlocked { .. }))
+            {
                 continue;
             }
             decided.insert(env);
@@ -2140,9 +2179,14 @@ pub fn render_activity(
                 ));
             }
         }
+        // build_activity drops event-less entries, but this renderer is pure over
+        // any log, so an empty one still gets its actor line (and verbose suffix).
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
         for (n, line) in lines.iter().enumerate() {
             if n == 0 {
-                out.push_str(&format!("  {time}  {} {line}", entry.actor));
+                out.push_str(format!("  {time}  {} {line}", entry.actor).trim_end());
                 if verbose {
                     let short: String = entry.commit.chars().take(7).collect();
                     out.push_str(&format!("  (metadata commit {short})"));
@@ -2151,9 +2195,6 @@ pub fn render_activity(
                 out.push_str(&format!("{pad}{line}"));
             }
             out.push('\n');
-        }
-        if lines.is_empty() {
-            out.push_str(&format!("  {time}  {}\n", entry.actor));
         }
     }
 
@@ -3931,14 +3972,9 @@ mod tests {
             }
         }
 
-        fn approval_fields() -> (String, String, String) {
-            (s("r1"), s("prod"), s("feature/a"))
-        }
-
         #[test]
         fn every_event_has_its_sentence() {
-            let (request_id, environment, branch) = approval_fields();
-            let cases: Vec<(HitchEvent, &str)> = vec![
+            let mut cases: Vec<(HitchEvent, &str)> = vec![
                 (
                     HitchEvent::EnvironmentCreated {
                         environment: s("dev"),
@@ -4010,67 +4046,96 @@ mod tests {
                     },
                     "released dev",
                 ),
-                (
-                    HitchEvent::ApprovalRequested {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                        direction: ApprovalDirection::Promote,
-                    },
-                    "asked to add feature/a to prod",
-                ),
-                (
-                    HitchEvent::ApprovalRequested {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                        direction: ApprovalDirection::Demote,
-                    },
-                    "asked to remove feature/a from prod",
-                ),
-                (
-                    HitchEvent::ApprovalVoted {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                        approvals: 1,
-                        required: 2,
-                    },
-                    "approved the change to feature/a in prod (1 of 2)",
-                ),
-                (
-                    HitchEvent::ApprovalGranted {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                    },
-                    "the change to feature/a in prod is approved",
-                ),
-                (
-                    HitchEvent::ApprovalRejected {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                    },
-                    "rejected the change to feature/a in prod",
-                ),
-                (
-                    HitchEvent::ApprovalApplied {
-                        request_id: request_id.clone(),
-                        environment: environment.clone(),
-                        branch: branch.clone(),
-                    },
-                    "applied the approved change: feature/a to prod",
-                ),
-                (
-                    HitchEvent::ApprovalCancelled {
+            ];
+            let mk = |kind: &str, d: ApprovalDirection| {
+                let (request_id, environment, branch) = (s("r1"), s("prod"), s("feature/a"));
+                match kind {
+                    "requested" => HitchEvent::ApprovalRequested {
                         request_id,
                         environment,
                         branch,
+                        direction: d,
                     },
-                    "cancelled the request for the change to feature/a in prod",
+                    "voted" => HitchEvent::ApprovalVoted {
+                        request_id,
+                        environment,
+                        branch,
+                        approvals: 1,
+                        required: 2,
+                        direction: d,
+                    },
+                    "granted" => HitchEvent::ApprovalGranted {
+                        request_id,
+                        environment,
+                        branch,
+                        direction: d,
+                    },
+                    "rejected" => HitchEvent::ApprovalRejected {
+                        request_id,
+                        environment,
+                        branch,
+                        direction: d,
+                    },
+                    "applied" => HitchEvent::ApprovalApplied {
+                        request_id,
+                        environment,
+                        branch,
+                        direction: d,
+                    },
+                    _ => HitchEvent::ApprovalCancelled {
+                        request_id,
+                        environment,
+                        branch,
+                        direction: d,
+                    },
+                }
+            };
+            use ApprovalDirection::{Demote, Promote};
+            let approval_rows = [
+                ("requested", Promote, "asked to add feature/a to prod"),
+                ("requested", Demote, "asked to remove feature/a from prod"),
+                (
+                    "voted",
+                    Promote,
+                    "approved adding feature/a to prod (1 of 2)",
+                ),
+                (
+                    "voted",
+                    Demote,
+                    "approved removing feature/a from prod (1 of 2)",
+                ),
+                ("granted", Promote, "adding feature/a to prod is approved"),
+                (
+                    "granted",
+                    Demote,
+                    "removing feature/a from prod is approved",
+                ),
+                ("rejected", Promote, "rejected adding feature/a to prod"),
+                ("rejected", Demote, "rejected removing feature/a from prod"),
+                (
+                    "applied",
+                    Promote,
+                    "applied the approved change: feature/a to prod",
+                ),
+                (
+                    "applied",
+                    Demote,
+                    "applied the approved change: feature/a out of prod",
+                ),
+                (
+                    "cancelled",
+                    Promote,
+                    "cancelled the request to add feature/a to prod",
+                ),
+                (
+                    "cancelled",
+                    Demote,
+                    "cancelled the request to remove feature/a from prod",
                 ),
             ];
+            for (kind, d, expected) in approval_rows {
+                cases.push((mk(kind, d), expected));
+            }
             for (event, expected) in cases {
                 assert_eq!(render_event(&event), expected);
             }
@@ -4267,6 +4332,90 @@ mod tests {
                 false,
             );
             assert!(!same_entry.contains("has not been rebuilt"));
+        }
+
+        #[test]
+        fn pointer_covers_demote_and_base_change_and_ignores_other_envs_and_locks() {
+            let demoted = HitchEvent::Demoted {
+                environment: s("dev"),
+                branch: s("feature/a"),
+            };
+            let out = render_activity(
+                &log(vec![entry(2026, 9, 29, 8, 0, vec![demoted])]),
+                now(),
+                false,
+            );
+            assert!(out.contains("dev has not been rebuilt since"));
+
+            let base = HitchEvent::BaseChanged {
+                environment: s("dev"),
+                from: s("main"),
+                to: s("develop"),
+            };
+            let out = render_activity(
+                &log(vec![entry(2026, 9, 29, 8, 0, vec![base])]),
+                now(),
+                false,
+            );
+            assert!(out.contains("dev has not been rebuilt since"));
+
+            let other = HitchEvent::Rebuilt {
+                environment: s("qa"),
+                outcome: RebuildOutcome::Unrecorded,
+            };
+            let out = render_activity(
+                &log(vec![
+                    entry(2026, 9, 29, 9, 0, vec![other]),
+                    entry(2026, 9, 29, 8, 0, vec![promoted()]),
+                ]),
+                now(),
+                false,
+            );
+            assert!(out.contains("dev has not been rebuilt since"));
+            assert!(!out.contains("qa has not been rebuilt"));
+
+            let lock = HitchEvent::Locked {
+                environment: s("dev"),
+                by: None,
+            };
+            let out = render_activity(
+                &log(vec![
+                    entry(2026, 9, 29, 9, 0, vec![lock]),
+                    entry(2026, 9, 29, 8, 0, vec![promoted()]),
+                ]),
+                now(),
+                false,
+            );
+            assert!(out.contains("dev has not been rebuilt since"));
+        }
+
+        #[test]
+        fn each_footer_alone_is_exact() {
+            let base = entry(2026, 9, 29, 8, 0, vec![rebuilt(RebuildOutcome::Unrecorded)]);
+            let mut l = log(vec![base.clone()]);
+            l.truncated = true;
+            assert_eq!(
+                render_activity(&l, now(), false),
+                "Today\n  09:00  martin rebuilt dev\n\nOlder activity not shown \u{2014} use --limit to see more.\n"
+            );
+            let mut l = log(vec![base]);
+            l.skipped = vec![SkippedCommit {
+                commit: s("x"),
+                reason: s("bad"),
+            }];
+            assert_eq!(
+                render_activity(&l, now(), false),
+                "Today\n  09:00  martin rebuilt dev\n\n1 change to hitch's settings could not be read and is not shown.\n"
+            );
+        }
+
+        #[test]
+        fn an_event_less_entry_still_carries_the_verbose_suffix() {
+            let l = log(vec![entry(2026, 9, 29, 8, 0, vec![])]);
+            assert_eq!(
+                render_activity(&l, now(), true),
+                "Today\n  09:00  martin  (metadata commit abcdef1)\n"
+            );
         }
     }
 }

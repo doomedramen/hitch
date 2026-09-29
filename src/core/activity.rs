@@ -54,6 +54,7 @@ pub enum HitchEvent {
         request_id: String,
         environment: String,
         branch: String,
+        direction: ApprovalDirection,
         approvals: usize,
         required: usize,
     },
@@ -61,21 +62,25 @@ pub enum HitchEvent {
         request_id: String,
         environment: String,
         branch: String,
+        direction: ApprovalDirection,
     },
     ApprovalRejected {
         request_id: String,
         environment: String,
         branch: String,
+        direction: ApprovalDirection,
     },
     ApprovalApplied {
         request_id: String,
         environment: String,
         branch: String,
+        direction: ApprovalDirection,
     },
     ApprovalCancelled {
         request_id: String,
         environment: String,
         branch: String,
+        direction: ApprovalDirection,
     },
 }
 
@@ -285,6 +290,7 @@ fn approval_transition(
             request_id: id(),
             environment: environment(),
             branch: branch(),
+            direction: req.operation.into(),
             approvals: req.approvals.len(),
             required,
         });
@@ -298,6 +304,7 @@ fn approval_transition(
             request_id: id(),
             environment: environment(),
             branch: branch(),
+            direction: req.operation.into(),
         });
     }
 
@@ -307,16 +314,19 @@ fn approval_transition(
                 request_id: id(),
                 environment: environment(),
                 branch: branch(),
+                direction: req.operation.into(),
             }),
             ApprovalStatus::Applied => out.push(HitchEvent::ApprovalApplied {
                 request_id: id(),
                 environment: environment(),
                 branch: branch(),
+                direction: req.operation.into(),
             }),
             ApprovalStatus::Cancelled => out.push(HitchEvent::ApprovalCancelled {
                 request_id: id(),
                 environment: environment(),
                 branch: branch(),
+                direction: req.operation.into(),
             }),
             ApprovalStatus::Rejected | ApprovalStatus::Pending => {}
         }
@@ -699,21 +709,25 @@ mod tests {
                 request_id,
                 environment,
                 branch,
+                direction: ApprovalDirection::Promote,
             },
             "rejected" => HitchEvent::ApprovalRejected {
                 request_id,
                 environment,
                 branch,
+                direction: ApprovalDirection::Promote,
             },
             "applied" => HitchEvent::ApprovalApplied {
                 request_id,
                 environment,
                 branch,
+                direction: ApprovalDirection::Promote,
             },
             "cancelled" => HitchEvent::ApprovalCancelled {
                 request_id,
                 environment,
                 branch,
+                direction: ApprovalDirection::Promote,
             },
             _ => unreachable!(),
         }
@@ -899,6 +913,25 @@ mod tests {
                 branch: "feat".into(),
                 approvals: 1,
                 required: 3,
+                direction: ApprovalDirection::Promote,
+            }]
+        );
+    }
+
+    #[test]
+    fn approval_transitions_carry_the_requests_direction() {
+        let mut old_req = request("r1", ApprovalStatus::Pending);
+        old_req.operation = Operation::Demote;
+        let old = with_request(config(&[("prod", "main", &[])]), old_req);
+        let mut new = old.clone();
+        new.approval_requests[0].status = ApprovalStatus::Approved;
+        assert_eq!(
+            derive_events(&old, &new),
+            vec![HitchEvent::ApprovalGranted {
+                request_id: "r1".into(),
+                environment: "prod".into(),
+                branch: "feat".into(),
+                direction: ApprovalDirection::Demote,
             }]
         );
     }
@@ -918,6 +951,7 @@ mod tests {
             branch: "feat".into(),
             approvals: 1,
             required: 1,
+            direction: ApprovalDirection::Promote,
         }));
     }
 
