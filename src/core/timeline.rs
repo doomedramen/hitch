@@ -1,4 +1,5 @@
 use crate::commands::global_context::GlobalContext;
+use crate::core::activity::read_config_at;
 use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -117,11 +118,6 @@ fn list_metadata_commits(context: &GlobalContext, max_commits: usize) -> Result<
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect())
-}
-
-fn read_config_at(context: &GlobalContext, spec: &str) -> Result<HitchConfig> {
-    let json = context.git().read_file_from_branch(spec, "hitch.json")?;
-    Ok(serde_json::from_str(&json)?)
 }
 
 fn matches_filter(summary: &str, filter: &HitchEventFilter<'_>) -> bool {

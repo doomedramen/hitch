@@ -174,6 +174,13 @@ pub struct WorktreeInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct MetadataCommit {
+    pub sha: String,
+    pub when: DateTime<Utc>,
+    pub author: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub sha: String,
     pub timestamp: DateTime<Utc>,
@@ -1167,6 +1174,40 @@ impl GitOperations {
                 timestamp,
                 summary,
             });
+        }
+        Ok(out)
+    }
+
+    /// `git log --first-parent`, newest first. First-parent is load-bearing: a
+    /// human `git pull` of the metadata branch can create a merge, and diffing
+    /// a merge against its second parent would replay someone else's history
+    /// as though it happened here.
+    pub fn list_first_parent_history(&self, reference: &str) -> Result<Vec<MetadataCommit>> {
+        let output = self.run_git_command(&[
+            "log",
+            "--first-parent",
+            "--format=%H%x00%ct%x00%an",
+            reference,
+        ])?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "git log failed for '{}': {}",
+                reference,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let mut out = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut parts = line.split('\0');
+            let sha = parts.next().unwrap_or("").to_string();
+            if sha.is_empty() {
+                continue;
+            }
+            let ts: i64 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            let author = parts.next().unwrap_or("").to_string();
+            let when = DateTime::from_timestamp(ts, 0)
+                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp on commit {sha}"))?;
+            out.push(MetadataCommit { sha, when, author });
         }
         Ok(out)
     }

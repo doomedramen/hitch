@@ -2,16 +2,16 @@
 //! used by every *mutating* code path (rebuild, promote, demote, release,
 //! approve, ...) that turns `hitch.json` into a `HitchConfig`.
 //!
-//! This is NOT the only place `hitch.json` gets parsed — `src/core/timeline.rs`
+//! This is NOT the only place `hitch.json` gets parsed — `src/core/activity.rs`
 //! (`read_config_at`, reading historical configs from arbitrary past commits
-//! for `hitch timeline`) and `src/commands/status.rs` (`display_diff`, reading
+//! for `hitch log`) and `src/commands/status.rs` (`display_diff`, reading
 //! both the committed config and a cwd-local `hitch.json` for a diff preview)
 //! both do a bare `serde_json::from_str` instead. That's a real gap — the size
 //! cap and ref-shape checks below don't apply there — left deliberately
-//! unrouted for now because `timeline.rs` reads configs written by
+//! unrouted for now because `activity.rs` reads configs written by
 //! arbitrarily old versions of hitch, which may have looser name validation
 //! than `validate_name` currently enforces; routing it through here risked
-//! breaking `hitch timeline` on real repositories' real history without
+//! breaking `hitch log` on real repositories' real history without
 //! evidence either way. Revisit if either site becomes a demonstrated attack
 //! surface (`status.rs`'s cwd-local read is the more plausible candidate,
 //! since nothing has validated that file yet).

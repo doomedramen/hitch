@@ -3,6 +3,7 @@
 //! Pure: two `HitchConfig` values in, events out. No git, no clock, no words —
 //! wording belongs to `core::render`.
 
+use crate::commands::global_context::GlobalContext;
 use crate::operations::model::HoldPair;
 use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig, Operation};
 
@@ -320,6 +321,139 @@ fn approval_transition(
             ApprovalStatus::Rejected | ApprovalStatus::Pending => {}
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActivityEntry {
+    pub commit: String,
+    pub when: chrono::DateTime<chrono::Utc>,
+    pub actor: String,
+    pub events: Vec<HitchEvent>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkippedCommit {
+    pub commit: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActivityLog {
+    /// Newest first.
+    pub entries: Vec<ActivityEntry>,
+    pub skipped: Vec<SkippedCommit>,
+    /// True when the walk stopped at `limit` before reaching the first commit.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ActivityQuery {
+    pub environment: Option<String>,
+    pub branch: Option<String>,
+    /// Maximum number of entries returned (not commits scanned).
+    pub limit: usize,
+}
+
+pub(crate) fn read_config_at(context: &GlobalContext, spec: &str) -> anyhow::Result<HitchConfig> {
+    let json = context.git().read_file_from_branch(spec, "hitch.json")?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+/// Lazily reads each commit's config at most once. An unreadable one is
+/// recorded in `skipped` the first time it fails and never again.
+struct ConfigReader<'a> {
+    context: &'a GlobalContext,
+    shas: Vec<&'a str>,
+    cache: Vec<Option<Option<HitchConfig>>>,
+    skipped: Vec<SkippedCommit>,
+}
+
+impl ConfigReader<'_> {
+    fn get(&mut self, i: usize) -> Option<&HitchConfig> {
+        if self.cache[i].is_none() {
+            let read = match read_config_at(self.context, self.shas[i]) {
+                Ok(cfg) => Some(cfg),
+                Err(e) => {
+                    self.skipped.push(SkippedCommit {
+                        commit: self.shas[i].to_string(),
+                        reason: format!("{e:#}"),
+                    });
+                    None
+                }
+            };
+            self.cache[i] = Some(read);
+        }
+        self.cache[i].as_ref().and_then(|c| c.as_ref())
+    }
+}
+
+pub fn build_activity(
+    context: &GlobalContext,
+    query: &ActivityQuery,
+) -> anyhow::Result<ActivityLog> {
+    let history = context.git().list_first_parent_history("hitch-metadata")?;
+    let mut reader = ConfigReader {
+        context,
+        shas: history.iter().map(|c| c.sha.as_str()).collect(),
+        cache: vec![None; history.len()],
+        skipped: Vec::new(),
+    };
+    let mut entries = Vec::new();
+    let mut truncated = false;
+
+    for (i, commit) in history.iter().enumerate() {
+        if entries.len() >= query.limit {
+            truncated = true;
+            break;
+        }
+        let Some(new) = reader.get(i).cloned() else {
+            continue;
+        };
+        // Diff against the nearest older *readable* config, so an unreadable
+        // commit shows up as a combined change rather than a phantom creation.
+        let mut old = HitchConfig::default();
+        for j in i + 1..history.len() {
+            if let Some(cfg) = reader.get(j) {
+                old = cfg.clone();
+                break;
+            }
+        }
+        let events: Vec<HitchEvent> = derive_events(&old, &new)
+            .into_iter()
+            .filter(|ev| {
+                query
+                    .environment
+                    .as_deref()
+                    .is_none_or(|e| ev.environment() == e)
+                    && query
+                        .branch
+                        .as_deref()
+                        .is_none_or(|b| ev.branches().contains(&b))
+            })
+            .collect();
+        if events.is_empty() {
+            continue;
+        }
+        entries.push(ActivityEntry {
+            commit: commit.sha.clone(),
+            when: commit.when,
+            actor: commit.author.clone(),
+            events,
+        });
+    }
+
+    let mut skipped = reader.skipped;
+    let order: std::collections::HashMap<&str, usize> = history
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.sha.as_str(), i))
+        .collect();
+    skipped.sort_by_key(|s| order.get(s.commit.as_str()).copied());
+    Ok(ActivityLog {
+        entries,
+        skipped,
+        truncated,
+    })
 }
 
 #[cfg(test)]
