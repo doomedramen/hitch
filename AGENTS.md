@@ -1313,6 +1313,16 @@ which is the load-bearing correctness guarantee). Treat any repository that
 configures a merge driver as one where composition executes that program, and
 do not add config-based "mitigations" that silently change merge semantics.
 
+**Default output may not name mechanism; `--verbose` may.**
+`tests/integration/terminology_tests.rs` drives one scenario through the
+common commands and fails on `sha`/`oid`/`ref`/`refs/`/`cas`/`eject`/`journal`/
+`fingerprint`/`anchor`/`hitch-metadata`/... as case-insensitive words. New
+output extends that scenario; a hit gets past only via its `ALLOWED` table,
+each entry with a reason (pasteable `git …` lines are skipped outright).
+`hitch-metadata` renders as `settings` in effect rows (`short_ref`). An
+approval gate is a `Needs approval` / `⏳` section in `render_plan`, not the
+blocking `⛔` heading, though the model still calls it blocking.
+
 **Recovery is tested by interruption, not by inspection.**
 `tests/integration/crash_recovery_tests.rs` runs the publish sequence with
 `HITCH_TEST_ABORT_AFTER` set to each of four named steps —

@@ -40,7 +40,9 @@ pub fn run(args: RefreshArgs, context: &GlobalContext) -> Result<()> {
     // Show what drifted
     let drifted = crate::utils::snapshot::drifted_branches(context, &request.rebuild_snapshot);
     if drifted.is_empty() {
-        context.log_info("No SHA drift detected — snapshot is already current.");
+        context.log_info(
+            "Nothing has changed since this request was filed — its snapshot is current.",
+        );
         return Ok(());
     }
     context.log_info("Drifted since request was created:");

@@ -44,9 +44,7 @@ pub fn capture_rebuild_snapshot(
             let existing_sha = context
                 .git()
                 .get_branch_commit_sha(existing_branch)
-                .map_err(|e| {
-                    anyhow!("Failed to get SHA for branch '{}': {}", existing_branch, e)
-                })?;
+                .map_err(|e| anyhow!("Could not read branch '{}': {}", existing_branch, e))?;
             branch_shas.insert(existing_branch.clone(), existing_sha);
         }
     }

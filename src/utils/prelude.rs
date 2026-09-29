@@ -386,7 +386,7 @@ where
             Ok(content) => content,
             Err(e) => {
                 // If file doesn't exist, create default config
-                context.log_info(&format!(
+                context.log_verbose(&format!(
                     "hitch.json not found or unreadable ({}), creating default configuration",
                     e
                 ));
@@ -540,7 +540,7 @@ pub fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
         let user_email = context.git().get_user_email()?;
         environment.lock(user_email.clone(), LockPurpose::Operation);
 
-        context.log_info(&format!(
+        context.log_verbose(&format!(
             "Environment '{}' locked by '{}'",
             env_name, user_email
         ));
@@ -562,7 +562,7 @@ pub fn unlock_environment(context: &GlobalContext, env_name: &str) -> Result<()>
 
         environment.unlock();
 
-        context.log_info(&format!("Environment '{}' unlocked", env_name));
+        context.log_verbose(&format!("Environment '{}' unlocked", env_name));
         Ok(())
     })
 }

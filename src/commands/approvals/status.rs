@@ -160,12 +160,12 @@ fn display_snapshot_info(
     println!("📸 Code Snapshot:");
 
     let snapshot = &request.rebuild_snapshot;
-    println!("  Base branch SHA: {}", &snapshot.base_sha[..7]);
+    println!("  Base branch at commit {}", &snapshot.base_sha[..7]);
 
     if !snapshot.branch_shas.is_empty() {
         println!("  Branch snapshots:");
         for (branch, sha) in &snapshot.branch_shas {
-            println!("    {}: {}", branch, &sha[..7]);
+            println!("    {} at commit {}", branch, &sha[..7]);
         }
     }
 

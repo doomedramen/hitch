@@ -1684,7 +1684,7 @@ fn the_feature_form_renders_the_membership_the_reason_and_the_summary() {
     assert!(
         has_line(
             &rendered,
-            "           no branch ref resolves for it, locally or on the cached remote"
+            "           no branch by that name exists, locally or on origin"
         ),
         "{rendered}"
     );

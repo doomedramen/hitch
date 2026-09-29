@@ -160,24 +160,27 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
         }
     }
 
-    if !plan.warnings.is_empty() {
+    // The approval gate is blocking in the model — the declaration edit does not
+    // happen — but what the reader is told is that a request will be filed, so
+    // it gets its own heading rather than the refusal's. By *kind*, never by
+    // matching the message.
+    let (approval, other): (Vec<_>, Vec<_>) = plan
+        .warnings
+        .iter()
+        .partition(|w| w.kind == crate::operations::model::PlanWarningKind::ApprovalRequired);
+
+    if !other.is_empty() {
         out.push('\n');
-        // Two headings, decided by the *warnings present* and not by the
-        // renderer being called from somewhere new. "Needs your decision" is
-        // right for an approval request and wrong for a policy refusal, whose
-        // whole content is that no decision available to this reader will let
-        // it through — and a heading inviting a decision that cannot help is
-        // the kind of thing a reader acts on before reading the line under it.
+        // "Needs your decision" is right for a confirmation and wrong for a
+        // policy refusal, whose whole content is that no decision available to
+        // this reader will let it through — and a heading inviting a decision
+        // that cannot help is the kind of thing a reader acts on before reading
+        // the line under it.
         heading(
             &mut out,
-            if plan.warnings.iter().any(|w| w.is_blocking()) {
+            if other.iter().any(|w| w.is_blocking()) {
                 "Why this cannot apply"
-            } else if plan.confirmation.required
-                || plan
-                    .warnings
-                    .iter()
-                    .any(|w| w.kind == crate::operations::model::PlanWarningKind::ApprovalRequired)
-            {
+            } else if plan.confirmation.required {
                 "Needs your decision"
             } else {
                 // Nobody is being asked anything — `--force` or `--yes` already
@@ -186,17 +189,21 @@ pub fn render_plan<I>(plan: &OperationPlan<I>) -> String {
                 "Worth knowing"
             },
         );
-        for warning in &plan.warnings {
-            // By *kind*, never by matching the message: a renderer that
-            // string-matched would silently reclassify every warning whose
-            // wording changed, and a *blocking* warning rendered as advisory
-            // is a plan that looks harmless.
+        for warning in &other {
             let glyph = if warning.is_blocking() {
                 "⛔"
             } else {
                 "⚠️"
             };
             annotated(&mut out, glyph, &warning.message);
+        }
+    }
+
+    if !approval.is_empty() {
+        out.push('\n');
+        heading(&mut out, "Needs approval");
+        for warning in &approval {
+            annotated(&mut out, "⏳", &warning.message);
         }
     }
 
@@ -267,7 +274,27 @@ pub fn plan_headline<I>(plan: &OperationPlan<I>) -> String {
                 // show: the branches it kept, and why.
                 "Clean up — nothing to delete".to_string()
             } else {
-                format!("Clean up {}", count(candidates.len(), "ref"))
+                let branches_noun = |n: usize| {
+                    if n == 1 {
+                        "1 branch".to_string()
+                    } else {
+                        format!("{n} branches")
+                    }
+                };
+                let archived = candidates
+                    .iter()
+                    .filter(|c| c.starts_with("refs/hitch/"))
+                    .count();
+                let branches = candidates.len() - archived;
+                match (branches, archived) {
+                    (b, 0) => format!("Clean up {}", branches_noun(b)),
+                    (0, a) => format!("Clean up {}", count(a, "archived build")),
+                    (b, a) => format!(
+                        "Clean up {} and {}",
+                        branches_noun(b),
+                        count(a, "archived build")
+                    ),
+                }
             }
         }
         crate::operations::model::OperationIntent::ApplyApproval {
@@ -319,6 +346,9 @@ fn previous(old: Option<&String>) -> String {
 /// thing, and the honest way to present one is to say what it is for rather
 /// than print a path the user has never seen.
 fn short_ref(refname: &str) -> String {
+    if refname == "refs/heads/hitch-metadata" {
+        return "settings".to_string();
+    }
     if let Some(branch) = refname.strip_prefix("refs/heads/") {
         return branch.to_string();
     }
@@ -1622,7 +1652,7 @@ fn why_reason_sentence(reason: &WhyReason) -> String {
         WhyReason::DemotedSinceBuild => {
             "it was demoted after the last build ran, so the build still contains it".to_string()
         }
-        WhyReason::NoRef => "no branch ref resolves for it, locally or on the cached remote".to_string(),
+        WhyReason::NoRef => "no branch by that name exists, locally or on origin".to_string(),
         WhyReason::NoBuildRecord => {
             "hitch has no build record for this environment, so it cannot say what the last build contained".to_string()
         }
@@ -2442,7 +2472,7 @@ mod tests {
                 OperationIntent::Cleanup {
                     candidates: vec!["refs/hitch/backup/a".into()],
                 },
-                "Clean up 1 ref",
+                "Clean up 1 archived build",
             ),
             (
                 OperationIntent::ApplyApproval {
@@ -2858,7 +2888,7 @@ mod tests {
             assert!(
                 [
                     // The model's own words, passed through.
-                    "hitch-metadata add login into 'dev' (now: auth, login)",
+                    "settings add login into 'dev' (now: auth, login)",
                     // A local ref update of the environment this plan composes is
                     // a rebuild, and the reader is told why the SHA moved.
                     "dev rebuild from 1 branch · aaaaaaa → fffffff",
@@ -2869,7 +2899,7 @@ mod tests {
                     // renderer was deciding what the resource is.
                     "tag hitch-release-dev-to-main-2026-01-01T00-00-00Z tag hitch-release-dev-to-main-2026-01-01T00-00-00Z at fffffff",
                     "qa rebuild qa — it is built on 'dev', which was rebuilt",
-                    "hitch-metadata prune login, search from qa",
+                    "settings prune login, search from qa",
                     // A deletion says the verb. `LocalRefUpdate` cannot express
                     // one, so this is the only way the sweep can cover it — and
                     // a `→` with an empty right-hand side would be the failure
@@ -2923,6 +2953,7 @@ mod tests {
         assert_eq!(short_ref("refs/heads/dev"), "dev");
         assert_eq!(short_ref("refs/remotes/origin/dev"), "origin/dev");
         assert_eq!(short_ref("refs/tags/v1"), "tag v1");
+        assert_eq!(short_ref("refs/heads/hitch-metadata"), "settings");
     }
 
     // ---- unaffected and warnings -----------------------------------------
@@ -3022,6 +3053,22 @@ mod tests {
         let ungated = render_plan(&p);
         p.confirmation = ConfirmationRequirement::required("the environment requires approval");
         assert_eq!(ungated, render_plan(&p));
+    }
+
+    #[test]
+    fn an_approval_gate_is_a_needs_approval_section_not_a_refusal() {
+        let mut p = plan(OperationIntent::PromoteBranches {
+            environment: "prod".into(),
+            branches: vec!["login".into()],
+        });
+        p.warnings
+            .push(crate::operations::model::PlanWarning::approval_required(
+                "'prod' requires approval, so confirming files an approval request.",
+            ));
+        let rendered = render_plan(&p);
+        assert!(rendered.contains("Needs approval\n  ⏳ "), "{rendered}");
+        assert!(!rendered.contains("Why this cannot apply"), "{rendered}");
+        assert!(!rendered.contains('⛔'), "{rendered}");
     }
 
     // ---- receipts --------------------------------------------------------

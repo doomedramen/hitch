@@ -25,7 +25,9 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     // initialized.
     context.log_verbose("Checking if hitch-metadata branch already exists...");
     if ensure_hitch_metadata_branch(context)? {
-        return Err(anyhow::anyhow!("Hitch is already initialized in this repository. hitch-metadata branch already exists."));
+        return Err(anyhow::anyhow!(
+            "Hitch is already initialized in this repository (its settings branch already exists)."
+        ));
     }
     context.log_verbose("✓ hitch-metadata branch does not exist");
 
@@ -67,10 +69,13 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
     if context.should_push() {
         context.log_verbose("Pushing hitch-metadata branch to remote...");
         if let Err(e) = context.git().push_branch("hitch-metadata") {
-            context.log_warning(&format!("Failed to push hitch-metadata to remote: {}", e));
+            context.log_warning(&format!(
+                "Failed to push hitch's settings branch to remote: {}",
+                e
+            ));
             context.log_warning("You can push manually later with: git push origin hitch-metadata");
         } else {
-            context.log_success("hitch-metadata branch pushed to remote");
+            context.log_success("hitch's settings branch pushed to remote");
         }
     } else {
         context.log_verbose("Skipping push due to --no-push flag");

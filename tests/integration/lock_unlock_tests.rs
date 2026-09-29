@@ -534,11 +534,11 @@ mod tests {
 
             assert!(out.contains("Will change"), "the plan: {out}");
             assert!(out.contains("Applied"), "and the receipt: {out}");
-            // Both halves name the ref, and nothing else may: a third mention
+            // Both halves name hitch's settings, and nothing else may: a third mention
             // would be the command talking over its own receipt, and one fewer
             // would mean a document without its effect.
             assert_eq!(
-                out.matches("hitch-metadata").count(),
+                out.matches("settings").count(),
                 2,
                 "once in the plan's 'Will change' and once in the receipt's \
                  effects, and nowhere else: {out}"

@@ -555,10 +555,6 @@ fn plan_declaration_change(
         && refused.is_none()
         && declared.requires_approval_check();
     if approval_gated {
-        context.log_info(&format!(
-            "Environment '{}' requires approval before {}",
-            environment, verb
-        ));
         warnings.push(PlanWarning::approval_required(format!(
             "Environment '{}' requires approval before {}",
             environment, verb
