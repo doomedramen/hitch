@@ -344,7 +344,7 @@ mod tests {
         new.environments
             .get_mut("test")
             .unwrap()
-            .lock("user".to_string());
+            .lock("user".to_string(), crate::types::LockPurpose::Operation);
 
         let changes = diff_configs(&old, &new);
         assert!(!changes.is_empty());
@@ -371,7 +371,7 @@ mod tests {
         old.environments
             .get_mut("test")
             .unwrap()
-            .lock("user".to_string());
+            .lock("user".to_string(), crate::types::LockPurpose::Operation);
 
         // Add same environment to new but keep unlocked
         new.add_environment("test".to_string(), env).unwrap();
@@ -619,7 +619,7 @@ mod tests {
         new.environments
             .get_mut("dev")
             .unwrap()
-            .lock("user1".to_string());
+            .lock("user1".to_string(), crate::types::LockPurpose::Operation);
         // staging stays unlocked (simulating unlock if it was locked before)
 
         let changes = diff_configs(&old, &new);

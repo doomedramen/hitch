@@ -60,16 +60,6 @@ mod tests {
             .assert_success();
     }
 
-    /// Until every mutation stops leaving lock/unlock commits behind, a
-    /// promote's entry also carries those events.
-    fn without_lock_events(events: &[HitchEvent]) -> Vec<HitchEvent> {
-        events
-            .iter()
-            .filter(|e| !matches!(e, HitchEvent::Locked { .. } | HitchEvent::Unlocked { .. }))
-            .cloned()
-            .collect()
-    }
-
     fn query(limit: usize) -> ActivityQuery {
         ActivityQuery {
             limit,
@@ -92,18 +82,15 @@ mod tests {
                 .trim()
                 .to_string();
             let log = activity(env, &query(50))?;
-            let promoted = log
-                .entries
-                .iter()
-                .find(|e| {
-                    without_lock_events(&e.events).iter().any(|ev| {
-                        matches!(ev, HitchEvent::Promoted { environment, branch }
-                            if environment == "dev" && branch == "feature/a")
-                    })
-                })
-                .expect("an entry holds the promote");
-            assert_eq!(promoted.actor, user);
-            assert_eq!(without_lock_events(&promoted.events).len(), 1);
+            let newest = &log.entries[0];
+            assert_eq!(newest.actor, user);
+            assert_eq!(
+                newest.events,
+                vec![HitchEvent::Promoted {
+                    environment: "dev".into(),
+                    branch: "feature/a".into()
+                }]
+            );
             Ok::<(), anyhow::Error>(())
         });
         Ok(())
@@ -120,8 +107,18 @@ mod tests {
                 promote(env, &name, "dev");
             }
             let log = activity(env, &query(2))?;
-            assert!(log.entries.len() == 2 && log.truncated);
-            assert!(log.entries[0].when >= log.entries[1].when);
+            assert_eq!(log.entries.len(), 2);
+            assert!(log.truncated);
+            let promoted_branches: Vec<&str> = log
+                .entries
+                .iter()
+                .flat_map(|e| &e.events)
+                .filter_map(|ev| match ev {
+                    HitchEvent::Promoted { branch, .. } => Some(branch.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(promoted_branches, vec!["feature/4", "feature/3"]);
             Ok::<(), anyhow::Error>(())
         });
         Ok(())
@@ -234,11 +231,204 @@ mod tests {
                     ..Default::default()
                 },
             )?;
+            assert!(!by_branch.entries.is_empty());
             assert!(by_branch
                 .entries
                 .iter()
                 .flat_map(|e| &e.events)
                 .all(|ev| ev.branches().contains(&"feature/devtools")));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    fn events_of(log: &ActivityLog) -> Vec<&HitchEvent> {
+        log.entries.iter().flat_map(|e| &e.events).collect()
+    }
+
+    fn lock_events(log: &ActivityLog) -> Vec<&HitchEvent> {
+        events_of(log)
+            .into_iter()
+            .filter(|e| matches!(e, HitchEvent::Locked { .. } | HitchEvent::Unlocked { .. }))
+            .collect()
+    }
+
+    /// Commits `mutate(config)` onto `hitch-metadata` with a chosen committer
+    /// date, bypassing hitch so the config carries no `lock_purpose`.
+    fn commit_config(
+        env: &TestEnvironment,
+        when: &str,
+        mutate: impl FnOnce(&mut serde_json::Value),
+    ) -> anyhow::Result<String> {
+        env.git.run(&["checkout", "hitch-metadata"])?;
+        let mut config: serde_json::Value = serde_json::from_str(&env.fs.read_file("hitch.json")?)?;
+        mutate(&mut config);
+        env.fs
+            .write_file("hitch.json", &serde_json::to_string_pretty(&config)?)?;
+        env.git.run(&["add", "-f", "hitch.json"])?;
+        #[allow(clippy::disallowed_methods)] // git.run cannot set GIT_COMMITTER_DATE
+        let out = std::process::Command::new("git")
+            .args(["commit", "-m", "test: hand-written"])
+            .current_dir(&env.temp_dir)
+            .env("GIT_COMMITTER_DATE", when)
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        anyhow::ensure!(out.status.success(), "git commit failed");
+        let sha = env
+            .git
+            .run(&["rev-parse", "HEAD"])?
+            .stdout()
+            .trim()
+            .to_string();
+        env.git.run(&["checkout", "main"])?;
+        Ok(sha)
+    }
+
+    #[test]
+    fn a_promote_is_not_bracketed_by_lock_events() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feature/a")?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature/a", "dev", "--no-rebuild"])
+                .execute()?
+                .assert_success();
+            let log = activity(env, &query(50))?;
+            assert!(lock_events(&log).is_empty(), "{:?}", log.entries);
+            assert!(events_of(&log).iter().any(|ev| matches!(ev,
+                HitchEvent::Promoted { branch, .. } if branch == "feature/a")));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_refused_operation_leaves_no_trace_in_the_log() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feature/a")?;
+            env.hitch
+                .run()
+                .args(&["lock", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "feature/a", "dev", "--no-rebuild"])
+                .execute()?
+                .assert_failure();
+            let log = activity(env, &query(50))?;
+            let locks = lock_events(&log);
+            assert_eq!(locks.len(), 1, "{locks:?}");
+            assert!(
+                matches!(locks[0], HitchEvent::Locked { environment, .. } if environment == "dev")
+            );
+            assert!(!events_of(&log)
+                .iter()
+                .any(|ev| matches!(ev, HitchEvent::Promoted { .. })));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_manual_lock_and_unlock_are_events() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            for cmd in ["lock", "unlock"] {
+                env.hitch
+                    .run()
+                    .args(&[cmd, "dev"])
+                    .execute()?
+                    .assert_success();
+            }
+            let log = activity(env, &query(50))?;
+            let locks = lock_events(&log);
+            assert_eq!(locks.len(), 2, "{locks:?}");
+            assert!(
+                matches!(locks[0], HitchEvent::Unlocked { environment } if environment == "dev")
+            );
+            assert!(
+                matches!(locks[1], HitchEvent::Locked { environment, .. } if environment == "dev")
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_brackets_are_collapsed_by_heuristic() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            let lock = |c: &mut serde_json::Value| {
+                c["environments"]["dev"]["locked"] = true.into();
+                c["environments"]["dev"]["locked_by"] = "someone@example.com".into();
+            };
+            let unlock = |c: &mut serde_json::Value| {
+                c["environments"]["dev"]["locked"] = false.into();
+                c["environments"]["dev"]["locked_by"] = serde_json::Value::Null;
+            };
+            // A bracket around a promote, seconds apart.
+            commit_config(env, "2030-01-01T00:00:00Z", lock)?;
+            commit_config(env, "2030-01-01T00:00:01Z", |c| {
+                c["environments"]["dev"]["branches"] = serde_json::json!(["feature/a"]);
+            })?;
+            commit_config(env, "2030-01-01T00:00:02Z", unlock)?;
+            let log = activity(env, &query(50))?;
+            assert!(lock_events(&log).is_empty(), "{:?}", log.entries);
+            assert!(events_of(&log).iter().any(|ev| matches!(ev,
+                HitchEvent::Promoted { branch, .. } if branch == "feature/a")));
+
+            // A lock held two hours with nothing in between is a human's.
+            commit_config(env, "2030-01-01T05:00:00Z", lock)?;
+            commit_config(env, "2030-01-01T07:00:00Z", unlock)?;
+            let log = activity(env, &query(50))?;
+            let locks = lock_events(&log);
+            assert_eq!(locks.len(), 2, "{locks:?}");
+            assert!(matches!(locks[0], HitchEvent::Unlocked { .. }));
+            assert!(matches!(locks[1], HitchEvent::Locked { .. }));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn an_unreadable_root_does_not_make_the_next_commit_a_phantom_creation() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            // Rewrite history so the root's hitch.json is unreadable while the
+            // next commit is fine: an orphan corrupt root, then the good config.
+            let good = {
+                env.git.run(&["checkout", "hitch-metadata"])?;
+                env.fs.read_file("hitch.json")?
+            };
+            env.git.run(&["checkout", "--orphan", "rewritten"])?;
+            env.git.run(&["rm", "-rf", "--cached", "."])?;
+            env.fs.write_file("hitch.json", "{not json")?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: corrupt root"])?;
+            env.fs.write_file("hitch.json", &good)?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: good config"])?;
+            env.git
+                .run(&["branch", "-f", "hitch-metadata", "rewritten"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let log = activity(env, &query(50))?;
+            assert_eq!(log.skipped.len(), 1);
+            assert!(
+                !events_of(&log)
+                    .iter()
+                    .any(|ev| matches!(ev, HitchEvent::EnvironmentCreated { .. })),
+                "{:?}",
+                log.entries
+            );
             Ok::<(), anyhow::Error>(())
         });
         Ok(())

@@ -1,5 +1,5 @@
 use crate::commands::global_context::GlobalContext;
-use crate::types::{Environment, HitchConfig, OnConflict};
+use crate::types::{Environment, HitchConfig, LockPurpose, OnConflict};
 use crate::utils::git_operations::GitOperations;
 use crate::utils::progress::StepLogger;
 use anyhow::{Context, Result};
@@ -538,7 +538,7 @@ pub fn lock_environment(context: &GlobalContext, env_name: &str) -> Result<()> {
 
         // Get current user email
         let user_email = context.git().get_user_email()?;
-        environment.lock(user_email.clone());
+        environment.lock(user_email.clone(), LockPurpose::Operation);
 
         context.log_info(&format!(
             "Environment '{}' locked by '{}'",

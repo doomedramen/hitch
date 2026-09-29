@@ -51,7 +51,10 @@ mod tests {
         let mut env = Environment::new("main".to_string());
 
         // Test locking
-        env.lock("user@example.com".to_string());
+        env.lock(
+            "user@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         assert!(env.is_locked());
         assert_eq!(env.locked_by, Some("user@example.com".to_string()));
         assert!(env.locked_at.is_some());
@@ -70,7 +73,10 @@ mod tests {
         let mut env = Environment::new("main".to_string());
 
         // Lock first
-        env.lock("user@example.com".to_string());
+        env.lock(
+            "user@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         assert!(env.is_locked());
 
         // Then unlock
@@ -87,17 +93,26 @@ mod tests {
         let mut env = Environment::new("main".to_string());
 
         // Lock with first user
-        env.lock("user1@example.com".to_string());
+        env.lock(
+            "user1@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         assert_eq!(env.locked_by, Some("user1@example.com".to_string()));
 
         // Lock with different user
-        env.lock("user2@example.com".to_string());
+        env.lock(
+            "user2@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         assert_eq!(env.locked_by, Some("user2@example.com".to_string()));
 
         // Timestamp should be updated
         let first_lock_time = env.locked_at.unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        env.lock("user3@example.com".to_string());
+        env.lock(
+            "user3@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         let second_lock_time = env.locked_at.unwrap();
         assert!(second_lock_time > first_lock_time);
 
@@ -226,7 +241,10 @@ mod tests {
         env.add_branch("feature-auth".to_string());
         env.add_branch("feature-ui".to_string());
         env.update_rebuilt_timestamp();
-        env.lock("admin@company.com".to_string());
+        env.lock(
+            "admin@company.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         env.update_released_timestamp();
         env.unlock();
 
@@ -336,7 +354,10 @@ mod tests {
         {
             let retrieved = config.get_environment_mut("dev").unwrap();
             retrieved.add_branch("feature-1".to_string());
-            retrieved.lock("user@example.com".to_string());
+            retrieved.lock(
+                "user@example.com".to_string(),
+                hitch::types::LockPurpose::Operation,
+            );
         }
 
         // Verify changes persisted
@@ -402,7 +423,10 @@ mod tests {
         {
             let qa_env = config.get_environment_mut("qa").unwrap();
             qa_env.add_branch("feature-auth".to_string());
-            qa_env.lock("qa-team@company.com".to_string());
+            qa_env.lock(
+                "qa-team@company.com".to_string(),
+                hitch::types::LockPurpose::Operation,
+            );
         }
 
         // Verify state
@@ -427,7 +451,10 @@ mod tests {
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
             let mut original_env = Environment::new("main".to_string());
             original_env.add_branch("feature-1".to_string());
-            original_env.lock("user@example.com".to_string());
+            original_env.lock(
+                "user@example.com".to_string(),
+                hitch::types::LockPurpose::Operation,
+            );
             original_env.update_rebuilt_timestamp();
 
             // Serialize to JSON
@@ -537,7 +564,10 @@ mod tests {
 
         // Test multiple lock/unlock cycles
         for i in 0..5 {
-            env.lock(format!("user{}@example.com", i));
+            env.lock(
+                format!("user{}@example.com", i),
+                hitch::types::LockPurpose::Operation,
+            );
             assert!(env.is_locked());
             assert_eq!(env.locked_by, Some(format!("user{}@example.com", i)));
 
@@ -587,7 +617,10 @@ mod tests {
         // Update timestamps in sequence
         env.update_rebuilt_timestamp();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        env.lock("user@example.com".to_string());
+        env.lock(
+            "user@example.com".to_string(),
+            hitch::types::LockPurpose::Operation,
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
         env.update_released_timestamp();
 

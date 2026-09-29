@@ -5,7 +5,7 @@
 
 use crate::commands::global_context::GlobalContext;
 use crate::operations::model::HoldPair;
-use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig, Operation};
+use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig, LockPurpose, Operation};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -387,6 +387,37 @@ impl ConfigReader<'_> {
     }
 }
 
+/// History written before `lock_purpose` existed cannot say which kind of lock
+/// it recorded, so a lock released this quickly is assumed to be an operation's
+/// own bracket. Only consulted when `lock_purpose` is absent.
+const LEGACY_OPERATION_LOCK_WINDOW: chrono::Duration = chrono::Duration::seconds(60);
+
+/// An entry under construction: the events a later, older commit may still
+/// retract when it turns out to open a legacy operation bracket.
+struct Draft {
+    entry: ActivityEntry,
+    alive: Vec<bool>,
+    alive_count: usize,
+}
+
+fn lock_purpose_in(config: &HitchConfig, environment: &str) -> Option<LockPurpose> {
+    config
+        .environments
+        .get(environment)
+        .and_then(|e| e.lock_purpose)
+}
+
+fn drop_event(drafts: &mut [Draft], live_entries: &mut usize, draft: usize, event: usize) {
+    let d = &mut drafts[draft];
+    if d.alive[event] {
+        d.alive[event] = false;
+        d.alive_count -= 1;
+        if d.alive_count == 0 {
+            *live_entries -= 1;
+        }
+    }
+}
+
 pub fn build_activity(
     context: &GlobalContext,
     query: &ActivityQuery,
@@ -398,11 +429,18 @@ pub fn build_activity(
         cache: vec![None; history.len()],
         skipped: Vec::new(),
     };
-    let mut entries = Vec::new();
+    let mut drafts: Vec<Draft> = Vec::new();
+    let mut live_entries = 0usize;
     let mut truncated = false;
+    // Per environment, the newest-seen legacy `Unlocked` still waiting for the
+    // `Locked` that opened its bracket.
+    let mut pending_unlock: std::collections::HashMap<
+        String,
+        (chrono::DateTime<chrono::Utc>, usize, usize),
+    > = std::collections::HashMap::new();
 
     for (i, commit) in history.iter().enumerate() {
-        if entries.len() >= query.limit {
+        if live_entries >= query.limit {
             truncated = true;
             break;
         }
@@ -411,13 +449,23 @@ pub fn build_activity(
         };
         // Diff against the nearest older *readable* config, so an unreadable
         // commit shows up as a combined change rather than a phantom creation.
-        let mut old = HitchConfig::default();
-        for j in i + 1..history.len() {
-            if let Some(cfg) = reader.get(j) {
-                old = cfg.clone();
-                break;
+        // Only the true root of the history is diffed against nothing: if older
+        // commits exist but none is readable, the gap is already in `skipped`.
+        let old = if i + 1 == history.len() {
+            HitchConfig::default()
+        } else {
+            let mut found = None;
+            for j in i + 1..history.len() {
+                if let Some(cfg) = reader.get(j) {
+                    found = Some(cfg.clone());
+                    break;
+                }
             }
-        }
+            match found {
+                Some(cfg) => cfg,
+                None => continue,
+            }
+        };
         let events: Vec<HitchEvent> = derive_events(&old, &new)
             .into_iter()
             .filter(|ev| {
@@ -434,13 +482,61 @@ pub fn build_activity(
         if events.is_empty() {
             continue;
         }
-        entries.push(ActivityEntry {
-            commit: commit.sha.clone(),
-            when: commit.when,
-            actor: commit.author.clone(),
-            events,
+
+        let draft_idx = drafts.len();
+        let mut alive = vec![true; events.len()];
+        for (k, ev) in events.iter().enumerate() {
+            match ev {
+                HitchEvent::Locked { environment, .. } => {
+                    match lock_purpose_in(&new, environment) {
+                        Some(LockPurpose::Operation) => alive[k] = false,
+                        Some(LockPurpose::Manual) => {}
+                        None => {
+                            if let Some((unlocked_at, d, e)) = pending_unlock.remove(environment) {
+                                if unlocked_at - commit.when <= LEGACY_OPERATION_LOCK_WINDOW {
+                                    alive[k] = false;
+                                    drop_event(&mut drafts, &mut live_entries, d, e);
+                                }
+                            }
+                        }
+                    }
+                }
+                HitchEvent::Unlocked { environment } => match lock_purpose_in(&old, environment) {
+                    Some(LockPurpose::Operation) => alive[k] = false,
+                    Some(LockPurpose::Manual) => {}
+                    None => {
+                        pending_unlock.insert(environment.clone(), (commit.when, draft_idx, k));
+                    }
+                },
+                _ => {}
+            }
+        }
+        let alive_count = alive.iter().filter(|a| **a).count();
+        if alive_count > 0 {
+            live_entries += 1;
+        }
+        drafts.push(Draft {
+            entry: ActivityEntry {
+                commit: commit.sha.clone(),
+                when: commit.when,
+                actor: commit.author.clone(),
+                events,
+            },
+            alive,
+            alive_count,
         });
     }
+
+    let entries: Vec<ActivityEntry> = drafts
+        .into_iter()
+        .filter(|d| d.alive_count > 0)
+        .map(|d| {
+            let mut entry = d.entry;
+            let mut keep = d.alive.into_iter();
+            entry.events.retain(|_| keep.next().unwrap_or(true));
+            entry
+        })
+        .collect();
 
     let mut skipped = reader.skipped;
     let order: std::collections::HashMap<&str, usize> = history

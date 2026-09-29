@@ -19,6 +19,15 @@ pub enum OnConflict {
     Halt,
 }
 
+/// Why an environment is locked. History reads this to tell an operation's own
+/// lock/unlock bracket from a lock a human took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockPurpose {
+    Operation,
+    Manual,
+}
+
 /// Environment configuration as defined in hitch.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
@@ -36,6 +45,10 @@ pub struct Environment {
 
     /// Timestamp when environment was locked (null if unlocked)
     pub locked_at: Option<DateTime<Utc>>,
+
+    /// Why it is locked (absent when unlocked, and in configs written before this field)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_purpose: Option<LockPurpose>,
 
     /// Timestamp when environment was last rebuilt (null if never rebuilt)
     pub rebuilt_at: Option<DateTime<Utc>>,
@@ -68,6 +81,7 @@ impl Environment {
             locked: false,
             locked_by: None,
             locked_at: None,
+            lock_purpose: None,
             rebuilt_at: None,
             released_at: None,
             requires_approval: false,
@@ -81,16 +95,18 @@ impl Environment {
         self.locked
     }
 
-    pub fn lock(&mut self, user_email: String) {
+    pub fn lock(&mut self, user_email: String, purpose: LockPurpose) {
         self.locked = true;
         self.locked_by = Some(user_email);
         self.locked_at = Some(Utc::now());
+        self.lock_purpose = Some(purpose);
     }
 
     pub fn unlock(&mut self) {
         self.locked = false;
         self.locked_by = None;
         self.locked_at = None;
+        self.lock_purpose = None;
     }
 
     pub fn update_rebuilt_timestamp(&mut self) {
@@ -611,5 +627,45 @@ impl HitchConfig {
 impl Default for HitchConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod lock_purpose_tests {
+    use super::*;
+
+    #[test]
+    fn a_config_without_lock_purpose_reads_as_none() {
+        let env = Environment::new("main".into());
+        let mut json: serde_json::Value = serde_json::to_value(&env).unwrap();
+        json.as_object_mut().unwrap().remove("lock_purpose");
+        let back: Environment = serde_json::from_value(json).unwrap();
+        assert_eq!(back.lock_purpose, None);
+    }
+
+    #[test]
+    fn an_unlocked_environment_serializes_without_the_key() {
+        let json = serde_json::to_string(&Environment::new("main".into())).unwrap();
+        assert!(!json.contains("lock_purpose"));
+    }
+
+    #[test]
+    fn a_locked_environment_round_trips_its_purpose() {
+        let mut env = Environment::new("main".into());
+        env.lock("a@b.c".into(), LockPurpose::Manual);
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains("\"lock_purpose\":\"manual\""));
+        let back: Environment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.lock_purpose, Some(LockPurpose::Manual));
+        let mut back = back;
+        back.unlock();
+        assert_eq!(back.lock_purpose, None);
+    }
+
+    #[test]
+    fn an_unknown_key_is_ignored() {
+        let mut json = serde_json::to_value(Environment::new("main".into())).unwrap();
+        json["from_the_future"] = true.into();
+        assert!(serde_json::from_value::<Environment>(json).is_ok());
     }
 }

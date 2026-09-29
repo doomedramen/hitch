@@ -43,7 +43,7 @@ use crate::operations::model::{
     OperationIntent, OperationKind, OperationOutcome, OperationPlan, PlanApplyError,
     PlanFingerprint, PlanWarning, PlannedEffect,
 };
-use crate::types::{Environment, HitchConfig};
+use crate::types::{Environment, HitchConfig, LockPurpose};
 use crate::utils::build_record::PinnedBranch;
 use crate::utils::prelude::{access_metadata_read_only, modify_metadata};
 use anyhow::Result;
@@ -891,7 +891,7 @@ fn apply_edit(config: &mut HitchConfig, detail: &MetadataPlanDetail) -> Result<(
             let holder = detail.locked_by.clone().ok_or_else(|| {
                 anyhow::anyhow!("internal: a lock plan with no holder; the planner resolves one")
             })?;
-            env.lock(holder);
+            env.lock(holder, LockPurpose::Manual);
         }
         MetadataEdit::Unlock => env.unlock(),
         MetadataEdit::Settings => {
