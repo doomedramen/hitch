@@ -520,17 +520,80 @@ mod tests {
                 "the refusal must name the command that would have worked:\n{stderr}"
             );
 
+            let stdout = result.stdout();
             result
                 .assert_failure()
                 .assert_stdout_contains("compatibility check failed")
-                .assert_stdout_contains("branch-b conflicts with main")
+                // D6: the partner is branch-a, which is already in dev. This used
+                // to say "conflicts with main" and prescribe a rebase onto a base
+                // that b does not conflict with.
+                .assert_stdout_contains("branch-b conflicts with branch-a, which is already in dev")
+                .assert_stdout_contains("git rebase branch-a")
                 .assert_stdout_contains("shared.txt");
+            assert!(
+                !stdout.contains("conflicts with main"),
+                "the base is not the partner:\n{stdout}"
+            );
 
             // Metadata must be unchanged (branch-b not in the list)
             let config = env.read_hitch_config()?;
             let dev_env = config.environments.get("dev").unwrap();
             assert!(dev_env.branches.contains(&"branch-a".to_string()));
             assert!(!dev_env.branches.contains(&"branch-b".to_string()));
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// Regression (Task 3): an already-promoted branch that the base has since
+    /// moved out from under is held by every rebuild, and that is not a reason
+    /// to refuse an unrelated new branch. The tree-based check refused it with
+    /// "environment already contains incompatible promoted branches".
+    #[test]
+    fn test_promote_unrelated_branch_beside_an_already_held_one() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.fs.write_file("shared.txt", "one\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "shared"])?;
+
+            env.git.run(&["checkout", "-b", "branch-a", "main"])?;
+            env.fs.write_file("shared.txt", "A\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "a"])?;
+            env.git.run(&["checkout", "-b", "branch-c", "main"])?;
+            env.fs.write_file("c.txt", "c\n")?;
+            env.git.run(&["add", "-f", "c.txt"])?;
+            env.git.run(&["commit", "-m", "c"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            env.fs.write_file("shared.txt", "MAIN\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "main moves"])?;
+
+            env.hitch
+                .run()
+                .args(&["promote", "branch-c", "dev"])
+                .execute()?
+                .assert_success();
+            let config = env.read_hitch_config()?;
+            assert!(config.environments["dev"]
+                .branches
+                .contains(&"branch-c".to_string()));
 
             Ok::<(), anyhow::Error>(())
         });

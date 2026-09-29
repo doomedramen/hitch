@@ -357,6 +357,70 @@ mod tests {
         Ok(())
     }
 
+    /// A dependent environment that already holds a branch is left out of the
+    /// release's rebuilds, and the advisory names the branch and what it
+    /// conflicts with. The verdict comes from `predict_composition`, the same
+    /// composition the rebuild would have run.
+    #[test]
+    fn test_hitch_release_skips_a_dependent_environment_that_would_hold_a_branch(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.fs.write_file("shared.txt", "one\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "shared"])?;
+
+            for name in ["dev", "qa"] {
+                env.hitch
+                    .run()
+                    .args(&["add", name])
+                    .execute()?
+                    .assert_success();
+            }
+
+            env.git.run(&["checkout", "-b", "feature-1", "main"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            env.git.run(&["checkout", "-b", "held-later", "main"])?;
+            env.fs.write_file("shared.txt", "HELD\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "held-later edits shared"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            for (branch, target) in [("feature-1", "dev"), ("held-later", "qa")] {
+                env.hitch
+                    .run()
+                    .args(&["promote", branch, target])
+                    .execute()?
+                    .assert_success();
+            }
+
+            // main moves under held-later, so qa now holds it.
+            env.fs.write_file("shared.txt", "MAIN\ntwo\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "main moves"])?;
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?;
+            let stdout = result.stdout();
+            result.assert_success();
+            assert!(
+                stdout.contains("'qa' will not be rebuilt")
+                    && stdout.contains("merging 'held-later' onto 'main'"),
+                "the advisory must name the held branch and its partner:\n{stdout}"
+            );
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     /// Regression: the environment being released must have its own branch rebuilt
     /// after the release, even though that environment is locked for the duration of
     /// the release. Previously the post-release rebuild skipped it ("Skipping rebuild

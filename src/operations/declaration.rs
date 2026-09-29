@@ -35,6 +35,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::render_promote_refusal;
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
     changed_inputs, AppliedEffect, ConfirmationRequirement, DependentRebuildOutcome,
@@ -47,8 +48,7 @@ use crate::utils::build_record::PinnedBranch;
 use crate::utils::command_helpers::{ensure_environment_exists, validate_branch_for_promotion};
 use crate::utils::prelude::{
     access_metadata_read_only, create_approval_requests_for_operation,
-    display_approval_request_created, modify_metadata, pre_promote_conflict_reason,
-    rebuild_environment,
+    display_approval_request_created, modify_metadata, pre_promote_conflict, rebuild_environment,
 };
 use crate::utils::validation::validate_name;
 
@@ -494,22 +494,26 @@ fn plan_declaration_change(
     // The sibling-conflict simulation, run *in the plan*. This used to be a
     // pre-check in `promote.rs` that intercepted before anything was
     // describable; the verdict is a decision, and a decision belongs where the
-    // reader can see it. `pre_promote_conflict_reason` returns today's error
-    // text verbatim, which is what keeps
-    // `test_promote_blocked_by_sibling_conflict`'s three assertions true.
+    // reader can see it. `pre_promote_conflict` names the partner the composition
+    // actually held the branch against and `render_promote_refusal` words it.
     let mut warnings: Vec<PlanWarning> = Vec::new();
     let mut refused: Option<String> = None;
     if change.is_promotion() && !declared.branches.is_empty() {
         context.log_verbose("Checking for conflicts with already-promoted branches...");
         for branch in change.branches() {
-            if let Some(reason) = pre_promote_conflict_reason(
+            if let Some(conflict) = pre_promote_conflict(
                 context,
                 branch,
                 &declared.branches,
                 &declared.base,
                 environment,
             )? {
-                refused = Some(reason);
+                refused = Some(render_promote_refusal(
+                    branch,
+                    environment,
+                    &declared.base,
+                    &conflict,
+                ));
                 break;
             }
         }

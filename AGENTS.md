@@ -1027,7 +1027,8 @@ in `render_approval_recorded`.
 **A decision the plan can make at plan time belongs in the plan, and a
 decision about the release's own result must be evaluated against the planned
 result, not the live ref.** Two instances. (1) `plan_dependents` runs
-`preflight_compatibility_merge_tree` and leaves a provably-unrebuildable
+`predict_composition` (offline: local refs, then cached `origin/*`; always
+ejects, never replays, takes no lock) and leaves a provably-unrebuildable
 environment out of `dependents` entirely, as an `Advisory` warning —
 `DependentRebuildOutcome::Skipped` is then for *runtime* skips only (a base
 that failed its own rebuild, `--no-rebuild-dependents`). A plan that declares a
@@ -1049,6 +1050,15 @@ plan whose effect list reorders between runs is not a plan;
 `plan_dependents` iterates `topological_environment_order` and `plan_prunes`
 sorts by name. `a_release_plan_names_the_tag_the_target_move_the_prunes_and_the_dependents`
 asserts the exact order.
+
+**A promote refusal names the branch the composition held it against.**
+`pre_promote_conflict` asks `predict_composition` about the environment as it
+would be declared after the promote, and `CompatibilityConflict.conflicts_with`
+is the real partner (base, or a promoted peer); `render_promote_refusal` words
+both. The remedy is a rebase onto that partner, not `hitch resolve`, which only
+acts on a branch the environment already declares. Only the *new* branch is
+judged: an already-held sibling no longer blocks an unrelated promote. The old
+tree-based check named the base even for a peer conflict.
 
 **Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
 <X>` needs the *true common ancestor* of the two trees being compared —
@@ -1086,8 +1096,8 @@ reporting branches as **held** that the real build **composed** from the
 recording — exit 2, "would hold", for a build that was going to succeed.
 
 P5 removed release's version of that bug, which is worth naming because it
-looked nothing like the rebuild one: `rebuild_dependent_environments` ran
-`preflight_compatibility_merge_tree` at apply time and *skipped* a dependent
+looked nothing like the rebuild one: `rebuild_dependent_environments` ran a
+tree-based preflight (since replaced by `predict_composition`) at apply time and *skipped* a dependent
 environment whose composition would conflict. Release's own merge — the chain of
 promoted branches into the target — was never a preflight, and could not be: it
 is a different operation from an environment build. It merges N branches into a

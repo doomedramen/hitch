@@ -2390,73 +2390,6 @@ pub fn get_environment_config_for_approval(
 // Compatibility Preflight (merge-tree)
 // =============================================================================
 
-/// Result describing the first blocking conflict in a sequential merge simulation.
-#[derive(Debug, Clone)]
-pub struct CompatibilityFailure {
-    pub blocking_branch: String,
-    pub base_branch: String,
-    pub conflicted_files: Vec<String>,
-}
-
-/// Simulate sequential squash-merge compatibility using `git merge-tree --write-tree`.
-///
-/// This is a read-only preflight that:
-/// - starts from `base_branch`'s tree
-/// - applies each branch's tree in order via merge-tree
-/// - returns the first branch that conflicts (with a list of conflicted files)
-pub fn preflight_compatibility_merge_tree(
-    context: &GlobalContext,
-    base_branch: &str,
-    branches_in_order: &[String],
-) -> Result<Option<CompatibilityFailure>> {
-    if branches_in_order.is_empty() {
-        return Ok(None);
-    }
-
-    // Ensure all branches are available locally for rev-parse + merge-tree.
-    let mut all = Vec::with_capacity(branches_in_order.len() + 1);
-    all.push(base_branch.to_string());
-    all.extend(branches_in_order.iter().cloned());
-    context.git().synchronize_branches(&all)?;
-
-    let base_commit = context.git().rev_parse(base_branch)?;
-    let mut current_tree = context
-        .git()
-        .rev_parse(&format!("{}^{{tree}}", base_branch))?;
-
-    for branch in branches_in_order {
-        let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
-        // The true common ancestor of `base_branch` and `branch` — NOT
-        // `base_branch`'s own current tip. Passing the tip as `--merge-base`
-        // makes `git merge-tree` believe "our" side (the accumulated
-        // composition) has zero changes since the merge-base, so it silently
-        // fast-forwards to `branch`'s content instead of reporting a real
-        // conflict — the exact scenario where `branch` conflicts with `base`
-        // because base moved on independently after `branch` diverged.
-        let merge_base = context
-            .git()
-            .get_merge_base(base_branch, branch)?
-            .unwrap_or_else(|| base_commit.clone());
-        let res = context.git().merge_tree_write_tree_name_only(
-            &merge_base,
-            &current_tree,
-            &their_tree,
-        )?;
-
-        if !res.conflicted_files.is_empty() {
-            return Ok(Some(CompatibilityFailure {
-                blocking_branch: branch.clone(),
-                base_branch: base_branch.to_string(),
-                conflicted_files: res.conflicted_files,
-            }));
-        }
-
-        current_tree = res.tree_oid;
-    }
-
-    Ok(None)
-}
-
 /// One branch's conflict, as reached by `compose_environment` (and, for the
 /// read-only display paths, by `preflight_compatibility_report`). Serialized
 /// into an environment's build record — see `crate::utils::build_record`.
@@ -2474,17 +2407,16 @@ pub struct CompatibilityConflict {
 }
 
 /// Simulate composing `branches_in_order` onto `base_branch`, in the same
-/// order and with the same read-only `git merge-tree` primitive as
-/// `preflight_compatibility_merge_tree`, but reporting *every* branch that
-/// cannot be folded in rather than stopping at the first one.
+/// order and with the read-only `git merge-tree` primitive, but reporting
+/// *every* branch that cannot be folded in rather than stopping at the first.
 ///
 /// A conflicting branch is excluded from the running composition (not
 /// merged, its tree left out) and later branches are checked against what
 /// actually accumulated without it — so one preflight names every branch
 /// that needs attention, instead of the caller re-running rebuild once per
 /// conflict to discover the next one. This does not build or mutate
-/// anything; it is the same kind of simulation as
-/// `preflight_compatibility_merge_tree`, just exhaustive.
+/// anything. Being tree-based it is an approximation of a build, which
+/// `predict_composition` is not.
 pub fn preflight_compatibility_report(
     context: &GlobalContext,
     base_branch: &str,
@@ -2508,8 +2440,7 @@ pub fn preflight_compatibility_report(
 
     for branch in branches_in_order {
         let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
-        // See the comment in `preflight_compatibility_merge_tree` — this
-        // must be the true common ancestor of `base_branch` and `branch`,
+        // This must be the true common ancestor of `base_branch` and `branch`,
         // not `base_branch`'s current tip, or a branch that conflicts with
         // base (because base moved on after it diverged) is missed entirely.
         let merge_base = context
@@ -2572,7 +2503,7 @@ pub fn preflight_compatibility_report_local(
         let Ok(their_tree) = context.git().rev_parse(&format!("{}^{{tree}}", branch)) else {
             continue;
         };
-        // See the comment in `preflight_compatibility_merge_tree` — must be
+        // Must be
         // the true common ancestor, not `base_branch`'s current tip.
         let merge_base = context
             .git()
@@ -2607,50 +2538,31 @@ pub fn preflight_compatibility_report_local(
 // Pre-promote Conflict Checking
 // =============================================================================
 
-/// Check whether a new branch conflicts with any branch already promoted to an environment
+/// The conflict that would hold `new_branch` if it were promoted to `env_name`
+/// right now, or `None` when it would be composed.
 ///
-/// This runs before state is modified, so if a conflict is found no changes have been made.
-/// It checks the new branch pairwise against every existing promoted branch by:
-/// 1. Creating a throwaway branch from base_branch
-/// 2. Squash-merging the existing promoted branch onto it
-/// 3. Dry-run merging the new branch to detect conflicts
-/// 4. Always cleaning up the throwaway branch
+/// Runs [`predict_composition`] over the environment as it would be declared
+/// after the promote — a clone with `new_branch` appended in promotion order —
+/// so the verdict comes from the same merge a rebuild runs, and
+/// `conflicts_with` names the real partner (the base, or the promoted peer it
+/// collided with) rather than always the base. An empty environment is not
+/// checked: the first branch has no peers, and a conflict with the base alone
+/// is what the rebuild will report.
 ///
-/// All conflicting pairs are collected and reported in a single error.
-pub fn check_pre_promote_conflicts(
+/// Only `new_branch` is judged. A branch already promoted that the base has
+/// since moved out from under is held by every build and does not stop an
+/// unrelated branch being promoted; the old tree-based check refused that
+/// promote ("environment already contains incompatible promoted branches").
+///
+/// Split from the wording so a *planner* can record the refusal on the plan;
+/// `core::render::render_promote_refusal` says it.
+pub fn pre_promote_conflict(
     context: &GlobalContext,
     new_branch: &str,
     existing_branches: &[String],
     base_branch: &str,
     env_name: &str,
-) -> Result<()> {
-    match pre_promote_conflict_reason(
-        context,
-        new_branch,
-        existing_branches,
-        base_branch,
-        env_name,
-    )? {
-        Some(reason) => Err(anyhow::anyhow!("{}", reason)),
-        None => Ok(()),
-    }
-}
-
-/// The reason `new_branch` cannot be promoted, or `None` when it can.
-///
-/// Split out from [`check_pre_promote_conflicts`] so a *planner* can run the
-/// same simulation and record the refusal on the plan, rather than a
-/// pre-check intercepting before the plan exists. That is the AGENTS.md
-/// gotcha about a pre-check that intercepts: the refusal was a real decision
-/// being made somewhere the plan could not show it. The wrapper above keeps
-/// the error form for any caller that only wants to fail.
-pub fn pre_promote_conflict_reason(
-    context: &GlobalContext,
-    new_branch: &str,
-    existing_branches: &[String],
-    base_branch: &str,
-    env_name: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<CompatibilityConflict>> {
     if existing_branches.is_empty() {
         return Ok(None);
     }
@@ -2662,43 +2574,12 @@ pub fn pre_promote_conflict_reason(
         env_name
     ));
 
-    // Sequential compatibility simulation:
-    // base + existing promoted branches (in order) + new branch (appended).
-    let mut sequence = existing_branches.to_vec();
-    sequence.push(new_branch.to_string());
+    let mut proposed = Environment::new(base_branch.to_string());
+    proposed.branches = existing_branches.to_vec();
+    proposed.branches.push(new_branch.to_string());
 
-    let Some(failure) = preflight_compatibility_merge_tree(context, base_branch, &sequence)? else {
-        return Ok(None);
-    };
-
-    // If an existing branch blocks before we even reach `new_branch`, the environment is
-    // already in a bad state (should be rare; typically prevented by earlier checks).
-    if failure.blocking_branch != new_branch {
-        return Ok(Some(format!(
-            "Cannot promote '{}' to environment '{}': environment already contains incompatible promoted branches.\n\
-             First conflict occurs when merging '{}' onto '{}'.",
-            new_branch, env_name, failure.blocking_branch, base_branch
-        )));
-    }
-
-    let mut msg = format!(
-        "Cannot promote '{}' to environment '{}': compatibility check failed.\n\n",
-        new_branch, env_name
-    );
-    msg.push_str(&format!(
-        "  {} conflicts with {}\n",
-        new_branch, base_branch
-    ));
-    for f in &failure.conflicted_files {
-        msg.push_str(&format!("    {}\n", f));
-    }
-    msg.push('\n');
-    msg.push_str(&format!("Fix {} first:\n", new_branch));
-    msg.push_str(&format!(
-        "  git checkout {} && git rebase {}\n",
-        new_branch, base_branch
-    ));
-    Ok(Some(msg))
+    let prediction = predict_composition(context, &proposed, env_name)?;
+    Ok(prediction.held.into_iter().find(|h| h.branch == new_branch))
 }
 
 #[cfg(test)]

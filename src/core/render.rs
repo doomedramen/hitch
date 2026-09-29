@@ -499,6 +499,59 @@ pub enum ExclusionReason {
     Unknown,
 }
 
+/// The reason a promote is refused because the branch would be held by the
+/// rebuild it triggers. `conflict.conflicts_with` is the real partner: the
+/// base gets the plain wording, a promoted peer is named as being already in
+/// the environment. Either way the remedy is rebasing the branch onto that
+/// partner: `hitch resolve` only acts on a branch the environment already
+/// declares, and this one is not promoted yet.
+pub fn render_promote_refusal(
+    new_branch: &str,
+    environment: &str,
+    base: &str,
+    conflict: &crate::utils::prelude::CompatibilityConflict,
+) -> String {
+    let mut msg = format!(
+        "Cannot promote '{}' to environment '{}': compatibility check failed.\n\n",
+        new_branch, environment
+    );
+    if conflict.conflicts_with == base {
+        msg.push_str(&format!("  {} conflicts with {}\n", new_branch, base));
+    } else {
+        msg.push_str(&format!(
+            "  {} conflicts with {}, which is already in {}\n",
+            new_branch, conflict.conflicts_with, environment
+        ));
+    }
+    for f in &conflict.conflicted_files {
+        msg.push_str(&format!("    {}\n", f));
+    }
+    msg.push('\n');
+    msg.push_str(&format!("Fix {} first:\n", new_branch));
+    msg.push_str(&format!(
+        "  git checkout {} && git rebase {}\n",
+        new_branch, conflict.conflicts_with
+    ));
+    msg
+}
+
+/// The advisory a release plan carries for a dependent environment it will not
+/// rebuild because its composition would hold a branch.
+pub fn render_dependent_skip(
+    environment: &str,
+    conflict: &crate::utils::prelude::CompatibilityConflict,
+) -> String {
+    let files: String = conflict
+        .conflicted_files
+        .iter()
+        .map(|f| format!("\n  {}", f))
+        .collect();
+    format!(
+        "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto '{}':{}",
+        environment, conflict.branch, conflict.conflicts_with, files
+    )
+}
+
 /// Render an environment equation: `dev = main + auth + payments`.
 ///
 /// The `excluded` list is rendered underneath, indented, one per line — so a

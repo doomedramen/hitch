@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result};
 
 use crate::commands::global_context::GlobalContext;
+use crate::core::render::render_dependent_skip;
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
     changed_inputs, AppliedEffect, CompositionPlan, ConfirmationRequirement,
@@ -49,7 +50,7 @@ use crate::types::{Environment, HitchConfig};
 use crate::utils::build_record::PinnedBranch;
 use crate::utils::git_operations::GitOperations;
 use crate::utils::prelude::{
-    access_metadata_read_only, modify_metadata, preflight_compatibility_merge_tree, publish_branch,
+    access_metadata_read_only, modify_metadata, predict_composition, publish_branch,
     push_branch_with_deploy_key_if_configured, rebuild_environment, with_locked_env,
     CompatibilityConflict, PublishOutcome, PushOutcome,
 };
@@ -811,23 +812,16 @@ fn plan_dependents(
             .cloned()
             .collect();
 
-        // A preflight is a *prediction* — the same word the rest of the
-        // codebase uses for it — and the executor still records the outcome it
-        // observes. Run here so a plan does not declare a rebuild it already
-        // knows cannot happen.
-        if let Some(failure) = preflight_compatibility_merge_tree(context, &env.base, &effective)? {
-            let files: Vec<String> = failure
-                .conflicted_files
-                .iter()
-                .map(|f| format!("\n  {}", f))
-                .collect();
-            warnings.push(PlanWarning::advisory(format!(
-                "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto \
-                 '{}':{}",
-                name,
-                failure.blocking_branch,
-                failure.base_branch,
-                files.join("")
+        // A prediction, and the executor still records the outcome it observes.
+        // Run here so a plan does not declare a rebuild it already knows cannot
+        // happen. It is the same composition the rebuild runs, over the branch
+        // list the rebuild will have, so a held branch here is a held branch
+        // there.
+        let mut proposed = env.clone();
+        proposed.branches = effective;
+        if let Some(conflict) = predict_composition(context, &proposed, &name)?.held.first() {
+            warnings.push(PlanWarning::advisory(render_dependent_skip(
+                &name, conflict,
             )));
             continue;
         }

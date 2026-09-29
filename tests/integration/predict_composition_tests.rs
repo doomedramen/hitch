@@ -70,96 +70,71 @@ mod tests {
     type Scenario = (Vec<&'static str>, &'static str);
 
     /// Runs one scenario and returns
-    /// `(old_promote_refuses, new_promote_refuses, old_dependent_skips, new_dependent_skips)`.
+    /// `(promote_of_new_is_refused, environment_has_any_held_branch)`, the two
+    /// questions the promote and release planners ask of the prediction. The
+    /// expected values were established against the tree-based oracles this
+    /// replaced (run side by side in the previous commit) and are the old
+    /// verdicts, except where a scenario says otherwise.
     fn verdicts(
         build: impl Fn(&TestEnvironment) -> anyhow::Result<Scenario>,
-    ) -> anyhow::Result<(bool, bool, bool, bool)> {
+    ) -> anyhow::Result<(bool, bool)> {
         let framework = HitchTestFramework::new()?;
         let mut out = None;
         framework.with_test_environment(TestSetup::HitchInit, |env| {
             let (existing, new) = build(env)?;
             let ctx = context_for(env)?;
-            let existing_owned: Vec<String> = existing.iter().map(|s| s.to_string()).collect();
-
-            let old_refuses = hitch::utils::prelude::pre_promote_conflict_reason(
-                &ctx,
-                new,
-                &existing_owned,
-                "main",
-                "dev",
-            )?
-            .is_some();
             let mut all = existing.clone();
             all.push(new);
-            let old_skips = hitch::utils::prelude::preflight_compatibility_merge_tree(
-                &ctx,
-                "main",
-                &all.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            )?;
-
             let proposed = predict_composition(&ctx, &environment("main", &all), "dev")?;
-            let new_refuses = proposed.held.iter().any(|h| h.branch == new);
-            let new_skips = !proposed.held.is_empty();
-
-            if let Some(failure) = &old_skips {
-                if let Some(h) = proposed
-                    .held
-                    .iter()
-                    .find(|h| h.branch == failure.blocking_branch)
-                {
-                    let mut old_files = failure.conflicted_files.clone();
-                    let mut new_files = h.conflicted_files.clone();
-                    old_files.sort();
-                    new_files.sort();
-                    assert_eq!(old_files, new_files, "same conflicted files");
-                }
-            }
-            out = Some((old_refuses, new_refuses, old_skips.is_some(), new_skips));
+            out = Some((
+                proposed.held.iter().any(|h| h.branch == new),
+                !proposed.held.is_empty(),
+            ));
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(out.expect("scenario ran"))
     }
 
     #[test]
-    fn differential_clean_siblings_agree() -> anyhow::Result<()> {
+    fn predicts_clean_siblings_agree() -> anyhow::Result<()> {
         let v = verdicts(|env| {
             seed_shared(env)?;
             branch_off_main(env, "feat-a", "a.txt", "a\n")?;
             branch_off_main(env, "feat-b", "b.txt", "b\n")?;
             Ok((vec!["feat-a"], "feat-b"))
         })?;
-        assert_eq!(v, (false, false, false, false));
+        assert_eq!(v, (false, false));
         Ok(())
     }
 
     #[test]
-    fn differential_non_overlapping_edits_to_one_file_agree() -> anyhow::Result<()> {
+    fn predicts_non_overlapping_edits_to_one_file_agree() -> anyhow::Result<()> {
         let v = verdicts(|env| {
             seed_shared(env)?;
             branch_off_main(env, "feat-a", "shared.txt", "ONE\ntwo\nthree\nfour\nfive\n")?;
             branch_off_main(env, "feat-b", "shared.txt", "one\ntwo\nthree\nfour\nFIVE\n")?;
             Ok((vec!["feat-a"], "feat-b"))
         })?;
-        assert_eq!(v, (false, false, false, false));
+        assert_eq!(v, (false, false));
         Ok(())
     }
 
     #[test]
-    fn differential_peer_conflict_agrees() -> anyhow::Result<()> {
+    fn predicts_peer_conflict_agrees() -> anyhow::Result<()> {
         let v = verdicts(|env| {
             seed_shared(env)?;
             branch_off_main(env, "feat-a", "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
             branch_off_main(env, "feat-b", "shared.txt", "B\ntwo\nthree\nfour\nfive\n")?;
             Ok((vec!["feat-a"], "feat-b"))
         })?;
-        assert_eq!(v, (true, true, true, true));
+        assert_eq!(v, (true, true));
         Ok(())
     }
 
     /// AGENTS.md "Wrong merge-base": the new branch conflicts with a base that
     /// moved after it diverged.
     #[test]
-    fn differential_new_branch_conflicts_with_moved_base_agrees() -> anyhow::Result<()> {
+    fn predicts_new_branch_conflicts_with_moved_base_agrees() -> anyhow::Result<()> {
         let v = verdicts(|env| {
             seed_shared(env)?;
             branch_off_main(env, "feat-a", "a.txt", "a\n")?;
@@ -172,7 +147,7 @@ mod tests {
             )?;
             Ok((vec!["feat-a"], "feat-b"))
         })?;
-        assert_eq!(v, (true, true, true, true));
+        assert_eq!(v, (true, true));
         Ok(())
     }
 
@@ -181,10 +156,11 @@ mod tests {
     /// with everything else. The old promote check refused the unrelated new
     /// branch anyway ("environment already contains incompatible promoted
     /// branches"); the composition, which is what the rebuild does, accepts it.
-    /// The dependent-skip verdict is unchanged: the environment does hold
+    /// The first flag is therefore `false` where the old oracle said `true`. The
+    /// dependent-skip verdict is unchanged: the environment does hold
     /// something, so a release still declines to rebuild it.
     #[test]
-    fn differential_unrelated_new_branch_beside_an_already_held_one() -> anyhow::Result<()> {
+    fn predicts_unrelated_new_branch_beside_an_already_held_one() -> anyhow::Result<()> {
         let v = verdicts(|env| {
             seed_shared(env)?;
             branch_off_main(env, "feat-a", "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
@@ -197,7 +173,7 @@ mod tests {
             )?;
             Ok((vec!["feat-a"], "feat-c"))
         })?;
-        assert_eq!(v, (true, false, true, true));
+        assert_eq!(v, (false, true));
         Ok(())
     }
 
