@@ -55,7 +55,7 @@ pub fn run(args: LogCommand, context: &GlobalContext) -> Result<()> {
         // So the check is "known now, or seen in an event", not "configured".
         let config =
             access_metadata_read_only(&context, |config: &HitchConfig| Ok(config.clone()))?;
-        if !config.environments.contains_key(name) && log.entries.is_empty() {
+        if !config.environments.contains_key(name) && !seen_in_history(&context, name)? {
             let mut names: Vec<&str> = config.environments.keys().map(|k| k.as_str()).collect();
             names.sort_unstable();
             let known = if names.is_empty() {
@@ -83,4 +83,22 @@ pub fn run(args: LogCommand, context: &GlobalContext) -> Result<()> {
         );
         Ok(())
     }
+}
+
+/// Whether any scanned event names `name`, ignoring the query's filters and
+/// limit — a filtered or truncated log says nothing about whether the
+/// environment ever existed.
+fn seen_in_history(context: &GlobalContext, name: &str) -> Result<bool> {
+    let everything = build_activity(
+        context,
+        &ActivityQuery {
+            limit: usize::MAX,
+            ..Default::default()
+        },
+    )?;
+    Ok(everything
+        .entries
+        .iter()
+        .flat_map(|e| &e.events)
+        .any(|ev| ev.environment() == name))
 }

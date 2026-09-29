@@ -767,7 +767,7 @@ mod tests {
                 let stdout = result.assert_success().stdout().to_string();
                 let document = json_document(&stdout)?;
                 let mut found = Vec::new();
-                pascal_case_tokens(&document, &mut found);
+                pascal_case_tokens(&document, &[], &mut found);
                 found.sort();
                 found.dedup();
                 assert!(

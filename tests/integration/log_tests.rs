@@ -842,24 +842,56 @@ mod tests {
     fn hitch_log_json_is_one_document_with_snake_case_enums() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            add_env(env, "dev");
-            make_feature(env, "feature/a")?;
-            promote(env, "feature/a", "dev");
+            // A rebuild with a held branch (WithHolds + HoldPair), and an
+            // approval request (an event carrying `direction`).
+            setup_hold(env)?;
+            rebuild(env, "dev");
+            add_env(env, "prod");
+            commit_config(env, "2026-01-01T00:00:00Z", |c| {
+                c["environments"]["prod"]["requires_approval"] = serde_json::json!(true);
+                c["environments"]["prod"]["approvers"] = serde_json::json!(["a@example.com"]);
+                c["environments"]["prod"]["min_approvals"] = serde_json::json!(1);
+            })?;
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "prod"])
+                .execute()?
+                .assert_success();
 
             let result = env.hitch.run().args(&["--json", "log"]).execute()?;
             let stdout = result.assert_success().stdout();
             let doc: serde_json::Value = serde_json::from_str(&stdout)?;
             assert_eq!(doc["schema_version"], 1);
-            let kind = doc["log"]["entries"][0]["events"][0]["kind"]
-                .as_str()
-                .expect("kind is a string");
-            assert_eq!(kind, kind.to_lowercase(), "kind is snake_case: {kind}");
-            let mut found = Vec::new();
-            // Actor names are people's names, capitalised by nature; the
-            // contract is about the enums, which live in `events`.
+
+            let mut kinds = std::collections::BTreeSet::new();
+            let mut statuses = std::collections::BTreeSet::new();
             for entry in doc["log"]["entries"].as_array().unwrap() {
-                pascal_case_tokens(&entry["events"], &mut found);
+                let when = entry["when"].as_str().expect("when is a string");
+                chrono::DateTime::parse_from_rfc3339(when)?;
+                assert!(when.ends_with('Z'), "`when` is UTC: {when}");
+                for ev in entry["events"].as_array().unwrap() {
+                    kinds.insert(ev["kind"].as_str().unwrap().to_string());
+                    if let Some(st) = ev["outcome"]["status"].as_str() {
+                        statuses.insert(st.to_string());
+                    }
+                    if ev["kind"].as_str().unwrap().starts_with("approval_") {
+                        assert_eq!(ev["direction"], "promote", "{ev}");
+                    }
+                }
             }
+            for kind in &kinds {
+                assert_eq!(kind, &kind.to_lowercase(), "kind is snake_case: {kind}");
+            }
+            assert!(kinds.contains("rebuilt"), "{kinds:?}");
+            assert!(kinds.contains("approval_requested"), "{kinds:?}");
+            assert!(statuses.contains("with_holds"), "{statuses:?}");
+
+            let mut found = Vec::new();
+            pascal_case_tokens(
+                &doc,
+                &["actor", "commit", "reason", "by", "request_id"],
+                &mut found,
+            );
             found.sort();
             found.dedup();
             assert!(
@@ -943,6 +975,55 @@ mod tests {
                 .assert_success()
                 .stdout();
             assert!(out.contains("metadata commit"), "{out}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_of_a_removed_environment_is_valid_even_when_nothing_matches() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            env.hitch
+                .run()
+                .args(&["remove", "dev"])
+                .execute()?
+                .assert_success();
+            for extra in [vec!["--branch", "no-such-branch"], vec!["--limit", "0"]] {
+                let mut args = vec!["log", "--env", "dev"];
+                args.extend(extra.iter().copied());
+                env.hitch.run().args(&args).execute()?.assert_success();
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn hitch_log_exits_zero_with_an_unreadable_commit_and_says_so() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            env.git.run(&["checkout", "hitch-metadata"])?;
+            let good = env.fs.read_file("hitch.json")?;
+            env.fs.write_file("hitch.json", "{not json")?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: corrupt"])?;
+            env.fs.write_file("hitch.json", &good)?;
+            env.git.run(&["add", "-f", "hitch.json"])?;
+            env.git.run(&["commit", "-m", "test: restore"])?;
+            env.git.run(&["checkout", "main"])?;
+
+            let out = env
+                .hitch
+                .run()
+                .args(&["log"])
+                .execute()?
+                .assert_success()
+                .stdout();
+            assert!(out.contains("could not be read"), "{out}");
             Ok::<(), anyhow::Error>(())
         });
         Ok(())
