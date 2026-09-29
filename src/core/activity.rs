@@ -350,7 +350,8 @@ pub struct ActivityLog {
 pub struct ActivityQuery {
     pub environment: Option<String>,
     pub branch: Option<String>,
-    /// Maximum number of entries returned (not commits scanned).
+    /// Maximum number of entries returned (not commits scanned). With `branch`
+    /// set, rebuild entries that end up filtered out still count toward it.
     pub limit: usize,
 }
 
@@ -419,51 +420,61 @@ fn drop_event(drafts: &mut [Draft], live_entries: &mut usize, draft: usize, even
 }
 
 /// Fills in the outcome of the newest `Rebuilt` event per environment, and only
-/// when the live build record provably came from that rebuild: the record's
-/// `metadata_sha` is a transient tip written between the rebuild's lock commit
-/// and its `rebuilt_at` stamp, so it must be an ancestor of the stamp commit
-/// (`c1`) and not of the previous rebuild's stamp commit (`c2`). Any doubt
-/// (ancestry error, non-`Known` record, an older rebuild that may be out of
-/// sight) leaves the event `Unrecorded`; a wrong attachment is worse than none.
+/// when the live build record provably came from that rebuild. The record's
+/// `metadata_sha` is a transient tip written after the rebuild's lock commit and
+/// before its `rebuilt_at` stamp (`c1`), so it must be `c1` or an ancestor on
+/// the first-parent line, and no commit strictly between the two may have
+/// stamped `rebuilt_at` again (that would be a later rebuild that wrote no
+/// record). The range check reads history beyond the walk, so a truncated walk
+/// still attaches. Any doubt (unreadable commit, non-`Known` record, a
+/// `metadata_sha` off the first-parent line) leaves the event `Unrecorded`; a
+/// wrong attachment is worse than none.
 fn attach_build_records(
     context: &GlobalContext,
+    reader: &mut ConfigReader<'_>,
     entries: &mut [ActivityEntry],
-    older_rebuilds_visible: bool,
 ) {
     use crate::utils::build_record::{read_state, EnvironmentBuildState};
 
     let git = context.git();
-    let is_ancestor = |a: &str, b: &str| -> Option<bool> {
-        git.get_merge_base(a, b)
-            .ok()
-            .map(|m| m.as_deref() == Some(a))
-    };
-    let mut seen: std::collections::HashMap<String, Vec<(usize, usize)>> =
+    let mut newest: std::collections::HashMap<String, (usize, usize)> =
         std::collections::HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
         for (k, ev) in entry.events.iter().enumerate() {
             if let HitchEvent::Rebuilt { environment, .. } = ev {
-                seen.entry(environment.clone()).or_default().push((i, k));
+                newest.entry(environment.clone()).or_insert((i, k));
             }
         }
     }
-    for (environment, positions) in seen {
+    for (environment, (i1, k1)) in newest {
         let Ok(EnvironmentBuildState::Known(record)) = read_state(git, &environment) else {
             continue;
         };
-        let (i1, k1) = positions[0];
-        let c1 = entries[i1].commit.clone();
-        if is_ancestor(&record.metadata_sha, &c1) != Some(true) {
+        let c1 = entries[i1].commit.as_str();
+        let Some(pos1) = reader.shas.iter().position(|s| *s == c1) else {
+            continue;
+        };
+        let Some(pos_m) = reader.shas.iter().position(|s| *s == record.metadata_sha) else {
+            continue;
+        };
+        if pos_m < pos1 {
             continue;
         }
-        match positions.get(1) {
-            Some(&(i2, _)) => {
-                if is_ancestor(&record.metadata_sha, &entries[i2].commit) != Some(false) {
-                    continue;
-                }
+        let stamp = |cfg: &HitchConfig| cfg.environments.get(&environment).map(|e| e.rebuilt_at);
+        let mut clean = true;
+        for m in pos1 + 1..pos_m {
+            let (Some(new), Some(old)) = (reader.get(m).map(stamp), reader.get(m + 1).map(stamp))
+            else {
+                clean = false;
+                break;
+            };
+            if new != old {
+                clean = false;
+                break;
             }
-            None if !older_rebuilds_visible => continue,
-            None => {}
+        }
+        if !clean {
+            continue;
         }
         let included = record
             .included_branches
@@ -611,10 +622,7 @@ pub fn build_activity(
         })
         .collect();
 
-    // With a truncated or gappy walk an older rebuild may exist out of sight,
-    // so "no older rebuild" cannot be established.
-    let older_rebuilds_visible = !truncated && reader.skipped.is_empty();
-    attach_build_records(context, &mut entries, older_rebuilds_visible);
+    attach_build_records(context, &mut reader, &mut entries);
     if let Some(b) = query.branch.as_deref() {
         for entry in &mut entries {
             entry.events.retain(|ev| ev.branches().contains(&b));

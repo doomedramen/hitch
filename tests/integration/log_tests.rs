@@ -636,47 +636,6 @@ mod tests {
     }
 
     #[test]
-    fn a_record_from_a_rebuild_outside_the_walk_is_not_misattributed() -> anyhow::Result<()> {
-        let framework = HitchTestFramework::new()?;
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            add_env(env, "dev");
-            make_feature(env, "feat-1")?;
-            make_feature(env, "feat-2")?;
-            promote(env, "feat-1", "dev");
-            rebuild(env, "dev");
-            promote(env, "feat-2", "dev");
-            let log = activity(env, &query(1))?;
-            assert!(rebuilt_outcomes(&log).is_empty());
-            Ok::<(), anyhow::Error>(())
-        });
-        Ok(())
-    }
-
-    #[test]
-    fn a_truncated_walk_showing_one_rebuild_leaves_it_unrecorded() -> anyhow::Result<()> {
-        let framework = HitchTestFramework::new()?;
-        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
-            add_env(env, "dev");
-            make_feature(env, "feat-1")?;
-            promote(env, "feat-1", "dev");
-            rebuild(env, "dev");
-            let full = activity(env, &query(50))?;
-            assert!(matches!(
-                rebuilt_outcomes(&full).as_slice(),
-                [RebuildOutcome::Clean { .. }]
-            ));
-            let log = activity(env, &query(1))?;
-            assert!(log.truncated);
-            assert!(matches!(
-                rebuilt_outcomes(&log).as_slice(),
-                [RebuildOutcome::Unrecorded]
-            ));
-            Ok::<(), anyhow::Error>(())
-        });
-        Ok(())
-    }
-
-    #[test]
     fn a_legacy_repo_without_a_record_says_unrecorded() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
         let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
@@ -698,6 +657,146 @@ mod tests {
                 rebuilt_outcomes(&log).as_slice(),
                 [RebuildOutcome::Unrecorded]
             ));
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+    #[test]
+    fn a_truncated_walk_still_attaches_the_latest_rebuild() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            setup_hold(env)?;
+            rebuild(env, "dev");
+            let log = activity(env, &query(1))?;
+            assert!(matches!(
+                rebuilt_outcomes(&log).as_slice(),
+                [RebuildOutcome::WithHolds { .. }]
+            ));
+            make_feature(env, "f1")?;
+            make_feature(env, "f2")?;
+            add_env(env, "qa");
+            promote(env, "f1", "qa");
+            promote(env, "f2", "qa");
+            let log = activity(
+                env,
+                &ActivityQuery {
+                    environment: Some("dev".into()),
+                    ..query(1)
+                },
+            )?;
+            assert!(matches!(
+                rebuilt_outcomes(&log).as_slice(),
+                [RebuildOutcome::WithHolds { .. }]
+            ));
+            // Later commits pushed the rebuild out of a small walk entirely:
+            // nothing to attach to, and nothing invented.
+            let short = activity(env, &query(2))?;
+            assert!(short.truncated);
+            assert!(rebuilt_outcomes(&short).is_empty());
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_record_is_not_attached_when_a_later_rebuild_stamped_without_one() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            let before = activity(env, &query(50))?;
+            assert!(matches!(
+                rebuilt_outcomes(&before).as_slice(),
+                [RebuildOutcome::Clean { .. }]
+            ));
+            // A second rebuild stamp that wrote no record (as a legacy or
+            // record-less publish would).
+            commit_config(env, "2030-01-01T00:00:00Z", |c| {
+                c["environments"]["dev"]["rebuilt_at"] = "2030-01-01T00:00:00Z".into();
+            })?;
+            let log = activity(env, &query(50))?;
+            assert!(
+                matches!(
+                    rebuilt_outcomes(&log).first(),
+                    Some(RebuildOutcome::Unrecorded)
+                ),
+                "{:?}",
+                rebuilt_outcomes(&log)
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn a_record_whose_metadata_sha_is_not_before_the_rebuild_is_not_attached() -> anyhow::Result<()>
+    {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            add_env(env, "dev");
+            make_feature(env, "feat-1")?;
+            promote(env, "feat-1", "dev");
+            rebuild(env, "dev");
+            let original = env
+                .git
+                .run(&["cat-file", "-p", "refs/hitch/state/dev"])?
+                .stdout()
+                .to_string();
+            let attached = |env: &TestEnvironment, metadata_sha: &str| -> anyhow::Result<bool> {
+                let mut record: serde_json::Value = serde_json::from_str(&original)?;
+                record["metadata_sha"] = metadata_sha.into();
+                env.fs
+                    .write_file("record.tmp", &serde_json::to_string(&record)?)?;
+                let oid = env
+                    .git
+                    .run(&["hash-object", "-w", "record.tmp"])?
+                    .stdout()
+                    .trim()
+                    .to_string();
+                std::fs::remove_file(env.temp_dir.join("record.tmp"))?;
+                env.git
+                    .run(&["update-ref", "refs/hitch/state/dev", &oid])?
+                    .assert_success();
+                let log = activity(env, &query(50))?;
+                Ok(matches!(
+                    rebuilt_outcomes(&log).first(),
+                    Some(RebuildOutcome::Clean { .. })
+                ))
+            };
+            let original_sha = serde_json::from_str::<serde_json::Value>(&original)?
+                ["metadata_sha"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(attached(env, &original_sha)?, "control must attach");
+
+            // A commit on a side branch, off the first-parent line.
+            env.git
+                .run(&["checkout", "-b", "side", "hitch-metadata"])?
+                .assert_success();
+            env.git
+                .run(&["commit", "--allow-empty", "-m", "side"])?
+                .assert_success();
+            let side = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            env.git.run(&["checkout", "main"])?.assert_success();
+            assert!(!attached(env, &side)?, "side-branch sha must not attach");
+
+            // A metadata commit newer than the rebuild's stamp.
+            add_env(env, "qa");
+            let newer = env
+                .git
+                .run(&["rev-parse", "hitch-metadata"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert!(!attached(env, &newer)?, "newer sha must not attach");
             Ok::<(), anyhow::Error>(())
         });
         Ok(())
