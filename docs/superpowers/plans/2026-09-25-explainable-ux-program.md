@@ -420,6 +420,16 @@ The fix is a contract on `ExecutionReceipt::warnings`, not a deletion per site: 
 
 **Exit criteria:** No orphaned calculation can answer "what branches are included?" or "what is held?" any more. Docs match the code. All four gates green.
 
+**Status: PLAN AUTHORED** as `2026-09-25-explainable-ux-P10-docs-and-legacy-removal.md` (9 tasks, 9 Global Constraints, 3 recorded deviations). Three decisions made at authoring, with the user:
+
+- **`hitch resolve` migrates in P10.** It was the last mutation choosing a mode from a second merge opinion. A new `predict_composition` (offline pinning plus `compose_environment` with `Eject`, no replay) replaces all seven preflight call sites: the promote planner, release dependents, resolve, `conflicts`, `status`, `tree`, and the approval snapshot's conflict check, which was a fourth oracle not previously recorded. The `preflight_*` family and `merge_tree_write_tree_name_only` are then deleted, so the compiler enforces the exit criterion.
+- **The deferred plan/receipt defects are fixed in P10:**
+  - a refused promote narrating a rollback;
+  - a promote refusal naming the base instead of the conflicting peer;
+  - the release plan's wrong "Will not change" list;
+  - a release remedy that repeats the failed command.
+- **The desktop-only adapters are deleted** (`core/{timeline,details,workspace_index,workspace}.rs`). This deliberately overrides Global Constraint 2 and the "never make the desktop more broken" scope line, and deviates from spec M13's "after callers have migrated". The desktop repair stream rebuilds against the typed API.
+
 ---
 
 ## Definition of Done
