@@ -1333,7 +1333,7 @@ each entry with a reason (no line is exempt by shape, pasteable `git …` lines 
 new allow-list entry needs a reason string, and the reason is reviewed like
 code. Path-shaped internal ref names (`build/<env>/…`, `release/…`, `prev/`,
 `backup/`, `publish/`, `pending-resync/`, `state/`, `resolutions/` — see `REF_FAMILIES`) are
-forbidden in default output too; fixture branch names must avoid those seven
+forbidden in default output too; fixture branch names must avoid those
 family names.
 `hitch-metadata` renders as `settings` in effect rows (`short_ref`). An
 approval gate is a `Needs approval` / `⏳` section in `render_plan`, not the
