@@ -70,9 +70,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The integration harness spawns hitch (which itself shells out to git) for
     # every test; on the slower Windows runner this is far more expensive than on
-    # macOS (~3 min). Bound it so a genuine hang fails fast with retained logs
-    # instead of burning the 6h default.
-    timeout-minutes: 25
+    # macOS (~6 min). Bound it so a genuine hang fails fast with retained logs
+    # instead of burning the 6h default. The suite roughly doubled during the
+    # explainable-UX program, and Windows ran out of a 25-minute budget while
+    # still passing tests near the end of the run.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:

@@ -1048,11 +1048,32 @@ mod tests {
             // parent, new commit SHA — the stage OIDs the resolution key is
             // built from are untouched, but branch-b's tip commit is no
             // longer the (nor a descendant of the) commit the resolution's
-            // source_branch_head names.
+            // source_branch_head names. The message must change: a
+            // `--no-edit` amend in the same second as the original commit
+            // reproduces the same SHA, which made this test pass the replay.
             env.git.run(&["checkout", "branch-b"])?;
+            let before = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
             env.git
-                .run(&["commit", "--amend", "--no-edit", "--allow-empty"])?
+                .run(&[
+                    "commit",
+                    "--amend",
+                    "--allow-empty",
+                    "-m",
+                    "branch-b (amended)",
+                ])?
                 .assert_success();
+            let after = env
+                .git
+                .run(&["rev-parse", "HEAD"])?
+                .stdout()
+                .trim()
+                .to_string();
+            assert_ne!(before, after, "the amend must produce a new commit");
             env.git.run(&["checkout", "main"])?;
 
             env.hitch
