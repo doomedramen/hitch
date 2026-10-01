@@ -593,8 +593,11 @@ mod tests {
         let fixtures = TestFixtures::new();
 
         // Test each scenario
-        for scenario in TestScenario::all() {
-            let scenario_dir = format!("scenario_{}", fs.temp_file("test", "")?.display());
+        // One directory per scenario, named by index: the old name embedded a
+        // whole absolute temp path, which is a valid nested path on Unix but
+        // an invalid name on Windows (`scenario_C:\...`).
+        for (index, scenario) in TestScenario::all().iter().enumerate() {
+            let scenario_dir = format!("scenario_{}", index);
             fs.create_dir(&scenario_dir)?;
 
             let scenario_fs = FileSystemHelpers::new(&fs.resolve_path(&scenario_dir));
