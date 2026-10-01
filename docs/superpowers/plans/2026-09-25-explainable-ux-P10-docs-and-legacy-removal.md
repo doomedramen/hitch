@@ -177,16 +177,16 @@
     diffing `hitch --verbose release … --dry-run` output before and after.
     Paste both in the report.
 
-- [ ] **Failing tests first** for the two behaviour changes:
+- [x] **Failing tests first** for the two behaviour changes:
   - `hitch --verbose why <x>` and `hitch --verbose status` honour the global
     flag. Model them on P9's `a_global_verbose_flag_is_honoured_by_log` in
     `tests/integration/log_tests.rs`.
-- [ ] Remove the plumbing. Callers passing `StepNarration::Suppressed` or
+- [x] Remove the plumbing. Callers passing `StepNarration::Suppressed` or
   `&mut |_| {}` lose that argument. `rebuild_environment_opts` merges into
   `rebuild_environment` only if no caller passes a non-default replay or
   `on_conflict_override`. The inventory says none do outside `prelude.rs`;
   re-verify with grep, and if one does, keep `_opts` and say so in the report.
-- [ ] Audit each `#[allow(dead_code)]` in `src/`
+- [x] Audit each `#[allow(dead_code)]` in `src/`
   (`types.rs:203`, `utils/confirm.rs:52`, `utils/diff.rs:249`,
   `utils/snapshot.rs:227`, `commands/global_context.rs:53,67`,
   `git_operations.rs:21`, `utils/logging.rs:9`, `utils/output.rs:1`; the
@@ -196,13 +196,13 @@
   - Keep an attribute only where the item is used from `tests/` alone and the
     test is worth keeping. In that case add a one-line reason comment.
   - Report the list.
-- [ ] Update `AGENTS.md`:
+- [x] Update `AGENTS.md`:
   - the "nested operation narrates nothing" gotcha: the mechanism is gone, and
     the rule now is that executors call `context.log_verbose` for mechanism;
   - the `src/utils/prelude.rs` and `src/operations/` entries;
   - delete every mention of `StepNarration`, `StepLogger` and
     `format_conflict_report` as live code.
-- [ ] Gates: `just format`, `just format-check && just lint`, `just test`.
+- [x] Gates: `just format`, `just format-check && just lint`, `just test`.
   Commit: `P10 Task 1: delete the dead narration plumbing and other dead code`.
 
 ---
@@ -220,20 +220,20 @@ under `tests/`).
 - Produces: nothing new. `core::activity`, `core::state`, `core::status` and
   `core::why` are the typed API the desktop repair stream builds against.
 
-- [ ] Prove there is no CLI caller: `grep -rn "timeline::\|details::\|workspace_index\|workspace::BranchRow\|WorkspaceIndexModel\|BranchRow" src/ | grep -v "^src/core/\(timeline\|details\|workspace_index\|workspace\)\.rs"`
+- [x] Prove there is no CLI caller: `grep -rn "timeline::\|details::\|workspace_index\|workspace::BranchRow\|WorkspaceIndexModel\|BranchRow" src/ | grep -v "^src/core/\(timeline\|details\|workspace_index\|workspace\)\.rs"`
   must be empty. If it is not, stop and report NEEDS_CONTEXT naming the caller.
-- [ ] Delete the four files, their `mod` lines, and their tests. Anything in
+- [x] Delete the four files, their `mod` lines, and their tests. Anything in
   them that only they used, such as a helper in `core/activity.rs` that
   `timeline.rs` imported, goes too, *if* nothing else uses it.
-- [ ] `git diff --stat -- crates/` shows nothing (Constraint 8). Record in the
+- [x] `git diff --stat -- crates/` shows nothing (Constraint 8). Record in the
   report the list of desktop symbols that no longer resolve:
   `grep -rn "hitch::core::" crates/hitch-desktop/src-tauri/src`.
-- [ ] Update `AGENTS.md`:
+- [x] Update `AGENTS.md`:
   - the `src/core/` entry: remove `workspace_index.rs`, `details.rs` and the
     timeline-adapter lines;
   - the "What this is" paragraph: the desktop crate no longer compiles
     against the core. State this and point at deviation 1 of this plan.
-- [ ] Gates. Commit: `P10 Task 2: delete the desktop-only adapters`.
+- [x] Gates. Commit: `P10 Task 2: delete the desktop-only adapters`.
 
 ---
 
@@ -289,19 +289,19 @@ conflict was with a peer. `CompatibilityFailure` had no field for the peer.
 `render.rs` owns both wordings (Constraint 7), and the refusal stays a
 `PlanWarningKind::PolicyRefusal`.
 
-- [ ] **Differential test first** (Constraint 4). Over the conflict scenarios:
+- [x] **Differential test first** (Constraint 4). Over the conflict scenarios:
   - `pre_promote_conflict_reason`'s old verdict, conflict or not, must agree
     with `predict_composition(proposed).held.iter().any(|h| h.branch == new)`;
   - `plan_dependents`' old skip decision must agree likewise.
 
   Commit the test while the old code still exists, then migrate.
-- [ ] **Failing test for D6's partner:** add `a`, then `b` conflicting with `a`
+- [x] **Failing test for D6's partner:** add `a`, then `b` conflicting with `a`
   but not with the base; `promote b` is refused and the message names `a`,
   not `main`.
-- [ ] Implement `predict_composition` and migrate both callers. Delete
+- [x] Implement `predict_composition` and migrate both callers. Delete
   `preflight_compatibility_merge_tree` (:2455) once it has no caller, and the
   `CompatibilityFailure` struct if nothing uses it.
-- [ ] Gates. Commit: `P10 Task 3: planners predict through the one composition`.
+- [x] Gates. Commit: `P10 Task 3: planners predict through the one composition`.
 
 ---
 
@@ -324,17 +324,17 @@ reads `held.conflicts_with == environment.base`, the same comparison as
 branch. `resolve_target_branch` picks the single held branch, or errors on
 zero or several, as it does now.
 
-- [ ] **Differential test first:** for every scenario in `resolve_tests.rs`
+- [x] **Differential test first:** for every scenario in `resolve_tests.rs`
   that reaches mode selection, the old report's `(branch, conflicts_with,
   files)` for the target equals the prediction's. Where a scenario disagrees,
   follow Constraint 4: the composition wins, and the scenario becomes a named
   regression test.
-- [ ] Migrate both call sites. The whole `resolve_tests.rs` and
+- [x] Migrate both call sites. The whole `resolve_tests.rs` and
   `resolve_crash_recovery_tests.rs` suites pass.
-- [ ] Update the `AGENTS.md` gotcha "`preflight_compatibility_report` is
+- [x] Update the `AGENTS.md` gotcha "`preflight_compatibility_report` is
   **not yet** a display-only function". After this task no mutation depends
   on it. Rewrite the entry to say so, and say that Task 5 deletes it.
-- [ ] Gates. Commit: `P10 Task 4: resolve reads its mode from the composition`.
+- [x] Gates. Commit: `P10 Task 4: resolve reads its mode from the composition`.
 
 ---
 
@@ -365,18 +365,18 @@ prediction only to fill the gap, with the wording "would be held on the next
 rebuild". `test_status_distinguishes_a_held_branch_from_one_that_would_be_held`
 must pass unchanged.
 
-- [ ] **Differential test first**, as in Tasks 3–4, for `conflicts` and
+- [x] **Differential test first**, as in Tasks 3–4, for `conflicts` and
   `status`'s would-be-held verdicts and for the snapshot's conflict boolean.
-- [ ] Migrate. Delete the three functions and the primitive. The compiler is
+- [x] Migrate. Delete the three functions and the primitive. The compiler is
   the proof: `cargo build -p hitch` must succeed with them gone.
-- [ ] Update `AGENTS.md`:
+- [x] Update `AGENTS.md`:
   - rewrite "One composition per kind" to say the preflight family is gone
     and that predictions go through `predict_composition`;
   - rewrite the "Wrong merge-base in `merge-tree` preflights" gotcha as
     history, keeping the warning for `merge_tree_compose`;
   - rewrite "A fact and a prediction must not share a glyph" to name the new
     prediction path.
-- [ ] Gates. Commit: `P10 Task 5: one oracle — status, tree, conflicts and approvals predict through the composition`.
+- [x] Gates. Commit: `P10 Task 5: one oracle — status, tree, conflicts and approvals predict through the composition`.
 
 ---
 
@@ -393,19 +393,19 @@ restored — nothing was changed" and costs extra metadata commits. The
 comment at `:97-117` says every refusal happens before arming, and that is
 false for a policy block. `demote.rs` has the same shape.
 
-- [ ] **Failing test first:** a conflict-refused promote (Task 3's scenario):
+- [x] **Failing test first:** a conflict-refused promote (Task 3's scenario):
   - stderr has no "Rolling back"/"restored";
   - `hitch-metadata` gains exactly **2** commits (lock and unlock; see the
     `AGENTS.md` rollback gotcha);
   - exit code is 1.
 
   Add the same test for demote, if demote can be policy-refused.
-- [ ] Fix. Check `plan.blocked_by()` in the command *before* arming, returning
+- [x] Fix. Check `plan.blocked_by()` in the command *before* arming, returning
   the same `PolicyBlocked` error the executor would, so the error is
   identical. Alternatively, arm only after the executor has passed its
   blocked check. Pick whichever keeps a single place deciding the refusal,
   and state the choice. Correct the comment at `:97-117`.
-- [ ] Gates. Commit: `P10 Task 6: a refused promote or demote rolls nothing back`.
+- [x] Gates. Commit: `P10 Task 6: a refused promote or demote rolls nothing back`.
 
 ---
 
@@ -415,7 +415,7 @@ false for a policy block. `demote.rs` has the same shape.
 (`build_conflict_error`), `src/core/render.rs:148-153`,
 `tests/integration/release_tests.rs`.
 
-- [ ] **Failing tests first:**
+- [x] **Failing tests first:**
   - A release that rebuilds `qa` and `prod` as dependents. "Will not change"
     lists neither of them, and lists each unaffected item exactly once.
     Decide what the list holds by reading `render_plan`'s "Will not change"
@@ -426,11 +426,11 @@ false for a policy block. `demote.rs` has the same shape.
     final step. The last step is the concrete fix, and the retry is only
     worded "then run `hitch release <env> <target>` again" after the fixing
     step.
-- [ ] Fix. `unaffected` excludes every environment in `dependents` and
+- [x] Fix. `unaffected` excludes every environment in `dependents` and
   de-duplicates in plan order. `build_conflict_error`'s remedy names the
   conflicting branch and the resolution command first. Read the four current
   steps; step 4 is the repeat.
-- [ ] Gates. Commit: `P10 Task 7: release plans say what they will not touch, once`.
+- [x] Gates. Commit: `P10 Task 7: release plans say what they will not touch, once`.
 
 ---
 
@@ -506,10 +506,10 @@ Content requirements (spec M13 and §34):
 - `DEVELOPMENT.md`: the structure tree includes `core/`, `operations/` and
   `crates/`.
 
-- [ ] Write the docs, with real output throughout.
-- [ ] Add the `json-schema.md` ↔ doc-comment test. It fails first against a
+- [x] Write the docs, with real output throughout.
+- [x] Add the `json-schema.md` ↔ doc-comment test. It fails first against a
   deliberately wrong list, then passes.
-- [ ] Gates. Commit: `P10 Task 8: architecture, JSON schema, README, SKILL, CHANGELOG`.
+- [x] Gates. Commit: `P10 Task 8: architecture, JSON schema, README, SKILL, CHANGELOG`.
 
 ---
 
@@ -517,7 +517,7 @@ Content requirements (spec M13 and §34):
 
 **Files:** `AGENTS.md`, the master plan, this file.
 
-- [ ] Build the **debug** binary and have a fresh agent walk a realistic day
+- [x] Build the **debug** binary and have a fresh agent walk a realistic day
   against a throwaway repo with `--yes --no-push`, in the same shape as P8
   Task 11 and P9 Task 9:
   - a conflicting promote: the refusal names the real partner and no rollback
@@ -531,11 +531,11 @@ Content requirements (spec M13 and §34):
 
   Check also that every README example still matches real output.
   Walkthrough defects are fixed before closing; they are not deferred.
-- [ ] Gates, in order, all clean.
-- [ ] Run `grep -rn "preflight_compatibility\|merge_tree_write_tree_name_only\|StepNarration\|StepLogger\|format_conflict_report\|get_commit_timestamp" src/ tests/ AGENTS.md SKILL.md README.md`.
+- [x] Gates, in order, all clean.
+- [x] Run `grep -rn "preflight_compatibility\|merge_tree_write_tree_name_only\|StepNarration\|StepLogger\|format_conflict_report\|get_commit_timestamp" src/ tests/ AGENTS.md SKILL.md README.md`.
   It is empty except for history prose in `AGENTS.md` that says the item is
   gone.
-- [ ] Master plan:
+- [x] Master plan:
   - tick the **Definition of Done** checklist item by item, and next to each
     tick name the test or doc that proves it;
   - mark P10 **COMPLETE**;
@@ -543,4 +543,48 @@ Content requirements (spec M13 and §34):
   - write a short **"Program closed"** section: what shipped, deviation 1
     (the desktop), deviation 3's open items, and the next decision (merging
     `explainable-ux` into `main`), which is the user's.
-- [ ] Add `## As executed` to this file.
+- [x] Add `## As executed` to this file.
+
+---
+
+## As executed
+
+P10 complete 2026-10-01. Suite: 204 lib + 632 integration + 1 `no_args_help`, zero failed; format, format-check, lint clean. Legacy-name grep is empty except history prose that says the item is gone.
+
+### Commits
+- Task 1 `1828a89` dead plumbing (`StepNarration`/`on_step`, `rebuild_environment_opts` merged, dead-code allows). Task 2 `81780d8` desktop adapters deleted.
+- Task 3 `a67e22a` (`predict_composition` + differential against the old oracles), `3b4183e` (planners migrated, old oracle callers deleted).
+- Task 4 `345c131`, `344106c` (resolve reads its mode from the composition; fix restores its sync).
+- Task 5 `4f1c7f3`, `7cd01db`, `5ceae3d` (conflicts, status, tree, approval snapshot; the last oracle deleted; `contained_in_base`).
+- Task 6 `2b06349` (refusal rolls nothing back). Task 7 `c905bb2` (release plan wording). Task 8 `39a1bfc`, `0f7968b` (docs, `HITCH_YES` fix).
+- Task 9: `c9895b4`, `7cb4b5c` (true partner), `056413c`, `9bf4170`, `09bb270` (walkthrough fallout), `9e6e989` (deferred-minor sweep), then this docs commit.
+
+### What landed
+One conflict oracle. `predict_composition` is `compose_environment` over offline pinning (Eject, no replay, no lock); promote and release planners, `resolve`, `conflicts`, `status`, `tree` and the approval snapshot all read it, and `preflight_*` / `merge_tree_write_tree_name_only` are gone. Dead narration plumbing and the four desktop-only adapters are deleted; `get_commit_timestamp` too. A refused promote/demote writes and rolls back nothing (`apply_may_write`). The release plan states what it will not touch once, and its conflict remedy is not the failed command. Docs: `docs/architecture/explainable-operations.md`, `docs/architecture/json-schema.md`, `CHANGELOG.md`, README, SKILL.md, AGENTS.md.
+
+### Rulings (meaning preserved)
+- **resolve keeps its own sync (T4).** `resolve` calls `synchronize_branches` on base and promoted branches before `predict_composition`; the prediction stays pure/offline. Why: Constraint 4 (preserve verdicts); the plan's "did not sync before" was wrong. Cost: resolve keeps its network dependency, as before.
+- **Migrated callers keep their old oracle's sync at the call site (T5).** Why: same lesson; cost: `conflicts` keeps a network dependency.
+- **`contained_in_base` is a snapshot fact (T5).** A per-branch "already in the base now" fact computed once in `build_state_snapshot` by local ancestry; the cleanup hint and status row read it. Why: a display reads the verdict, not re-derives it. Cost: one ancestry check per promoted branch.
+- **`HITCH_YES` parsed in code (T8).** clap `BoolishValueParser` (1/true/yes/on) rather than rewording four promises of `=1`. Why: it was a real bug. Cost: a small code change in a docs task, plus a CHANGELOG Fixed entry.
+- **Held-branch partner decided in `compose_environment` (T9, D1).** Base if the branch conflicts with base alone, else the first included peer it conflicts with pairwise, else the last composed. Why: the one oracle should name the true partner; fixes promote refusal, hold display and resolve's Mode A/B quirk at once. Cost: extra merge-tree calls per held branch only; `conflicts_with` in build records changes for base-collision-after-clean-peer (CHANGELOG).
+- **Approver eligibility is a planner refusal (T9, D3).** "Not enough eligible approvers" is a `PolicyRefusal` decided before arming. Why: the Task 6 rule. Cost: none.
+- **Walkthrough minors fixed too**, except short SHAs, which stay in normal output (spec §17).
+- **Local unpushed commits rewritten (T9 fix B).** Three commits folded into two so every commit builds (the first failed `cargo check` alone). Why: bisectability. Cost: the SHAs in the interim reports (`be1dfeb`, `9c3e5bf`, `8d04ec9`) no longer exist; the final tree is byte-identical.
+
+### Deviations from the tasks as written
+- Task 4: the plan said the old preflight did not sync; it did (`preflight_compatibility_report` called `synchronize_branches`). Resolve keeps its sync.
+- Task 5: needed a snapshot fact (`contained_in_base`) the plan did not list, to keep the cleanup hint and status row after the oracle's deletion.
+- Task 3 note: `predict_composition` errors on an unresolvable base where the old `_local` oracle returned no conflicts; display callers map `Err` to empty to preserve behaviour.
+- Task 9: the `compose_environment` partner change (D1) touched the oracle itself, beyond a display fix; the walkthrough also found D2 (`conflicts` printed "policy: Eject") and D3 (a no-approver promote narrated a rollback). All three re-checked by eye in a throwaway repo at close: D1 names `main` and the remedy is `git checkout c && git rebase main`, then `hitch promote c dev`; D2 has no "Eject"; D3 is refused by the plan with no rollback text.
+- Task 8: `HITCH_YES` fix and a CHANGELOG correction came from review, not the brief.
+
+### Behaviour changes
+All listed in `CHANGELOG.md`. In brief: an already-held sibling no longer blocks promoting an unrelated branch; promote prediction no longer syncs; the approval snapshot's `merge_conflicts` is true for peer-only collisions; status cleanup block is offline; `conflicts_with` names the true partner; an unresolvable base is an `Err` in the release plan's dependents; release plan `current` is null; `HITCH_YES=1` works.
+
+### Deferred minors
+- Release: a conflict against an earlier branch of the same release is not fixed by rebasing onto the target (pre-existing); the retry line could mention force-push; the unaffected-environment arm is untested.
+- Step-2 partner probe uses the peer's tip, not base-plus-peer (stale-peer label limit); the combination-only test relies on `merge.directoryRenames=true`.
+- Post-migration "differential" tests are regression tests only; `tree.rs` verbose fix untested.
+- A lost-test note: three lib tests went with deleted modules in Task 2 (report said none removed).
+- Open program items are listed in the master plan's "Program closed".

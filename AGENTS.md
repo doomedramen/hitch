@@ -62,9 +62,9 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P9 are authored and complete; P10 (docs and
-legacy removal) is the last phase. Later phases are authored as they approach, because their `file:lines`
-references go stale the moment the previous phase lands.
+independently of this program. The program is complete (P0–P10); further work is outside it. The master plan's
+"Program closed" section lists the open items and the next decision (merging
+`explainable-ux` into `main`, which is the user's).
 
 **The program lives on the `explainable-ux` branch, not `main`.** It forked from
 `main` at `5d81fb2` and `main` is meant to stay exactly there for its duration —

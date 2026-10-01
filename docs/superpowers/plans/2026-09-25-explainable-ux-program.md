@@ -16,7 +16,7 @@
 
 **Branch `explainable-ux`, forked from `main` at `5d81fb2`.** `main` is untouched and stays that way for the whole program; nothing here is intended to land on `main` piecemeal.
 
-Twenty-eight commits, so far:
+Roughly fifty commits:
 
 - `e01c2ee` — docs only: the spec and the P0–P2 phase plans.
 - `1f5b2dd` — P1 + P2's code, landed together. They share `src/utils/prelude.rs` and `src/commands/rebuild.rs`, and splitting them by hunk would leave a commit that does not compile — a worse artifact than a coarser one.
@@ -42,10 +42,12 @@ Twenty-eight commits, so far:
 - `5a81729`, `6596fbb`, `101f352`, `6d828b8`, `46e4c07`, `0185bea`, `12c8fd9`, `3c5c787`, `f80a48c`, `dfecbbb`, `12bb841`, `9c7d753`, `9e0f1da`, `48fc111` — P9 Tasks 1–8: the typed `HitchEvent` model and reader (`core/activity.rs`), lock collapse via `lock_purpose`, build-record attachment, `render_event`/`render_activity`, `hitch log`, the terminology test, and `timeline.rs` as an adapter.
 - `c49d713`, `28f7794` — P9 Task 9's walkthrough fallout (D1–D4).
 - P9's closing docs commit, "P9 complete: As executed, master plan status, AGENTS.md".
+- `1c5b435` — the P10 plan. Then P10 Tasks 1–9, `1828a89` … `9e6e989`: dead plumbing deleted (`1828a89`); desktop adapters deleted (`81780d8`); `predict_composition` and the planners migrated (`a67e22a`, `3b4183e`); `resolve` (`345c131`, `344106c`); display predictions, the approval snapshot and the last oracle (`4f1c7f3`, `7cd01db`, `5ceae3d`); refusal rolls nothing back (`2b06349`); release plan wording (`c905bb2`); docs (`39a1bfc`, `0f7968b`); the walkthrough's fallout (`c9895b4`, `7cb4b5c`, `056413c`, `9bf4170`, `09bb270`); the deferred-minor sweep (`9e6e989`).
+- P10's closing docs commit, "P10 complete: As executed, definition of done, program closed".
 
 None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --name-only main..explainable-ux -- crates/` is empty as a standing check.
 
-**P0–P9 are complete. P10 is next.** A mutating command shows its plan before applying and its receipt after, in one vocabulary; a read-only command shows one view of a snapshot, in the same vocabulary; and the two halves cannot disagree, because the renderer is pure and the models are projections. Six things are now true of the architecture that were not before P7, and all six are things the *next* phase has to respect:
+**P0–P10 are complete; the program is closed (see "Program closed").** A mutating command shows its plan before applying and its receipt after, in one vocabulary; a read-only command shows one view of a snapshot, in the same vocabulary; and the two halves cannot disagree, because the renderer is pure and the models are projections. Six things are now true of the architecture that were not before P7, and all six are things the *next* phase has to respect:
 
 - **One renderer, `src/core/render.rs`, is the only place in the codebase allowed to choose words.** It is pure and total: a plan or a receipt in, a `String` out, no context and no repository — and it now also renders the status matrix and `hitch why`, so the first renderer consumer with no `OperationPlan` behind it is covered by the same rule the four mutations are.
 - **A display reads a verdict; it never re-derives one.** `core/state.rs` answers "does this need a rebuild and what moved", `core/status.rs` projects that into a model, and `core/why.rs` projects it into an explanation. `commands/status.rs` and `commands/why.rs` format and nothing else. P8's metadata-only receipts take the same shape, and a new display path takes a model rather than a `GlobalContext`.
@@ -54,7 +56,7 @@ None of them touch `crates/hitch-desktop` (scope rule, above), and `git diff --n
 - **A nested operation narrates nothing.** `StepNarration::Suppressed` is the default posture for `rebuild_environment_opts`, because every command that reaches it has a plan above it and a receipt below it. Since P8 gave `hitch approve` a plan, `Log` has no caller at all; the variant and the `on_step` plumbing behind it are dead code for P10 to remove.
 - **A receipt's warnings are facts the apply learned; a plan's warnings are predictions.** The three executors used to copy every non-blocking plan warning into `receipt.warnings`, printing each advisory twice — and, on the `ApprovalRequested` arm, twice under two different glyphs, because a blocking plan warning renders `⛔` and a non-owed receipt warning renders `⚠️`. The copy is gone; the contract is on the field. Every advisory hitch has is a consequence of a flag the user passed, decided before the apply began, so none of them is something the apply discovered. A new planner puts them in the plan and, where the fact also holds afterwards, in `resulting_state`.
 
-Still true from P5 and still owned: `src/commands/resolve.rs` is the one mutating path still choosing a mode from a second merge opinion (`preflight_compatibility_report`).
+Resolved in P10: `src/commands/resolve.rs` now chooses its mode from the composition (`predict_composition`); no second merge opinion remains.
 
 > **Resolved between P7 and P8, in a change of its own.** The third item that used to sit in this paragraph — the `rollback_metadata_changes` / `with_locked_env` ordering bug — is fixed, so P8 inherits the *fixed* ordering rather than an open decision. `capture_config_state` now runs before `with_locked_env` (a later commit restoring an earlier value is not a history rewrite, which is what the old comment got wrong) and `previous_config` is armed only after the confirmation gate, so a refusal neither rolls back nor re-locks. The same change removed the duplicated error report that made the bug visible: `promote` and `demote` were printing the cause and then returning it for `main` to print again. Five tests in `tests/integration/promote_demote_tests.rs`, teeth verified against both halves of the original defect. P8's only residual involvement is the mirror image in `approvals/approve.rs`, which has its own `attempt_approval_rollback` / `attempt_operation_rollback` pair that shares the shape and is in scope when `approve` gets a plan.
 
@@ -420,7 +422,7 @@ The fix is a contract on `ExecutionReceipt::warnings`, not a deletion per site: 
 
 **Exit criteria:** No orphaned calculation can answer "what branches are included?" or "what is held?" any more. Docs match the code. All four gates green.
 
-**Status: PLAN AUTHORED** as `2026-09-25-explainable-ux-P10-docs-and-legacy-removal.md` (9 tasks, 9 Global Constraints, 3 recorded deviations). Three decisions made at authoring, with the user:
+**Status: COMPLETE** (2026-10-01). Plan: `2026-09-25-explainable-ux-P10-docs-and-legacy-removal.md` (9 tasks, 9 Global Constraints, 3 recorded deviations), whose "As executed" records commits, every ruling and the deferred minors. Suite at completion: 204 lib + 632 integration + 1 `no_args_help`, all green under `just test`. Every conflict verdict now comes from `compose_environment` (via `predict_composition` when offline); the `preflight_*` family, `merge_tree_write_tree_name_only`, `StepNarration`/`StepLogger`, `format_conflict_report`, `get_commit_timestamp` and the four desktop-only adapters are deleted. Decisions made at authoring, with the user:
 
 - **`hitch resolve` migrates in P10.** It was the last mutation choosing a mode from a second merge opinion. A new `predict_composition` (offline pinning plus `compose_environment` with `Eject`, no replay) replaces all seven preflight call sites: the promote planner, release dependents, resolve, `conflicts`, `status`, `tree`, and the approval snapshot's conflict check, which was a fourth oracle not previously recorded. The `preflight_*` family and `merge_tree_write_tree_name_only` are then deleted, so the compiler enforces the exit criterion.
 - **The deferred plan/receipt defects are fixed in P10:**
@@ -434,24 +436,43 @@ The fix is a contract on `ExecutionReceipt::warnings`, not a deletion per site: 
 
 ## Definition of Done
 
-The source spec's §40 checklist, minus the desktop rows, plus the constraints above as hard gates:
+The source spec's §40 checklist, minus the desktop rows (out of scope: spec §20–§26, M9–M11), plus the constraints above as hard gates. `[x]` met, `[~]` met with the stated limit:
 
-- [ ] One shared structured repository-state model.
-- [ ] Desired, Actual, and Proposed have precise meanings in code.
-- [ ] Environment builds persist trustworthy provenance.
-- [ ] Promote, demote, rebuild, and release have shared planners, and those planners are the front half of their executors.
-- [ ] Those operations execute validated plans and return structured receipts.
-- [ ] CLI plans explain current → proposed before any mutation.
-- [ ] `--dry-run` uses the same planning path as a real run.
-- [ ] `--json` exposes versioned structured plans and results.
-- [ ] `hitch status` provides a feature×environment view.
-- [ ] Environment equations are rendered by one shared renderer, not hand-formatted per surface.
-- [ ] `hitch why` explains branch and environment state.
-- [ ] Holds explain conflict partner, files, and next action.
-- [ ] Release previews dependent rebuilds, pruning, tags, and remote writes.
-- [ ] Normal output explains behaviour; `--verbose` explains mechanism.
-- [ ] Activity uses structured events.
-- [ ] All significant mutations use the same plan/apply/receipt architecture.
-- [ ] Existing Git safety, recovery, conflict, and release semantics remain intact — proven by the differential and crash-fuzz suites passing **unchanged**.
-- [ ] `AGENTS.md`, `SKILL.md`, `README.md`, and `docs/architecture/explainable-operations.md` match the final design.
-- [ ] `just format`, `just format-check`, `just lint`, `just test` all pass.
+- [x] One shared structured repository-state model. — `core/state.rs` `RepositoryStateSnapshot`; `state_model_tests.rs` (`test_the_snapshot_and_the_status_model_never_disagree`).
+- [x] Desired, Actual, and Proposed have precise meanings in code. — `core/state.rs` (Desired/Actual), `OperationPlan` projections (Proposed); `docs/architecture/explainable-operations.md`.
+- [x] Environment builds persist trustworthy provenance. — `utils/build_record.rs` at `refs/hitch/state/<env>`; `state_model_tests.rs`, `build_record` unit tests.
+- [x] Promote, demote, rebuild, and release have shared planners, and those planners are the front half of their executors. — `src/operations/{rebuild,declaration,release}.rs`; `plan_apply_tests.rs`. Since P10 the planners also predict through the one composition (`predict_composition_tests.rs`).
+- [x] Those operations execute validated plans and return structured receipts. — `validate_plan` + `ExecutionReceipt`; `plan_apply_tests.rs` (stale-plan refusals, `a_failed_push_is_reported_as_owed_rather_than_as_fully_synced`).
+- [x] CLI plans explain current → proposed before any mutation. — `core/render.rs` `render_plan`; `plan_apply_tests.rs`, `promote_demote_tests.rs`; re-checked by eye in the P10 walkthrough.
+- [x] `--dry-run` uses the same planning path as a real run. — `PlanPurpose::Preview`; `test_dry_run_and_real_build_agree_on_held_branches`, `test_dry_run_agrees_with_real_build_about_replayed_resolutions`. Covers the four composing operations; `lock`/`unlock`/`approve` have no `--dry-run` (not a gap the spec names).
+- [x] `--json` exposes versioned structured plans and results. — `schema_version: 1` on every document; `json_support_tests.rs`, `document_shape_tests.rs`; `docs/architecture/json-schema.md`. Caveat: mutation plan/receipt enums are PascalCase while read-only documents are snake_case (see Program closed).
+- [x] `hitch status` provides a feature×environment view. — `core/status.rs` `MatrixCell`/`build_matrix_model`; `status_tests.rs`, `matrix_render_tests.rs`.
+- [x] Environment equations are rendered by one shared renderer, not hand-formatted per surface. — `render_equation` shared by plans, `tree`, projections; `tests/unit/matrix_render_tests.rs`.
+- [x] `hitch why` explains branch and environment state. — `core/why.rs`; `tests/integration/why_tests.rs`, `tests/unit/why_tests.rs`.
+- [x] Holds explain conflict partner, files, and next action. — `compose_environment` names the true partner (P10 Task 9 fix A); `rebuild_tests.rs`, `conflicts_tests.rs`, `predict_composition_tests.rs`; D1 re-checked by eye.
+- [x] Release previews dependent rebuilds, pruning, tags, and remote writes. — `ReleasePlanDetail` (`dependents`, `prunes`, tag, target move); `release_tests.rs`, `plan_apply_tests.rs` (`a_release_plan_names_the_tag_the_target_move_the_prunes_and_the_dependents`).
+- [x] Normal output explains behaviour; `--verbose` explains mechanism. — `terminology_tests.rs` (default output may not name mechanism; allow-list with reasons).
+- [x] Activity uses structured events. — `core/activity.rs` typed `HitchEvent`; `log_tests.rs`.
+- [~] All significant mutations use the same plan/apply/receipt architecture. — Met for promote, demote, rebuild, release, lock, unlock, set, add, remove, cleanup, approve (fourteen `--json` commands, `json_support_tests.rs`). NOT met by design: `hitch push` (P8 ruling), and `hitch resolve`, whose mode choice now reads the composition but whose apply is a human-driven worktree flow with no plan/receipt. `setup`/`guard`/`pr`/`branch` are out of the ruling's scope.
+- [x] Existing Git safety, recovery, conflict, and release semantics remain intact — proven by the differential and crash-fuzz suites passing **unchanged**. — `git diff 1c5b435 HEAD` over `crash_recovery_tests.rs`, `release_crash_recovery_tests.rs`, `resolve_crash_recovery_tests.rs` is empty; `test_merge_tree_compose_matches_real_merge_*` unchanged (the only edit to `tests/unit/git_operations_tests.rs` deletes the two `get_commit_timestamp` tests with the function). Stated behaviour changes are in `CHANGELOG.md`.
+- [~] `AGENTS.md`, `SKILL.md`, `README.md`, and `docs/architecture/explainable-operations.md` match the final design. — Written/updated in P10 Task 8 and re-verified by the Task 9 walkthrough (README/json-schema examples matched real output; the legacy-name grep is clean). Caveat: older SKILL.md claims outside the P10 edits were not line-audited.
+- [x] `just format`, `just format-check`, `just lint`, `just test` all pass. — Run at P10 close: 204 lib + 632 integration + 1 `no_args_help`, zero failed.
+
+---
+
+## Program closed
+
+**What shipped.** `INTENT → PLAN → APPLY → RESULT` for every composing and declaration-editing mutation, in one renderer (`core/render.rs`); a state snapshot (Desired / Actual / Health) that every display reads; build provenance at `refs/hitch/state/<env>`; the feature×environment matrix, `hitch why`, `hitch log`; `--json` on fourteen commands; and, in P10, one conflict oracle (`compose_environment`, with `predict_composition` as its offline reader) plus the deletion of everything it superseded. `docs/architecture/explainable-operations.md`, `docs/architecture/json-schema.md`, `CHANGELOG.md`, `README.md`, `SKILL.md` and `AGENTS.md` describe it.
+
+**Deviation 1 stands: the desktop is broken by decision.** P10 deleted `core::{timeline,details,workspace_index,workspace}`, the adapters `crates/hitch-desktop` consumed, so that crate **no longer compiles against the core**. The repair stream rebuilds it on `ActivityLog`, `RepositoryStateSnapshot`, `MatrixModel` and `WhyExplanation`. `crates/` is untouched.
+
+**Open items** (none blocks closing; each is recorded where it lives):
+- The release target is not recorded anywhere, so `hitch log` cannot name it.
+- `hitch log` renders an approval apply as three lines.
+- A stuck operation lock (crash or `rebuild --force`) and the manual `hitch unlock` that clears it are invisible to `hitch log`; fixing it needs a marker written at unlock time.
+- `GitOperations::delete_branch` still escalates a "used by worktree" refusal to `-D --force` and `update-ref -d`; `cleanup` avoids it with `delete_branch_strict`.
+- Mutation plan/receipt JSON enums are PascalCase while read-only documents are snake_case. Changing it is a JSON contract change, so it was documented, not fixed.
+- The step-2 partner probe in `compose_environment` compares a held branch against a peer's *tip*, not base-plus-peer, so a peer stale against the base can be blamed for a base-vs-peer clash (label only, narrow).
+- Definition-of-Done limits above: `resolve` and `push` are not on plan/receipt; SKILL.md outside P10's edits was not line-audited.
+
+**Next decision, the user's:** merging `explainable-ux` into `main`. `main` has stayed at `5d81fb2` throughout; the branch carries a breaking-for-desktop change and a handful of behaviour changes listed in `CHANGELOG.md`, so whether to merge whole, squash, or hold until the desktop repair lands is a release decision, not part of this program.
