@@ -164,8 +164,9 @@ covered.
   them.
 - `src/utils/prelude.rs` — the domain-logic hub: rebuild orchestration,
   metadata read/write transactions (`access_metadata_read_only`,
-  `modify_metadata`), locking (`with_locked_env`), the conflict-preflight
-  functions, and the shared composition pair
+  `modify_metadata`), locking (`with_locked_env`), `predict_composition` (the one
+  offline "what would be held" answer behind `status`, `tree`, `conflicts`,
+  `resolve`, the planners and the approval snapshot), and the shared composition pair
   `pin_environment_inputs` → `compose_environment` that both `rebuild` and
   `rebuild --dry-run` run (see the "One composition, two callers" gotcha —
   that pair is the invariant, not an implementation detail). Large file; read
@@ -606,15 +607,15 @@ claim, and can anything more general get there first?
 
 **A fact and a prediction must not share a glyph, a word, or a code path.** The
 ⛔ on a promoted branch used to always read "(conflicts with X — held on
-rebuild)", but it was driven by `preflight_compatibility_report_local`, which
+rebuild)", but it was driven by a tree-based local preflight (since deleted), which
 answers "would the *next* build hold this?" — a prediction, dressed as a
 statement about the branch in front of you. Now the record's `held` list
-(a fact about the last build) is consulted first and the preflight only fills
+(a fact about the last build) is consulted first and `predict_composition` only fills
 the gap, and the two are worded differently: "held in the last build" versus
 "would be held on the next rebuild". Same glyph, because both are worth a
 glance; different words, because they call for different urgency.
 `test_status_distinguishes_a_held_branch_from_one_that_would_be_held` holds
-both arms. The same rule is why `preflight_compatibility_report` is still a
+both arms. The same rule is why `predict_composition` is a
 *prediction* everywhere it is called from — do not promote a prediction into a
 verdict just because one is more convenient to compute.
 
@@ -1060,24 +1061,19 @@ acts on a branch the environment already declares. Only the *new* branch is
 judged: an already-held sibling no longer blocks an unrelated promote. The old
 tree-based check named the base even for a peer conflict.
 
-**Wrong merge-base in `merge-tree` preflights.** `git merge-tree --merge-base
-<X>` needs the *true common ancestor* of the two trees being compared —
-computed with `get_merge_base(a, b)` — never a branch's own current tip.
-Passing the tip makes `merge-tree` treat that side as unchanged since the
-(wrong) merge-base and silently fast-forward instead of reporting a real
-conflict. This bug existed in this codebase's preflight functions for a long
-time, invisible because every existing test's conflict scenario had an
-*unmoved* base (where the wrong merge-base happens to equal the right one) —
-it only surfaced when a base-moved-after-branch-diverged scenario was
-manually tested end-to-end. If you touch any `merge-tree` invocation, be
-suspicious of this exact mistake and test the base-moved-independently case
-specifically, not just the peers-diverged-from-an-unmoved-base case.
+**Wrong merge-base in `merge-tree` (history).** A tree-based preflight family
+once ran `git merge-tree --merge-base <X>` with `X` set to a branch's own tip
+instead of the true common ancestor, so a base that moved after a branch diverged
+read as a clean fast-forward. It hid behind tests whose base never moved. That
+family (`preflight_compatibility_report`, `_local`,
+`GitOperations::merge_tree_write_tree_name_only`) is deleted and the compiler
+refuses a new caller; do not rebuild it.
 
-The composition path (`merge_tree_compose`) sidesteps this entirely by *not*
-passing `--merge-base` — git computes it, including the virtual base for
-criss-cross histories, exactly as a real merge does. Don't "helpfully" add an
-explicit `--merge-base` there. The gotcha applies to the preflight callers
-(`merge_tree_write_tree_name_only`) that do pass one.
+What survives is the warning for `merge_tree_compose`: it sidesteps the whole
+class by *not* passing `--merge-base` — git computes it, including the virtual
+base for criss-cross histories, exactly as a real merge does. Don't "helpfully"
+add an explicit `--merge-base` there, and test the base-moved-independently case
+if you ever touch a `merge-tree` call.
 
 **One composition per *kind* of composition — and release's is a different
 kind, not a third caller.** `compose_environment` (`src/utils/prelude.rs`) is
@@ -1087,8 +1083,7 @@ reaches it by way of a `Confirm` plan, and `--dry-run` by way of a
 `Preview` one, both over the same `pin_environment_inputs` result. That is the
 invariant, and it was
 expensive to establish: `--dry-run` used to short-circuit into
-`preflight_compatibility_report`, a *tree-based* loop over
-`merge_tree_write_tree_name_only` with an explicit `--merge-base`, while the
+a *tree-based* preflight loop with an explicit `--merge-base`, while the
 build was a *commit-based* loop over `merge_tree_compose` (ORT, no explicit
 merge-base). Two doors into the merge engine, so two verdicts were possible,
 and the live symptom was `rebuild <env> --dry-run --replay-resolutions`
@@ -1111,16 +1106,21 @@ an environment build ejects and continues. Collapsing them would take the
 eject-and-continue policy away from builds or the all-or-nothing property away
 from releases.
 
-No mutation reads `preflight_compatibility_report` any more. `hitch resolve`
-chooses Mode A (held partner is the base) versus Mode B (a peer) and refuses
-"nothing to resolve" from `predict_composition(..).held`, the same composition a
-rebuild runs. `resolve` syncs the base and promoted branches itself first (as the
-preflight did) and the prediction stays offline. The remaining
-callers are display-only (`conflicts.rs`, and via `_local` `status.rs`,
-`tree.rs`); Task 5 of P10 migrates them and deletes the preflight, so once it
-lands this paragraph should say only that no tree-based oracle exists. Known
-quirk shared by both oracles: `conflicts_with` names the last-composed branch,
-so a branch that collides with the base after a clean peer reads as Mode B.
+No tree-based oracle exists any more. Every prediction, mutation or display,
+goes through `predict_composition` (offline: local refs then cached `origin/*`;
+always ejects; never replays), which is `compose_environment` over inputs pinned
+without the network. `hitch resolve` chooses Mode A (held partner is the base)
+versus Mode B (a peer) from it; `hitch conflicts`, `resolve` and the approval
+snapshot (`capture_rebuild_snapshot`) sync the declared branches themselves
+first, as their old oracles did, while `status` and `tree` stay offline end to
+end and read `Err` (base resolves nowhere) as "no prediction". `status`'s
+"already in <base>" reads the snapshot's `AlreadyInBase`, not a second
+`is_branch_merged_into`. Known quirk: `conflicts_with` names the last-composed
+branch, so a branch that collides with the base after a clean peer reads as
+Mode B. The approval snapshot's `merge_conflicts` is now "does the composition
+hold anything", so two branches that only collide with each other count
+(`a_peer_only_conflict_is_recorded_on_the_approval_snapshot`); the old pairwise
+base-only check missed that.
 Two tests hold the `rebuild` half: `test_dry_run_agrees_with_real_build_about_replayed_resolutions`
 (resolve_tests) and `test_dry_run_and_real_build_agree_on_held_branches`
 (rebuild_tests). Both compare the *verdict*, not the rendered prose, on purpose

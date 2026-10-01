@@ -81,8 +81,12 @@ pub fn create_approval_request(
     let frozen_min_approvals = environment.min_approvals;
 
     // Create snapshot
-    let snapshot =
-        crate::utils::snapshot::capture_rebuild_snapshot(context, environment, branch_name)?;
+    let snapshot = crate::utils::snapshot::capture_rebuild_snapshot(
+        context,
+        environment,
+        environment_name,
+        branch_name,
+    )?;
 
     // Create the approval request
     let mut request = ApprovalRequest::new(

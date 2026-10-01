@@ -585,11 +585,19 @@ mod tests {
             env.git.run(&["add", "-f", "shared.txt"])?;
             env.git.run(&["commit", "-m", "main moves"])?;
 
-            env.hitch
+            let out = env
+                .hitch
                 .run()
                 .args(&["promote", "branch-c", "dev"])
-                .execute()?
-                .assert_success();
+                .execute()?;
+            let out = out.assert_success();
+            // The unrelated promote goes through, and the receipt still says
+            // the existing branch is held rather than letting it vanish.
+            let stdout = out.stdout();
+            assert!(
+                stdout.contains("1 branch held: branch-a (conflicts with main)"),
+                "receipt must still surface the held sibling: {stdout}"
+            );
             let config = env.read_hitch_config()?;
             assert!(config.environments["dev"]
                 .branches

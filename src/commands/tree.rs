@@ -157,11 +157,9 @@ fn display_branch_tree(
                 // status` uses) so a branch that would be held on the next
                 // rebuild shows up here too, without slowing tree down with
                 // a network fetch.
-                let held = crate::utils::prelude::preflight_compatibility_report_local(
-                    context,
-                    &env.base,
-                    &env.branches,
-                );
+                let held = crate::utils::prelude::predict_composition(context, env, env_name)
+                    .map(|p| p.held)
+                    .unwrap_or_default();
 
                 let mut sorted_branches: Vec<&String> = env.branches.iter().collect();
                 sorted_branches.sort();

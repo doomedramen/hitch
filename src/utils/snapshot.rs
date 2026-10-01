@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 pub fn capture_rebuild_snapshot(
     context: &GlobalContext,
     environment: &Environment,
+    env_name: &str,
     branch_to_promote: &str,
 ) -> Result<RebuildSnapshot> {
     context.log_verbose("Capturing rebuild snapshot for approval request...");
@@ -50,7 +51,8 @@ pub fn capture_rebuild_snapshot(
     }
 
     // Check for merge conflicts
-    let merge_conflicts = check_for_merge_conflicts(context, environment, branch_to_promote)?;
+    let merge_conflicts =
+        check_for_merge_conflicts(context, environment, env_name, branch_to_promote)?;
 
     context.log_verbose(&format!(
         "Snapshot captured: base={} ({}), {} branches, conflicts={}",
@@ -116,81 +118,30 @@ pub fn validate_snapshot(context: &GlobalContext, snapshot: &RebuildSnapshot) ->
     Ok(())
 }
 
-/// Check for merge conflicts between the base branch and promoted branches
-/// using `git merge-tree` — read-only, never touches the user's working tree.
+/// Whether a build of `environment` with `branch_to_promote` declared would
+/// hold anything. Asked of the composition a rebuild runs, so a pair of
+/// branches that only collide with each other counts, which the base-only
+/// pairwise check this replaced missed. Syncs first, as that check did; the
+/// prediction itself is offline.
 fn check_for_merge_conflicts(
     context: &GlobalContext,
     environment: &Environment,
+    env_name: &str,
     branch_to_promote: &str,
 ) -> Result<bool> {
     context.log_verbose("Checking for merge conflicts...");
 
-    // Ensure all branches are available locally for rev-parse + merge-tree.
-    let mut all_branches: Vec<String> = vec![environment.base.clone()];
-    all_branches.push(branch_to_promote.to_string());
-    for b in &environment.branches {
-        if b != branch_to_promote {
-            all_branches.push(b.clone());
-        }
+    let mut proposed = environment.clone();
+    if !proposed.branches.iter().any(|b| b == branch_to_promote) {
+        proposed.branches.push(branch_to_promote.to_string());
     }
+
+    let mut all_branches = vec![proposed.base.clone()];
+    all_branches.extend(proposed.branches.iter().cloned());
     context.git().synchronize_branches(&all_branches)?;
 
-    let base_tree = context
-        .git()
-        .rev_parse(&format!("{}^{{tree}}", environment.base))?;
-    let base_commit = context.git().rev_parse(&environment.base)?;
-
-    // Check conflict between base and the branch being promoted
-    if merge_tree_has_conflicts(
-        context,
-        &environment.base,
-        &base_tree,
-        &base_commit,
-        branch_to_promote,
-    )? {
-        return Ok(true);
-    }
-
-    // Check conflicts between base and each existing promoted branch
-    for existing_branch in &environment.branches {
-        if existing_branch != branch_to_promote
-            && merge_tree_has_conflicts(
-                context,
-                &environment.base,
-                &base_tree,
-                &base_commit,
-                existing_branch,
-            )?
-        {
-            context.log_verbose(&format!(
-                "Merge conflict detected with existing branch: {}",
-                existing_branch
-            ));
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-/// Check if merging `branch` into `base_branch` produces conflicts using
-/// `git merge-tree --write-tree --name-only` — purely read-only.
-fn merge_tree_has_conflicts(
-    context: &GlobalContext,
-    base_branch: &str,
-    base_tree: &str,
-    base_commit: &str,
-    branch: &str,
-) -> Result<bool> {
-    let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
-    let merge_base = context
-        .git()
-        .get_merge_base(base_branch, branch)?
-        .unwrap_or_else(|| base_commit.to_string());
-    let res = context
-        .git()
-        .merge_tree_write_tree_name_only(&merge_base, base_tree, &their_tree)?;
-    Ok(!res.conflicted_files.is_empty())
+    let prediction = crate::utils::prelude::predict_composition(context, &proposed, env_name)?;
+    Ok(!prediction.held.is_empty())
 }
 
 /// Return the list of branch names (including the base branch) that have

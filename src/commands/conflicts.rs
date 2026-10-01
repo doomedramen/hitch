@@ -41,11 +41,12 @@ pub fn run(args: ConflictsCommand, context: &GlobalContext) -> Result<()> {
         }
     ));
 
-    let conflicts = crate::utils::prelude::preflight_compatibility_report(
-        context,
-        &environment.base,
-        &environment.branches,
-    )?;
+    // Same fetch the check always did; the prediction itself reads refs only.
+    let mut to_sync = vec![environment.base.clone()];
+    to_sync.extend(environment.branches.iter().cloned());
+    context.git().synchronize_branches(&to_sync)?;
+    let conflicts =
+        crate::utils::prelude::predict_composition(context, environment, &args.env_name)?.held;
 
     if conflicts.is_empty() {
         context.log_success(&format!(

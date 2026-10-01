@@ -228,4 +228,201 @@ mod tests {
         })?;
         Ok(())
     }
+
+    use hitch::utils::prelude::CompatibilityConflict;
+
+    fn triples(mut c: Vec<CompatibilityConflict>) -> Vec<(String, String, Vec<String>)> {
+        c.sort_by(|a, b| a.branch.cmp(&b.branch));
+        c.into_iter()
+            .map(|mut c| {
+                c.conflicted_files.sort();
+                (c.branch, c.conflicts_with, c.conflicted_files)
+            })
+            .collect()
+    }
+
+    /// What `hitch conflicts`, `status` and `tree` display (the held triples)
+    /// and what the approval snapshot records (`merge_conflicts`), for one
+    /// scenario. The old tree-based oracles agreed with these on every
+    /// scenario below except the one named in
+    /// `a_peer_only_conflict_is_recorded_on_the_approval_snapshot`.
+    #[allow(clippy::type_complexity)]
+    fn display_verdicts(
+        build: impl Fn(&TestEnvironment) -> anyhow::Result<Scenario>,
+    ) -> anyhow::Result<(Vec<(String, String, Vec<String>)>, bool)> {
+        let framework = HitchTestFramework::new()?;
+        let mut out = None;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            let (existing, new) = build(env)?;
+            let ctx = context_for(env)?;
+            let snap = hitch::utils::snapshot::capture_rebuild_snapshot(
+                &ctx,
+                &environment("main", &existing),
+                "dev",
+                new,
+            )?;
+            let mut all = existing.clone();
+            all.push(new);
+            let held = predict_composition(&ctx, &environment("main", &all), "dev")?.held;
+            out = Some((triples(held), snap.merge_conflicts));
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(out.expect("scenario ran"))
+    }
+
+    fn peer_conflict(env: &TestEnvironment) -> anyhow::Result<Scenario> {
+        seed_shared(env)?;
+        branch_off_main(env, "feat-a", "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
+        branch_off_main(env, "feat-b", "shared.txt", "B\ntwo\nthree\nfour\nfive\n")?;
+        Ok((vec!["feat-a"], "feat-b"))
+    }
+
+    #[test]
+    fn display_verdicts_clean_and_moved_base() -> anyhow::Result<()> {
+        let (held, snap) = display_verdicts(|env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "a.txt", "a\n")?;
+            branch_off_main(env, "feat-b", "b.txt", "b\n")?;
+            Ok((vec!["feat-a"], "feat-b"))
+        })?;
+        assert!(held.is_empty() && !snap);
+
+        let (held, snap) = display_verdicts(|env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "a.txt", "a\n")?;
+            branch_off_main(env, "feat-b", "shared.txt", "B\ntwo\nthree\nfour\nfive\n")?;
+            commit_file(
+                env,
+                "shared.txt",
+                "MAIN\ntwo\nthree\nfour\nfive\n",
+                "main moves",
+            )?;
+            Ok((vec!["feat-a"], "feat-b"))
+        })?;
+        assert_eq!(
+            held,
+            vec![(
+                "feat-b".to_string(),
+                // The last-composed branch is named, not the base the conflict
+                // is really with: shared quirk of every oracle, see AGENTS.md.
+                "feat-a".to_string(),
+                vec!["shared.txt".to_string()]
+            )]
+        );
+        assert!(snap);
+        Ok(())
+    }
+
+    #[test]
+    fn display_verdicts_name_the_peer_for_a_peer_conflict() -> anyhow::Result<()> {
+        let (held, _) = display_verdicts(peer_conflict)?;
+        assert_eq!(
+            held,
+            vec![(
+                "feat-b".to_string(),
+                "feat-a".to_string(),
+                vec!["shared.txt".to_string()]
+            )]
+        );
+        Ok(())
+    }
+
+    /// Recorded disagreement with the deleted oracle. The approval snapshot
+    /// compared each branch to the base alone, so two branches that only collide
+    /// with each other read as "no merge conflicts". The composition holds
+    /// feat-b, which is what the rebuild does, so the snapshot now says so.
+    #[test]
+    fn a_peer_only_conflict_is_recorded_on_the_approval_snapshot() -> anyhow::Result<()> {
+        let (_, snap) = display_verdicts(peer_conflict)?;
+        assert!(snap);
+        Ok(())
+    }
+
+    #[test]
+    fn display_verdicts_beside_an_already_held_branch() -> anyhow::Result<()> {
+        let (held, snap) = display_verdicts(|env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
+            branch_off_main(env, "feat-c", "c.txt", "c\n")?;
+            commit_file(
+                env,
+                "shared.txt",
+                "MAIN\ntwo\nthree\nfour\nfive\n",
+                "main moves",
+            )?;
+            Ok((vec!["feat-a"], "feat-c"))
+        })?;
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, "feat-a");
+        assert!(snap);
+        Ok(())
+    }
+
+    /// The in-process offline test above cannot see a network call whose error
+    /// is swallowed. Reading the metadata branch legitimately fetches it, so a
+    /// fetch naming `hitch-metadata` is let through. This one puts a `git` first on PATH for the child `hitch`
+    /// that records every `fetch`/`ls-remote` to a log file (and fails it), then
+    /// runs the commands that predict. The log, not the exit code, is the
+    /// assertion, so a swallowed error still fails the test.
+    #[cfg(unix)]
+    #[allow(clippy::disallowed_methods)] // test harness spawning a fake git to prove the control
+    #[test]
+    fn status_and_tree_predict_without_fetch_or_ls_remote() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
+            env.hitch.exec(&["add", "dev"])?.assert_success();
+            env.hitch.exec(&["promote", "feat-a", "dev"])?.assert_success();
+            commit_file(env, "shared.txt", "MAIN\ntwo\nthree\nfour\nfive\n", "main moves")?;
+
+            let real_git = std::process::Command::new("sh")
+                .args(["-c", "command -v git"])
+                .output()?;
+            let real_git = String::from_utf8(real_git.stdout)?.trim().to_string();
+            let bin = env.temp_dir.join("fake-bin");
+            std::fs::create_dir_all(&bin)?;
+            let log = env.temp_dir.join("network-calls.log");
+            let script = format!(
+                "#!/bin/sh\ncase \"$*\" in *hitch-metadata*) exec '{}' \"$@\";; esac\nfor a in \"$@\"; do\n  case \"$a\" in\n    fetch|ls-remote|pull|push)\n      echo \"$@\" >> '{}'\n      echo NETWORK-CALL-MARKER >&2\n      exit 1;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+                real_git,
+                log.display(),
+                real_git
+            );
+            let wrapper = bin.join("git");
+            std::fs::write(&wrapper, script)?;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))?;
+
+            // Control: the wrapper does trap a fetch, so an empty log means
+            // something.
+            let control = std::process::Command::new(&wrapper)
+                .arg("fetch")
+                .output()?;
+            assert!(!control.status.success());
+            assert!(log.exists());
+            std::fs::remove_file(&log)?;
+
+            let path = format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            );
+            for args in [vec!["status"], vec!["tree"]] {
+                let out = env.hitch.run().args(&args).env("PATH", &path).execute()?;
+                let stderr = out.stderr();
+                let stdout = out.stdout();
+                assert!(
+                    !log.exists(),
+                    "`hitch {args:?}` hit the network: {}",
+                    std::fs::read_to_string(&log).unwrap_or_default()
+                );
+                assert!(!stderr.contains("NETWORK-CALL-MARKER"), "{stderr}");
+                assert!(out.success(), "`hitch {args:?}` failed: {stderr}");
+                assert!(stdout.contains("feat-a"), "{stdout}");
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
 }

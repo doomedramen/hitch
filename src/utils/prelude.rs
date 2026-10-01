@@ -649,16 +649,8 @@ pub struct CompositionResult {
 /// The result is a pure function of `inputs` and the arguments: same pinned
 /// SHAs in, same tree out. It writes no ref, takes no lock, and touches no
 /// checkout, so it is safe to call for a preview. That property is the reason
-/// this function exists separately from the publish half, and it is why
-/// `preflight_compatibility_report` — a tree-based approximation, not this —
-/// must never gate a mutation.
-///
-/// One mutation still depends on that approximation, and should not:
-/// `commands/resolve.rs` uses it to pick Mode A versus Mode B and to decide
-/// whether there is anything to resolve. Routing that here is deliberately
-/// left to P4's planner, so that `resolve` gets a *plan* to choose its mode
-/// from rather than a second ad-hoc opinion. Until then it is the known
-/// remaining dependant — do not add another.
+/// this function exists separately from the publish half. Every prediction
+/// (`predict_composition`) goes through it too, so no tree-based oracle exists.
 pub fn compose_environment(
     context: &GlobalContext,
     inputs: &PinnedInputs,
@@ -845,7 +837,7 @@ pub fn pin_environment_inputs(
 /// `refs/remotes/origin/<b>`, and nothing else. No `ls-remote`, no fetch.
 ///
 /// A promoted branch that resolves nowhere is dropped from the pins rather
-/// than failing, which is what `preflight_compatibility_report_local` did
+/// than failing, which is what the tree-based local preflight it replaced did
 /// (`continue`): that branch's own state (missing, stale) is what should
 /// explain it, not a prediction. An unresolvable *base* is an `Err`, because a
 /// composition needs a starting commit; the old `_local` variant returned "no
@@ -2390,8 +2382,8 @@ pub fn get_environment_config_for_approval(
 // Compatibility Preflight (merge-tree)
 // =============================================================================
 
-/// One branch's conflict, as reached by `compose_environment` (and, for the
-/// read-only display paths, by `preflight_compatibility_report`). Serialized
+/// One branch's conflict, as reached by `compose_environment` (and every
+/// read-only display path, via `predict_composition`). Serialized
 /// into an environment's build record — see `crate::utils::build_record`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompatibilityConflict {
@@ -2404,134 +2396,6 @@ pub struct CompatibilityConflict {
     /// against the specific peer.
     pub conflicts_with: String,
     pub conflicted_files: Vec<String>,
-}
-
-/// Simulate composing `branches_in_order` onto `base_branch`, in the same
-/// order and with the read-only `git merge-tree` primitive, but reporting
-/// *every* branch that cannot be folded in rather than stopping at the first.
-///
-/// A conflicting branch is excluded from the running composition (not
-/// merged, its tree left out) and later branches are checked against what
-/// actually accumulated without it — so one preflight names every branch
-/// that needs attention, instead of the caller re-running rebuild once per
-/// conflict to discover the next one. This does not build or mutate
-/// anything. Being tree-based it is an approximation of a build, which
-/// `predict_composition` is not.
-pub fn preflight_compatibility_report(
-    context: &GlobalContext,
-    base_branch: &str,
-    branches_in_order: &[String],
-) -> Result<Vec<CompatibilityConflict>> {
-    let mut conflicts = Vec::new();
-    if branches_in_order.is_empty() {
-        return Ok(conflicts);
-    }
-
-    let mut all = Vec::with_capacity(branches_in_order.len() + 1);
-    all.push(base_branch.to_string());
-    all.extend(branches_in_order.iter().cloned());
-    context.git().synchronize_branches(&all)?;
-
-    let base_commit = context.git().rev_parse(base_branch)?;
-    let mut current_tree = context
-        .git()
-        .rev_parse(&format!("{}^{{tree}}", base_branch))?;
-    let mut last_composed = base_branch.to_string();
-
-    for branch in branches_in_order {
-        let their_tree = context.git().rev_parse(&format!("{}^{{tree}}", branch))?;
-        // This must be the true common ancestor of `base_branch` and `branch`,
-        // not `base_branch`'s current tip, or a branch that conflicts with
-        // base (because base moved on after it diverged) is missed entirely.
-        let merge_base = context
-            .git()
-            .get_merge_base(base_branch, branch)?
-            .unwrap_or_else(|| base_commit.clone());
-        let res = context.git().merge_tree_write_tree_name_only(
-            &merge_base,
-            &current_tree,
-            &their_tree,
-        )?;
-
-        if res.conflicted_files.is_empty() {
-            current_tree = res.tree_oid;
-            last_composed = branch.clone();
-        } else {
-            conflicts.push(CompatibilityConflict {
-                branch: branch.clone(),
-                conflicts_with: last_composed.clone(),
-                conflicted_files: res.conflicted_files,
-            });
-        }
-    }
-
-    Ok(conflicts)
-}
-
-/// Local-only variant of `preflight_compatibility_report`, for callers like
-/// `hitch status`/`hitch tree` that display per-branch state on every
-/// invocation and must stay fast and offline — unlike `rebuild --dry-run` and
-/// `hitch conflicts`, this never fetches. It works only from whatever is
-/// already resolvable locally (existing local branches or remote-tracking
-/// refs); a branch that isn't resolvable is silently skipped rather than
-/// erroring, matching the `.unwrap_or(false)` best-effort style the rest of
-/// `hitch status`'s per-branch checks already use — that branch's other
-/// state (missing, stale, etc.) is what should explain it to the user, not
-/// this function.
-pub fn preflight_compatibility_report_local(
-    context: &GlobalContext,
-    base_branch: &str,
-    branches_in_order: &[String],
-) -> Vec<CompatibilityConflict> {
-    let mut conflicts = Vec::new();
-    if branches_in_order.is_empty() {
-        return conflicts;
-    }
-
-    let Ok(base_commit) = context.git().rev_parse(base_branch) else {
-        return conflicts;
-    };
-    let Ok(mut current_tree) = context
-        .git()
-        .rev_parse(&format!("{}^{{tree}}", base_branch))
-    else {
-        return conflicts;
-    };
-    let mut last_composed = base_branch.to_string();
-
-    for branch in branches_in_order {
-        let Ok(their_tree) = context.git().rev_parse(&format!("{}^{{tree}}", branch)) else {
-            continue;
-        };
-        // Must be
-        // the true common ancestor, not `base_branch`'s current tip.
-        let merge_base = context
-            .git()
-            .get_merge_base(base_branch, branch)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| base_commit.clone());
-        let Ok(res) =
-            context
-                .git()
-                .merge_tree_write_tree_name_only(&merge_base, &current_tree, &their_tree)
-        else {
-            continue;
-        };
-
-        if res.conflicted_files.is_empty() {
-            current_tree = res.tree_oid;
-            last_composed = branch.clone();
-        } else {
-            conflicts.push(CompatibilityConflict {
-                branch: branch.clone(),
-                conflicts_with: last_composed.clone(),
-                conflicted_files: res.conflicted_files,
-            });
-        }
-    }
-
-    conflicts
 }
 
 // =============================================================================
@@ -2847,9 +2711,7 @@ mod compose_environment_tests {
     ///
     /// This is the property the whole phase rests on: it is what lets
     /// `hitch rebuild --dry-run` be a *preview of the real build* rather than a
-    /// second, tree-based approximation of it (see `preflight_compatibility_report`,
-    /// which is exactly that approximation and which nothing may ever let gate
-    /// a mutation). If composition ever grew a side effect — writing a ref,
+    /// second, tree-based approximation of it (the deleted preflight family). If composition ever grew a side effect — writing a ref,
     /// taking a lock, checking out, touching the network — then calling it for
     /// a preview would no longer be safe, and the dry-run would have to go
     /// back to approximating.

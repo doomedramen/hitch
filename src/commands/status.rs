@@ -3,8 +3,8 @@ use crate::core::render::{
     emit_json, render_environment_summaries, render_matrix, render_matrix_at,
 };
 use crate::core::state::{
-    build_state_snapshot, ActualComposition, ApprovalPolicy, DeclaredBranch, DesiredComposition,
-    EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
+    build_state_snapshot, ActualComposition, ActualMembership, ApprovalPolicy, DeclaredBranch,
+    DesiredComposition, EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
 };
 use crate::core::status::{build_matrix_model, build_status_model};
 use crate::types::{Environment, HitchConfig};
@@ -440,11 +440,16 @@ fn display_environment_status(
             ActualComposition::FromRecord(actual) => Some(actual.held.clone()),
             _ => None,
         };
-        let would_be_held = crate::utils::prelude::preflight_compatibility_report_local(
-            context,
-            &env.base,
-            &env.branches,
-        );
+        // No prediction is possible when the base resolves nowhere (the
+        // record-or-snapshot arms above already explain that), so an `Err`
+        // here is "nothing to add", never a failure of a read-only view.
+        let would_be_held = if env.branches.is_empty() {
+            Vec::new()
+        } else {
+            crate::utils::prelude::predict_composition(context, env, env_name)
+                .map(|p| p.held)
+                .unwrap_or_default()
+        };
 
         for (i, branch) in env.branches.iter().enumerate() {
             // Existence comes from the snapshot, which already resolved every
@@ -459,11 +464,7 @@ fn display_environment_status(
                 .iter()
                 .any(|b| &b.name == branch && b.sha.is_some());
 
-            let is_in_source = branch_exists
-                && context
-                    .git()
-                    .is_branch_merged_into(branch, &env.base)
-                    .unwrap_or(false);
+            let is_in_source = branch_exists && already_in_base(snapshot, branch, env_name);
 
             // Staleness now comes from the snapshot's SHA comparison, not from
             // comparing a commit timestamp against a wall-clock `rebuilt_at`.
@@ -589,7 +590,7 @@ fn display_environment_status(
     println!("│  {}", release_info);
 
     // Check for branches that need cleanup after release
-    check_and_display_cleanup_needs(context, env_name, env)?;
+    check_and_display_cleanup_needs(snapshot, env_name, env);
 
     // Status section with enhanced details
     println!("└─ Status:");
@@ -734,24 +735,31 @@ fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     "Just now".to_string()
 }
 
+/// Whether the snapshot's membership view says `branch` is already reachable
+/// from `env_name`'s base. The snapshot answers this once, offline, so status
+/// does not re-derive it per call site (the old cleanup check also ran
+/// `git ls-remote` per branch).
+fn already_in_base(snapshot: &RepositoryStateSnapshot, branch: &str, env_name: &str) -> bool {
+    snapshot
+        .features
+        .iter()
+        .find(|f| f.name == branch)
+        .and_then(|f| f.memberships.iter().find(|m| m.environment == env_name))
+        .is_some_and(|m| m.actual == ActualMembership::AlreadyInBase)
+}
+
 /// Check and display cleanup needs for promoted branches that have been released
 fn check_and_display_cleanup_needs(
-    context: &GlobalContext,
+    snapshot: &RepositoryStateSnapshot,
     env_name: &str,
     env: &Environment,
-) -> Result<()> {
-    let mut branches_in_source = Vec::new();
-
-    // Check all environments for actual merge status
-    if !env.branches.is_empty() && context.git().branch_exists_anywhere(&env.base)? {
-        for branch in &env.branches {
-            if context.git().branch_exists_anywhere(branch)?
-                && context.git().is_branch_merged_into(branch, &env.base)?
-            {
-                branches_in_source.push(branch.clone());
-            }
-        }
-    }
+) {
+    let branches_in_source: Vec<String> = env
+        .branches
+        .iter()
+        .filter(|b| already_in_base(snapshot, b, env_name))
+        .cloned()
+        .collect();
 
     // Display branches that exist in source branch
     if !branches_in_source.is_empty() {
@@ -793,8 +801,6 @@ fn check_and_display_cleanup_needs(
             }
         }
     }
-
-    Ok(())
 }
 
 /// Display changes compared to the last commit

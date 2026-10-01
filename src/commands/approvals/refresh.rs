@@ -54,8 +54,12 @@ pub fn run(args: RefreshArgs, context: &GlobalContext) -> Result<()> {
     // Re-capture snapshot
     let environment =
         crate::utils::prelude::get_environment_config_for_approval(context, &env_name)?;
-    let new_snapshot =
-        crate::utils::snapshot::capture_rebuild_snapshot(context, &environment, &branch_name)?;
+    let new_snapshot = crate::utils::snapshot::capture_rebuild_snapshot(
+        context,
+        &environment,
+        &env_name,
+        &branch_name,
+    )?;
 
     // Update the request: new snapshot, cleared approvals, reset to Pending
     crate::utils::prelude::modify_metadata(context, |config| {

@@ -896,7 +896,7 @@ mod tests {
     /// one holding that line. A prediction has no business in a grid of facts:
     /// a cell that could read "would be held" would put a `⛔` beside a `⛔`
     /// meaning "was held", with nothing to tell them apart, and it would be a
-    /// third caller of `preflight_compatibility_report_local` — the call site
+    /// third caller of `predict_composition` — the call site
     /// count that P7's Global Constraints fix at two (`status --environments`
     /// and `tree`).
     #[test]
