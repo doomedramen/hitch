@@ -1,7 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
 use crate::operations::declaration::{
-    apply_declaration_plan, plan_promote, DeclarationPlanOptions,
+    apply_declaration_plan, apply_may_write, plan_promote, DeclarationPlanOptions,
 };
 use crate::operations::model::OperationOutcome;
 use crate::types::{RollbackInfo, RollbackOperation};
@@ -110,12 +110,13 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
     // window — the planner composes nothing and anchors nothing — so a
     // pre-lock snapshot has nothing stale in it.
     //
-    // Armed inside, because a snapshot taken unconditionally is a snapshot of a
-    // repository the operation never touched, and rolling back to it costs two
-    // metadata commits to report a repair that did not happen. Every refusal is
-    // decided before the apply is reached — a plan that went stale, a
-    // sibling-conflict policy block, a declined confirmation, an environment
-    // locked by a human — and each of them now leaves no trace at all.
+    // Armed inside, and only for a plan whose apply can write. A snapshot taken
+    // unconditionally is a snapshot of a repository the operation never touched,
+    // and rolling back to it costs metadata commits to report a repair that did
+    // not happen. A stale plan, a declined confirmation and a human-locked
+    // environment never reach the apply; a policy refusal (sibling conflict) does
+    // reach it, because the executor raises it, so `apply_may_write` is what
+    // keeps that one unarmed.
     let snapshot = crate::utils::rollback::capture_config_state(context)?;
     let result = crate::utils::prelude::with_auto_stash(context, || {
         crate::utils::prelude::with_locked_env(context, &args.env_name, || {
@@ -123,7 +124,9 @@ pub fn run(args: PromoteCommand, context: &GlobalContext) -> Result<()> {
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
-            rollback_info.previous_config = snapshot;
+            if apply_may_write(&plan) {
+                rollback_info.previous_config = snapshot;
+            }
             let receipt = apply_declaration_plan(context, &plan)?;
             Ok((plan, Some(receipt)))
         })

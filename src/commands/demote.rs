@@ -1,6 +1,8 @@
 use crate::commands::global_context::GlobalContext;
 use crate::core::render::{confirm_plan, emit_plan, emit_receipt, render_plan};
-use crate::operations::declaration::{apply_declaration_plan, plan_demote, DeclarationPlanOptions};
+use crate::operations::declaration::{
+    apply_declaration_plan, apply_may_write, plan_demote, DeclarationPlanOptions,
+};
 use crate::operations::model::OperationOutcome;
 use crate::types::{RollbackInfo, RollbackOperation};
 use anyhow::Result;
@@ -90,7 +92,9 @@ pub fn run(args: DemoteCommand, context: &GlobalContext) -> Result<()> {
             if !confirm_plan(context, &render_plan(&plan), &plan.confirmation)? {
                 return Ok((plan, None));
             }
-            rollback_info.previous_config = snapshot;
+            if apply_may_write(&plan) {
+                rollback_info.previous_config = snapshot;
+            }
             let receipt = apply_declaration_plan(context, &plan)?;
             Ok((plan, Some(receipt)))
         })

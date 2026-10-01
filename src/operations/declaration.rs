@@ -792,6 +792,15 @@ pub fn validate_declaration_plan(
     ))
 }
 
+/// Whether applying this plan can write to `hitch-metadata`, and so whether a
+/// caller has anything to roll back if the apply fails. A policy refusal is
+/// raised *inside* the apply but writes nothing; an approval gate does write (the
+/// request), so it counts. The single place that says so.
+pub fn apply_may_write(plan: &OperationPlan<DeclarationPlanDetail>) -> bool {
+    plan.blocked_by()
+        .is_none_or(|w| w.kind != crate::operations::model::PlanWarningKind::PolicyRefusal)
+}
+
 /// Apply a declaration plan: the metadata edit, then the rebuild it forces.
 pub fn apply_declaration_plan(
     context: &GlobalContext,

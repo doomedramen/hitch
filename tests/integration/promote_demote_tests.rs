@@ -457,6 +457,52 @@ mod tests {
     // Item 1: Pre-promote conflict check against sibling branches
     // -------------------------------------------------------------------------
 
+    /// A policy refusal is decided inside the apply, but it writes nothing, so it
+    /// must not arm a rollback: no narration, and only the lock and unlock commits.
+    #[test]
+    fn a_conflict_refused_promote_rolls_nothing_back() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            env.fs.write_file("shared.txt", "line one\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "Add shared.txt"])?;
+            for (branch, text) in [("branch-a", "from a\n"), ("branch-b", "from b\n")] {
+                env.git.run(&["checkout", "-b", branch])?;
+                env.fs.write_file("shared.txt", text)?;
+                env.git.run(&["add", "-f", "shared.txt"])?;
+                env.git.run(&["commit", "-m", branch])?;
+                env.git.run(&["checkout", "main"])?;
+            }
+            env.hitch
+                .run()
+                .args(&["promote", "branch-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            let before = env.git.run(&["rev-list", "--count", "hitch-metadata"])?;
+            let before: usize = before.stdout().trim().parse()?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "branch-b", "dev"])
+                .execute()?;
+            let output = format!("{}\n{}", result.stdout(), result.stderr());
+            result.assert_failure();
+            assert!(
+                !output.contains("Rolling back") && !output.contains("restored"),
+                "a refusal wrote nothing, so there is nothing to roll back:\n{output}"
+            );
+            let after = env.git.run(&["rev-list", "--count", "hitch-metadata"])?;
+            let after: usize = after.stdout().trim().parse()?;
+            assert_eq!(after - before, 2, "lock and unlock only");
+
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
     /// When two branches both modify the same file in incompatible ways, promoting
     /// the second branch should be blocked before any state is mutated.
     #[test]
