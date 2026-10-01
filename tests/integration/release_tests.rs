@@ -1012,6 +1012,132 @@ mod tests {
         Ok(())
     }
 
+    fn commit_branch(env: &TestEnvironment, name: &str) -> anyhow::Result<()> {
+        env.git.run(&["checkout", "-b", name])?;
+        env.fs.write_file(&format!("{name}.txt"), name)?;
+        env.git.run(&["add", "."])?;
+        env.git.run(&["commit", "-m", name])?;
+        env.git.run(&["checkout", "main"])?;
+        Ok(())
+    }
+
+    /// The plan rebuilds `qa` and `prod` as dependents, so it cannot also say it
+    /// will not change them; a branch promoted in two environments is named once.
+    #[test]
+    fn a_release_plan_does_not_say_it_will_not_change_what_it_rebuilds() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            commit_branch(env, "feature-1")?;
+            commit_branch(env, "search")?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "qa", "--base", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "search", "qa"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["add", "prod", "--base", "qa"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["promote", "search", "prod"])
+                .execute()?
+                .assert_success();
+
+            let out = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_success()
+                .stdout();
+            let block = out
+                .split("Will not change\n")
+                .nth(1)
+                .map(|rest| {
+                    rest.lines()
+                        .take_while(|l| l.starts_with("  "))
+                        .map(|l| l.trim().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(block, vec!["search".to_string()], "{out}");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
+    /// A conflict's remedy ends on the fix, and the retry comes after it and is
+    /// worded as a retry rather than as the fix.
+    #[test]
+    fn a_release_conflict_remedy_does_not_end_by_repeating_the_failing_command(
+    ) -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.fs.write_file("shared.txt", "line1\nline2\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "shared"])?;
+            env.git.run(&["checkout", "-b", "feat-b"])?;
+            env.fs.write_file("shared.txt", "line1\nB\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "feat b"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feat-b", "dev"])
+                .execute()?
+                .assert_success();
+            env.fs.write_file("shared.txt", "line1\nMAIN\nline3\n")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "main moves"])?;
+
+            let err = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?
+                .assert_failure()
+                .stderr();
+            let lines: Vec<&str> = err.lines().filter(|l| !l.trim().is_empty()).collect();
+            let last = lines.last().copied().unwrap_or("");
+            assert_ne!(last.trim(), "hitch release dev main", "{err}");
+            assert!(last.contains("again"), "{err}");
+            let fix = err.find("git rebase main").expect(&err);
+            let retry = err.rfind("hitch release dev main").expect(&err);
+            assert!(fix < retry, "{err}");
+            assert!(err.contains("feat-b"), "{err}");
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        Ok(())
+    }
+
     /// Releasing to the branch the user is standing on must leave their
     /// checkout matching it. `update-ref` moves the branch without touching
     /// the index or working tree, so without an explicit resync the entire

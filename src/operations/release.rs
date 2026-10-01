@@ -441,18 +441,20 @@ pub fn plan_release(
     let released_names: Vec<&str> = released.iter().map(|p| p.branch.as_str()).collect();
     let mut unaffected: Vec<UnaffectedResource> = Vec::new();
     for (name, env) in sorted_environments(&config) {
-        if name != environment {
+        // An environment this plan rebuilds is the opposite of unaffected.
+        if name != environment && !dependents.iter().any(|d| d.environment == name) {
             unaffected.push(UnaffectedResource {
                 kind: ResourceKind::Environment,
                 name,
             });
         }
         for branch in &env.branches {
-            if !released_names.contains(&branch.as_str()) {
-                unaffected.push(UnaffectedResource {
-                    kind: ResourceKind::Branch,
-                    name: branch.clone(),
-                });
+            let resource = UnaffectedResource {
+                kind: ResourceKind::Branch,
+                name: branch.clone(),
+            };
+            if !released_names.contains(&branch.as_str()) && !unaffected.contains(&resource) {
+                unaffected.push(resource);
             }
         }
     }
@@ -941,20 +943,14 @@ fn build_conflict_error(
         }
     }
 
-    error_msg.push_str("\n\nTo resolve this:");
+    error_msg.push_str("\n\nTo resolve this, bring the branch up to date with the target:");
     error_msg.push_str(&format!(
-        "\n1. Check out target branch: git checkout {}",
-        target_branch
+        "\n1. Rebase it onto the target: git checkout {branch} && git rebase {target_branch}"
     ));
+    error_msg
+        .push_str("\n2. Resolve the conflicts, then: git add <files> && git rebase --continue");
     error_msg.push_str(&format!(
-        "\n2. Manually merge '{}': git merge {}",
-        branch, branch
-    ));
-    error_msg.push_str("\n3. Resolve conflicts and commit");
-    error_msg.push_str("\n4. Try release again with the environment instead:");
-    error_msg.push_str(&format!(
-        "\n   hitch release {} {}",
-        env_name, target_branch
+        "\n3. Once the branch is clean, run `hitch release {env_name} {target_branch}` again."
     ));
 
     anyhow::anyhow!("{}", error_msg)
