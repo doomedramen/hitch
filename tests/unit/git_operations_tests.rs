@@ -979,7 +979,7 @@ mod tests {
         // through the builder.
         #[allow(clippy::disallowed_methods)]
         std::process::Command::new("git")
-            .args(["init"])
+            .args(["init", "--initial-branch=main"])
             .stdin(std::process::Stdio::null())
             .output()
             .context("Failed to initialize git repo")?;

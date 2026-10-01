@@ -569,7 +569,7 @@ pub fn render_dependent_skip(
     let files: String = conflict
         .conflicted_files
         .iter()
-        .map(|f| format!("\n  {}", f))
+        .flat_map(|f| ["\n  ", f.as_str()])
         .collect();
     format!(
         "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto '{}':{}\n  \

@@ -432,7 +432,7 @@ mod tests {
                 .output()
                 .unwrap();
         };
-        run(&["init", "-q"]);
+        run(&["init", "-q", "--initial-branch=main"]);
         run(&["config", "user.email", "test@test"]);
         run(&["config", "user.name", "test"]);
         std::fs::write(dir.path().join("f.txt"), "x").unwrap();
@@ -569,7 +569,7 @@ mod repair_checkout_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("f.txt"), "one\n")?;
@@ -665,7 +665,7 @@ mod repair_checkout_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("f.txt"), "one\n")?;

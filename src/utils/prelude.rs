@@ -2038,7 +2038,7 @@ mod try_replay_resolution_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("README.md"), "hi\n")?;
@@ -2173,7 +2173,7 @@ mod try_replay_resolution_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("README.md"), "hi\n")?;
@@ -2272,7 +2272,7 @@ mod try_replay_resolution_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("README.md"), "hi\n")?;
@@ -2558,7 +2558,7 @@ mod publish_environment_build_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("README.md"), "hi\n")?;
@@ -2672,7 +2672,7 @@ mod publish_environment_build_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("README.md"), "hi\n")?;
@@ -2927,7 +2927,7 @@ mod compose_environment_tests {
         let dir = tempfile::tempdir()?;
         let repo = dir.path();
 
-        git(repo, &["init", "-q"]);
+        git(repo, &["init", "-q", "--initial-branch=main"]);
         git(repo, &["config", "user.name", "Test User"]);
         git(repo, &["config", "user.email", "test@example.com"]);
         std::fs::write(repo.join("base.txt"), "base\n")?;

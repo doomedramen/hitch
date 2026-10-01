@@ -486,13 +486,10 @@ mod tests {
     }
 
     fn parse_remote_url(url: &str) -> Option<(String, String)> {
-        let path = if let Some(rest) = url.strip_prefix("https://github.com/") {
-            rest.to_string()
-        } else if let Some(rest) = url.strip_prefix("git@github.com:") {
-            rest.to_string()
-        } else {
-            return None;
-        };
+        let path = url
+            .strip_prefix("https://github.com/")
+            .or_else(|| url.strip_prefix("git@github.com:"))?
+            .to_string();
         let path = path.trim_end_matches(".git");
         let parts: Vec<&str> = path.split('/').collect();
         if parts.len() < 2 {

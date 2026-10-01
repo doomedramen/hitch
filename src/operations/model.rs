@@ -1353,7 +1353,9 @@ mod tests {
     fn scratch() -> (tempfile::TempDir, GitOperations) {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = dir.path();
-        run_git(repo, &["init"]);
+        run_git(repo, &["init", "--initial-branch=main"]);
+        run_git(repo, &["config", "user.email", "test@example.com"]);
+        run_git(repo, &["config", "user.name", "Test"]);
         fs::write(repo.join("README.md"), "hello").expect("write");
         run_git(repo, &["add", "."]);
         run_git(repo, &["commit", "-m", "init"]);
