@@ -7,6 +7,8 @@ pass. This document is the merged result with all mandatory hardening folded in.
 
 ## Implementation status
 
+> **Superseded (explainable-UX P10).** This is a historical status log. The preflight functions named below (`preflight_compatibility_report`, `_local`, `_merge_tree`) and `merge_tree_write_tree_name_only` no longer exist; every conflict verdict now comes from `predict_composition` (offline) or `compose_environment` (the build). Read the entries as history.
+
 - ✅ **Phase 1** — worktree-isolated rebuild, OID pinning, CAS publish, timestamped backup refs.
 - ✅ **Phase 2** — exhaustive pair attribution (`preflight_compatibility_report`), `hitch rebuild --dry-run`.
 - ✅ **Phase 3 (core policy)** — `Environment.on_conflict` (eject default / halt), live eject-and-continue in `rebuild_environment`, `--on-conflict` override, `hitch set --on-conflict`, `hitch conflicts <env>` standup command.

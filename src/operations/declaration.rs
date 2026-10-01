@@ -816,6 +816,9 @@ pub fn validate_declaration_plan(
     ))
 }
 
+/// Keep in step with the kind match in [`apply_blocked_plan`]: a new blocking
+/// `PlanWarningKind` must be decided in both (does it write? does it exit 0 or 1?).
+///
 /// Whether applying this plan can write to `hitch-metadata`, and so whether a
 /// caller has anything to roll back if the apply fails. A policy refusal is
 /// raised *inside* the apply but writes nothing; an approval gate does write (the
@@ -909,14 +912,14 @@ pub fn apply_declaration_plan(
     // fact, in the gap between the halves: the plan's advisory already says the
     // environment will be left stale and how to fix it, the receipt copy below
     // said it again, and the Result block closes with `⧗ dev   needs rebuild`
-    // from the authority. Same class as the `StepLogger` transcript this branch
-    // is nested inside of: a second voice for a decision the user already made
+    // from the authority. Same class as the step transcript this branch used to
+    // print (deleted): a second voice for a decision the user already made
     // with a flag, above the one document that accounts for it.
     if plan.detail.rebuild {
         // The nested rebuild goes quiet. Its plan said `rebuild {env} — …`
         // above, the receipt below says what became of it, and the
         // `RebuildOutcome` carries the one fact neither of those can derive —
-        // which branches the build held. A `StepLogger` transcript here would
+        // which branches the build held. A step transcript here (deleted) would
         // be a second and older vocabulary narrating work the reader has
         // already been told about, sitting between the two halves that
         // actually account for it.
@@ -983,6 +986,7 @@ pub fn apply_declaration_plan(
 /// A policy refusal *refuses*; the CLI exits 1 and nothing was written. The
 /// plan cannot tell them apart by "is it blocking" alone, which is the whole
 /// reason [`crate::operations::model::PlanWarningKind`] is an enum.
+/// A new blocking kind must also be considered in [`apply_may_write`].
 fn apply_blocked_plan(
     context: &GlobalContext,
     plan: &OperationPlan<DeclarationPlanDetail>,

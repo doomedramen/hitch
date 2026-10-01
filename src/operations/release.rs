@@ -1235,7 +1235,8 @@ struct DependentRebuildAttempt {
 /// receipt's effect list says `rebuild <env>` with the outcome and the holds,
 /// and a failure additionally gets an `ExecutionWarning` under "Still owed".
 /// Logging here as well meant every post-release rebuild announced itself three
-/// times — a step line, then a `log_success`/`log_warning`, then the receipt.
+/// times — a progress line, then a `log_success`/`log_warning`, then the receipt
+/// (the progress-line machinery is gone).
 fn rebuild_dependents(
     context: &GlobalContext,
     plan: &OperationPlan<ReleasePlanDetail>,

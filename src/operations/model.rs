@@ -986,8 +986,8 @@ pub enum AppliedEffect {
         /// `owes_effect`/`as_str`/`reason` must keep meaning what they say. But
         /// it was genuinely being lost: the nested rebuild's own receipt, where
         /// the holds used to be "recorded", is thrown away by
-        /// `rebuild_environment`, so with the `StepLogger` transcript
-        /// suppressed there was nowhere at all for a hold to appear except this.
+        /// `rebuild_environment`, so with the (since deleted) step
+        /// transcript suppressed there was nowhere for a hold to appear but this.
         /// A fact with no reader is a fact the model is not really tracking.
         held: Vec<HoldPair>,
         refname: String,

@@ -974,7 +974,10 @@ snapshot is a snapshot of a repository the operation never touched, so every
 refusal used to run a rollback that repaired nothing, cost two extra metadata
 commits, and printed three lines narrating a repair that had not happened. This
 bit on the *most ordinary* refusals there are — a planner refusal never reaches
-the apply, so it never armed. A policy refusal (sibling conflict) does reach the apply, which raises it, so arming is gated on `apply_may_write(&plan)` (false only for `PolicyRefusal`; an approval gate does write). `a_refused_promote_leaves_the_environment_unlocked`
+the apply, so it never armed. A policy refusal (sibling conflict) does reach the
+apply, which raises it, so arming is gated on `apply_may_write(&plan)` (false
+only for `PolicyRefusal`; an approval gate does write).
+`a_refused_promote_leaves_the_environment_unlocked`
 and `a_refused_promote_writes_no_metadata_commit` in
 `tests/integration/promote_demote_tests.rs` hold both halves, and the armed path
 separately (`a_rollback_that_fires_still_leaves_the_environment_unlocked`).
