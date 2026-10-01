@@ -769,6 +769,8 @@ pub fn compose_environment(
 /// combination, and the last-composed branch is the honest fallback. Runs for
 /// held branches only, so clean composition pays nothing. The label is the only
 /// thing this decides; replay and recording key on the real composition.
+/// Known limit: step 2 probes the peer's own tip, so a peer stale against the
+/// base can be named for what is really a base-vs-peer clash (label only).
 fn true_conflict_partner(
     git: &crate::utils::git_operations::GitOperations,
     inputs: &PinnedInputs,
@@ -2749,25 +2751,6 @@ mod compose_environment_tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    /// `compose_environment` must be a pure function of its pinned inputs.
-    ///
-    /// This is the property the whole phase rests on: it is what lets
-    /// `hitch rebuild --dry-run` be a *preview of the real build* rather than a
-    /// second, tree-based approximation of it (the deleted preflight family).
-    /// If composition ever grew a side effect — writing a ref, taking a lock,
-    /// checking out, touching the network — then calling it for a preview would
-    /// no longer be safe, and the dry-run would have to go back to
-    /// approximating.
-    ///
-    /// Asserted three ways: the result is identical across two calls, no ref
-    /// anywhere moved, and no `refs/hitch/*` machinery appeared.
-    ///
-    /// The comparison is on the **tree**, not the commit SHA. `commit_tree`
-    /// stamps ambient wall-clock time with no `GIT_AUTHOR_DATE` override, so
-    /// two calls a second apart legitimately produce different commit OIDs for
-    /// identical content. The tree is pure content and timestamp-independent —
-    /// the same reasoning `crash_recovery_tests.rs` uses for its convergence
-    /// check, and the reason that test compares `<branch>^{tree}`.
     fn partner_fixture(
         files: &[(&str, &str)],
         branches: &[(&str, &[(&str, &str)])],
@@ -2902,6 +2885,25 @@ mod compose_environment_tests {
         Ok(())
     }
 
+    /// `compose_environment` must be a pure function of its pinned inputs.
+    ///
+    /// This is the property the whole phase rests on: it is what lets
+    /// `hitch rebuild --dry-run` be a *preview of the real build* rather than a
+    /// second, tree-based approximation of it (the deleted preflight family).
+    /// If composition ever grew a side effect — writing a ref, taking a lock,
+    /// checking out, touching the network — then calling it for a preview would
+    /// no longer be safe, and the dry-run would have to go back to
+    /// approximating.
+    ///
+    /// Asserted three ways: the result is identical across two calls, no ref
+    /// anywhere moved, and no `refs/hitch/*` machinery appeared.
+    ///
+    /// The comparison is on the **tree**, not the commit SHA. `commit_tree`
+    /// stamps ambient wall-clock time with no `GIT_AUTHOR_DATE` override, so
+    /// two calls a second apart legitimately produce different commit OIDs for
+    /// identical content. The tree is pure content and timestamp-independent —
+    /// the same reasoning `crash_recovery_tests.rs` uses for its convergence
+    /// check, and the reason that test compares `<branch>^{tree}`.
     #[test]
     fn compose_environment_is_pure_and_deterministic() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
