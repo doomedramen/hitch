@@ -526,13 +526,35 @@ pub fn render_promote_refusal(
     for f in &conflict.conflicted_files {
         msg.push_str(&format!("    {}\n", f));
     }
-    msg.push('\n');
-    msg.push_str(&format!("Fix {} first:\n", new_branch));
-    msg.push_str(&format!(
-        "  git checkout {} && git rebase {}\n",
-        new_branch, conflict.conflicts_with
-    ));
     msg
+}
+
+/// Why an approval-gated change cannot even be requested.
+pub fn render_insufficient_approvers(
+    environment: &str,
+    required: usize,
+    eligible: usize,
+    requester: &str,
+) -> String {
+    format!(
+        "Cannot request approval for '{environment}': {required} approval(s) required, but only \
+         {eligible} eligible approver(s) are available.\n\
+         The requester ({requester}) cannot approve their own request, so they don't count \
+         toward the threshold. You can also lower the threshold with \
+         `hitch set {environment} --min-approvals <n>`."
+    )
+}
+
+/// The next step after a promote refusal: the fix, not the promote that just
+/// failed (the reason above names the conflict; re-running only follows the fix).
+pub fn promote_refusal_remedy(
+    new_branch: &str,
+    conflict: &crate::utils::prelude::CompatibilityConflict,
+) -> String {
+    format!(
+        "git checkout {} && git rebase {}",
+        new_branch, conflict.conflicts_with
+    )
 }
 
 /// The advisory a release plan carries for a dependent environment it will not
@@ -550,6 +572,14 @@ pub fn render_dependent_skip(
         "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto '{}':{}",
         environment, conflict.branch, conflict.conflicts_with, files
     )
+}
+
+/// The conflict policy in words a user would choose, never the variant name.
+pub fn describe_conflict_policy(policy: crate::types::OnConflict) -> &'static str {
+    match policy {
+        crate::types::OnConflict::Eject => "hold conflicting branches",
+        crate::types::OnConflict::Halt => "stop the build",
+    }
 }
 
 /// Render an environment equation: `dev = main + auth + payments`.

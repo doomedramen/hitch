@@ -561,9 +561,15 @@ mod tests {
                 !stderr.contains("hitch hitch"),
                 "a remedy that does not run is worse than none:\n{stderr}"
             );
+            // The remedy is the fix (the rebase), not the promote that just
+            // failed, which would be the same refusal again.
             assert!(
-                stderr.contains("hitch promote branch-b dev"),
-                "the refusal must name the command that would have worked:\n{stderr}"
+                stderr.contains("To proceed:\n  git checkout branch-b && git rebase branch-a"),
+                "the remedy must be the rebase:\n{stderr}"
+            );
+            assert!(
+                !stderr.contains("hitch promote branch-b dev"),
+                "re-running the failed command is not a next step:\n{stderr}"
             );
 
             let stdout = result.stdout();
@@ -574,7 +580,6 @@ mod tests {
                 // to say "conflicts with main" and prescribe a rebase onto a base
                 // that b does not conflict with.
                 .assert_stdout_contains("branch-b conflicts with branch-a, which is already in dev")
-                .assert_stdout_contains("git rebase branch-a")
                 .assert_stdout_contains("shared.txt");
             assert!(
                 !stdout.contains("conflicts with main"),
@@ -1558,6 +1563,65 @@ mod tests {
         Ok(())
     }
 
+    /// An approval-gated promote with no eligible approver (the only approver is
+    /// the requester) is refused by the plan, so no rollback is armed or narrated.
+    #[test]
+    fn a_promote_with_no_eligible_approver_is_refused_by_the_plan() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "prod"]).execute()?;
+            make_feature(env, "feat-a")?;
+            let me = env
+                .git
+                .run(&["config", "user.email"])?
+                .stdout()
+                .trim()
+                .to_string();
+            env.hitch
+                .run()
+                .args(&[
+                    "set",
+                    "prod",
+                    "--requires-approval",
+                    "true",
+                    "--add-approver",
+                    &me,
+                ])
+                .execute()?
+                .assert_success();
+
+            let before = metadata_commit_count(env)?;
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "feat-a", "prod"])
+                .execute()?;
+            let (out, err) = (result.stdout(), result.stderr());
+            result.assert_exit_code(1);
+            let all = format!("{out}\n{err}");
+            assert!(
+                !all.contains("Rolling back"),
+                "no rollback narrated:\n{all}"
+            );
+            assert!(!all.contains("restored"), "no restore narrated:\n{all}");
+            assert!(
+                all.contains("eligible approver"),
+                "the reason is named:\n{all}"
+            );
+            assert!(
+                err.contains("To proceed:\n  hitch set prod --add-approver <email>"),
+                "the next step is concrete:\n{err}"
+            );
+            assert_eq!(
+                metadata_commit_count(env)? - before,
+                2,
+                "lock + unlock only"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
     /// The same properties for `demote`, which shares the shape.
     #[test]
     fn a_refused_demote_says_why_once_writes_nothing_and_leaves_no_lock() -> anyhow::Result<()> {
@@ -1605,8 +1669,8 @@ mod tests {
     ///
     /// The refusals above never reach the apply, so they never arm the snapshot.
     /// This one does: the environment is approval-gated, the plan is blocked, and
-    /// the apply then fails while creating the request — because the sole
-    /// approver is the requester, who cannot approve their own. So the snapshot
+    /// the apply then fails while creating the request — because one for this
+    /// branch is already pending (a fact only the apply sees). So the snapshot
     /// is armed, the rollback runs, and the restored snapshot is the *pre-lock*
     /// one. Before the fix the restored snapshot was the pre-unlock one, so this
     /// path wedged the environment exactly as the refusals above did, on the one
@@ -1624,11 +1688,16 @@ mod tests {
                     "dev",
                     "--requires-approval",
                     "true",
-                    // The harness's own identity, so the request has no eligible
-                    // approver and the apply fails rather than asking.
                     "--add-approver",
-                    "test@example.com",
+                    "alice@example.com",
                 ])
+                .execute()?
+                .assert_success();
+            // The first promote files a request; the second finds it pending, which
+            // only the apply can learn, after the rollback is armed.
+            env.hitch
+                .run()
+                .args(&["promote", "feat-a", "dev"])
                 .execute()?
                 .assert_success();
 

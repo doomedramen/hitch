@@ -305,6 +305,7 @@ mod tests {
             declare_branches(env, "dev", &["feat-a", "feat-b"])?;
             s.step(Expect::Code(2), &["rebuild", "dev"])?;
             s.step(Expect::Ok, &["status"])?;
+            s.step(Expect::Ok, &["conflicts", "dev"])?;
             s.step(Expect::Ok, &["why", "feat-b"])?;
             s.step(Expect::Ok, &["why", "dev"])?;
             s.step(Expect::Ok, &["log"])?;

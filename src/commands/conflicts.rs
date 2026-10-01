@@ -57,12 +57,12 @@ pub fn run(args: ConflictsCommand, context: &GlobalContext) -> Result<()> {
     }
 
     println!(
-        "\n{} {} — {} branch{} would be held on rebuild (policy: {:?})\n",
+        "\n{} {} — {} branch{} would be held on rebuild (policy: {})\n",
         "⛔".red(),
         args.env_name.cyan().bold(),
         conflicts.len(),
         if conflicts.len() == 1 { "" } else { "es" },
-        environment.on_conflict
+        crate::core::render::describe_conflict_policy(environment.on_conflict)
     );
 
     for c in &conflicts {

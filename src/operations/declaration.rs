@@ -35,7 +35,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 
 use crate::commands::global_context::GlobalContext;
-use crate::core::render::render_promote_refusal;
+use crate::core::render::{
+    promote_refusal_remedy, render_insufficient_approvers, render_promote_refusal,
+};
 use crate::core::state::build_state_snapshot;
 use crate::operations::model::{
     changed_inputs, AppliedEffect, ConfirmationRequirement, DependentRebuildOutcome,
@@ -498,6 +500,7 @@ fn plan_declaration_change(
     // actually held the branch against and `render_promote_refusal` words it.
     let mut warnings: Vec<PlanWarning> = Vec::new();
     let mut refused: Option<String> = None;
+    let mut refusal_remedy: Option<String> = None;
     if change.is_promotion() && !declared.branches.is_empty() {
         context.log_verbose("Checking for conflicts with already-promoted branches...");
         for branch in change.branches() {
@@ -514,20 +517,41 @@ fn plan_declaration_change(
                     &declared.base,
                     &conflict,
                 ));
+                refusal_remedy = Some(promote_refusal_remedy(branch, &conflict));
                 break;
             }
         }
     }
+    // Not enough eligible approvers: the request could never be satisfied
+    // (self-approval is forbidden), so refuse before anything is armed.
+    if refused.is_none()
+        && !matches!(change, DeclarationChange::ApprovedApply { .. })
+        && declared.requires_approval_check()
+    {
+        let requester = crate::utils::authorization::get_current_user(context)?;
+        let eligible = declared
+            .approvers
+            .iter()
+            .filter(|a| **a != requester)
+            .count();
+        if declared.min_approvals > eligible {
+            refused = Some(render_insufficient_approvers(
+                environment,
+                declared.min_approvals,
+                eligible,
+                &requester,
+            ));
+            refusal_remedy = Some(format!("hitch set {environment} --add-approver <email>"));
+        }
+    }
     if let Some(reason) = &refused {
-        // No remedy override, and the reason is why: for *this* refusal the
-        // default is right. The reason text already names the unblocker — "Fix
-        // feat-b first: `git checkout feat-b && git rebase main`" — and the
-        // promote itself is genuinely still the command to run once the rebase
-        // lands. `hitch lock dev` on a locked environment is the opposite case,
-        // where the default names the command that just failed and can only
-        // fail again; that is the distinction a remedy override exists for, and
-        // getting it the wrong way round is worse than not having it.
-        warnings.push(PlanWarning::policy_refusal(reason.clone()));
+        // A refusal whose unblocker is a different command says so; the default
+        // remedy is the command that just failed.
+        let mut warning = PlanWarning::policy_refusal(reason.clone());
+        if let Some(remedy) = refusal_remedy {
+            warning = warning.with_remedy(remedy);
+        }
+        warnings.push(warning);
     }
 
     // The approval gate. A gated plan proposes nothing: composing a
