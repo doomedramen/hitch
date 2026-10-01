@@ -3110,11 +3110,7 @@ impl GitOperations {
 
         // Also treat an in-progress rebase/apply as an unresolved state.
         let git_dir = self.repo.path();
-        if git_dir.join("rebase-apply").exists() || git_dir.join("rebase-merge").exists() {
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(git_dir.join("rebase-apply").exists() || git_dir.join("rebase-merge").exists())
     }
 
     /// The three merge stages of each currently-conflicted path, from

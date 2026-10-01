@@ -19,6 +19,9 @@ jobs:
     name: Test Suite
     runs-on: ubuntu-latest
     strategy:
+      # One toolchain failing (beta tends to grow new clippy lints) must not
+      # cancel the others, or stable and the MSRV never report.
+      fail-fast: false
       matrix:
         rust:
           - stable
