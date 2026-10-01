@@ -278,3 +278,47 @@ fn the_schema_doc_lists_the_same_commands_as_the_json_doc_comment() {
          not name: {invented:?}"
     );
 }
+
+/// `HITCH_YES` is documented as settable to `1`; clap's strict bool parser
+/// rejected it, so the documented spelling failed at argument parsing.
+#[test]
+fn hitch_yes_env_var_confirms_like_the_flag() -> anyhow::Result<()> {
+    use crate::framework::TestSetup;
+    use crate::test_framework::*;
+
+    let framework = HitchTestFramework::new()?;
+    framework.with_test_environment(TestSetup::HitchInit, |env| {
+        env.hitch
+            .run()
+            .args(&["add", "dev"])
+            .execute()?
+            .assert_success();
+
+        // (value, should confirm). The harness injects `--yes` unless told not
+        // to, which would hide the env var entirely.
+        for (value, confirms) in [("1", true), ("true", true), ("0", false)] {
+            let result = env
+                .hitch
+                .run()
+                .args(&["--json", "lock", "dev"])
+                .with_yes(false)
+                .env("HITCH_YES", value)
+                .execute()?;
+            let stderr = result.stderr();
+            if confirms {
+                result.assert_success();
+                env.hitch
+                    .run()
+                    .args(&["unlock", "dev"])
+                    .execute()?
+                    .assert_success();
+            } else {
+                // Refused at the confirmation gate (exit 1), not a parse error.
+                assert!(stderr.contains("Refusing to prompt"), "{stderr}");
+                result.assert_exit_code(1);
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+    Ok(())
+}

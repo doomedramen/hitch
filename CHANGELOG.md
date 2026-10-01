@@ -85,6 +85,13 @@ Human output only; exit codes are unchanged.
   branch that exists only on a remote you have never fetched is skipped by the
   check, and may be held later, at the next rebuild. `hitch resolve` and
   `hitch conflicts` still fetch, as before.
+- **`hitch release`'s dependent-environment planning** predicts through the same
+  offline composition as everything else, so a dependent whose base cannot be
+  resolved is now an error rather than silently treated as conflict-free (the old
+  check synchronised branches first).
+- The "already in base" fact `hitch status` shows is computed once, from the same
+  pinned SHAs the verdict uses (the local branch first, then the cached
+  `origin/<branch>`), rather than by a live check at display time.
 - A refusal that is only "already so" (unlocking an unlocked environment) prints no
   "To proceed" line.
 
@@ -108,8 +115,12 @@ Human output only; exit codes are unchanged.
 - `hitch approvals approve --json` without `--yes` refuses before it records the vote.
 - A refused `promote` or `demote` no longer leaves the environment locked or
   commits extra metadata changes.
-- `hitch cleanup` no longer advises `git branch -D + feat` for a branch checked out
-  in a linked worktree, and no longer deletes one.
+- `hitch cleanup` read git's `+ ` marker (a branch checked out in a linked worktree)
+  as part of the branch name, so it could suggest a command like
+  `git branch -D + feat`. Names now come from `for-each-ref`, and a branch checked
+  out in any worktree is kept rather than deleted.
+- `HITCH_YES=1` (and `true`) is accepted. The documented spelling used to fail at
+  argument parsing with `invalid value '1' for '--yes'`; `--yes` is unchanged.
 
 ### Removed
 

@@ -30,7 +30,14 @@ pub struct Cli {
     /// what it is about to do and what it did, so a CI log answers "what
     /// changed" without anyone reading it twice. Use `--json` for a
     /// machine-readable form of the same thing.
-    #[arg(long, short = 'y', global = true, env = "HITCH_YES")]
+    #[arg(
+        long,
+        short = 'y',
+        global = true,
+        env = "HITCH_YES",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
     pub yes: bool,
 
     /// Print a machine-readable document on stdout and nothing else; send all
