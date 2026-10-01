@@ -1108,13 +1108,13 @@ mod tests {
     }
 
     /// The mode decision reads `(branch, conflicts_with, files)` of the target's
-    /// held entry. These are the verdicts the tree-based `preflight_compatibility_report`
-    /// gave for the same repositories (compared side by side before it was
-    /// removed from `resolve`); the composition agreed in every one, including
-    /// when the target conflicts with the accumulated composition but not with
-    /// the last-composed branch's own files.
+    /// held entry. These pin the verdicts; before the tree-based preflight was
+    /// dropped from `resolve` they were compared side by side with it and agreed
+    /// in every case. In the three-branch case the target collides with the
+    /// accumulated composition, and `conflicts_with` names the last-composed
+    /// branch, not the one it actually collides with.
     #[test]
-    fn test_resolve_mode_selection_verdicts_match_the_old_preflight() -> anyhow::Result<()> {
+    fn test_resolve_mode_selection_verdicts_are_pinned() -> anyhow::Result<()> {
         use hitch::commands::global_context::{GlobalContext, GlobalFlags};
         use hitch::types::Environment;
         use hitch::utils::logging::Logger;
@@ -1252,6 +1252,126 @@ mod tests {
                 .execute()?
                 .assert_failure()
                 .assert_stderr_contains("does not currently conflict");
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// Documents a quirk: `conflicts_with` is the last-composed branch, so a
+    /// branch that collides with the *base* after a clean peer names the peer
+    /// and `resolve` picks Mode B (a peer-conflict session) rather than Mode A.
+    #[test]
+    fn test_resolve_base_collision_after_a_clean_peer_starts_mode_b() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            commit_file(env, "shared.txt", "one\ntwo\nthree\nfour\nfive\n")?;
+            branch_off_main(env, "a", "a.txt", "a\n")?;
+            branch_off_main(env, "c", "shared.txt", "C\ntwo\nthree\nfour\nfive\n")?;
+            commit_file(env, "shared.txt", "MAIN\ntwo\nthree\nfour\nfive\n")?;
+            declare(env, "main", &["a", "c"])?;
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev"])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Conflicts left in")
+                .assert_stdout_contains("--continue");
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_several_held_branches_asks_for_branch() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            commit_file(env, "shared.txt", "base\n")?;
+            commit_file(env, "other.txt", "base\n")?;
+            branch_off_main(env, "a", "shared.txt", "from-a\n")?;
+            branch_off_main(env, "b", "shared.txt", "from-b\n")?;
+            branch_off_main(env, "c", "other.txt", "from-c\n")?;
+            branch_off_main(env, "d", "other.txt", "from-d\n")?;
+            declare(env, "main", &["a", "b", "c", "d"])?;
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev"])
+                .execute()?
+                .assert_failure()
+                .assert_stderr_contains("has 2 branches held: b, d")
+                .assert_stderr_contains("Specify which one with --branch");
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// `resolve` syncs before deciding: the local `a` is stale and only origin's
+    /// `a` collides with the moved base. Without the sync this would report
+    /// "nothing to resolve".
+    #[test]
+    fn test_resolve_decides_from_a_branch_tip_that_exists_only_on_origin() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+
+            let bare_path = env.temp_dir.parent().unwrap().join(format!(
+                "{}-resolve-origin.git",
+                env.temp_dir.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::create_dir_all(&bare_path)?;
+            // Test-only: scratch bare remote standing in for origin.
+            #[allow(clippy::disallowed_methods)]
+            let init = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&bare_path)
+                .stdin(std::process::Stdio::null())
+                .output()?;
+            assert!(init.status.success(), "failed to init bare origin repo");
+            env.git
+                .run(&["remote", "add", "origin", &bare_path.to_string_lossy()])?
+                .assert_success();
+
+            commit_file(env, "shared.txt", "one\ntwo\nthree\nfour\nfive\n")?;
+            branch_off_main(env, "a", "a.txt", "a\n")?;
+            let stale = env
+                .git
+                .run(&["rev-parse", "a"])?
+                .stdout()
+                .trim()
+                .to_string();
+            env.git.run(&["checkout", "a"])?;
+            commit_file(env, "shared.txt", "A\ntwo\nthree\nfour\nfive\n")?;
+            env.git.run(&["checkout", "main"])?;
+            commit_file(env, "shared.txt", "MAIN\ntwo\nthree\nfour\nfive\n")?;
+            env.git
+                .run(&["push", "origin", "main", "a"])?
+                .assert_success();
+            env.git
+                .run(&["branch", "-f", "a", &stale])?
+                .assert_success();
+            declare(env, "main", &["a"])?;
+
+            env.hitch
+                .run()
+                .args(&["resolve", "dev"])
+                .execute()?
+                .assert_success()
+                .assert_stdout_contains("Rebase paused with conflicts");
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(())

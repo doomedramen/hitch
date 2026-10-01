@@ -163,14 +163,19 @@ pub fn run(args: ResolveCommand, context: &GlobalContext) -> Result<()> {
     }
 }
 
-/// The branches a build of `environment` would hold right now, read from the
-/// same composition a rebuild runs. Offline: it does not sync, so it describes
-/// the local (or last-fetched) refs, as `hitch resolve` always has.
+/// The branches a build of `environment` would hold right now. Syncs first, as
+/// the preflight this replaced did, so a stale local branch cannot make the
+/// mode decision from older content than origin has; the prediction itself
+/// stays offline.
 fn held_branches(
     context: &GlobalContext,
     env_name: &str,
     environment: &Environment,
 ) -> Result<Vec<CompatibilityConflict>> {
+    let mut all = Vec::with_capacity(environment.branches.len() + 1);
+    all.push(environment.base.clone());
+    all.extend(environment.branches.iter().cloned());
+    context.git().synchronize_branches(&all)?;
     Ok(predict_composition(context, environment, env_name)?.held)
 }
 

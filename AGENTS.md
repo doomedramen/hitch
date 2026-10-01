@@ -1114,7 +1114,8 @@ from releases.
 No mutation reads `preflight_compatibility_report` any more. `hitch resolve`
 chooses Mode A (held partner is the base) versus Mode B (a peer) and refuses
 "nothing to resolve" from `predict_composition(..).held`, the same composition a
-rebuild runs, offline (unlike the preflight it replaced, it does not sync). The remaining
+rebuild runs. `resolve` syncs the base and promoted branches itself first (as the
+preflight did) and the prediction stays offline. The remaining
 callers are display-only (`conflicts.rs`, and via `_local` `status.rs`,
 `tree.rs`); Task 5 of P10 migrates them and deletes the preflight, so once it
 lands this paragraph should say only that no tree-based oracle exists. Known
