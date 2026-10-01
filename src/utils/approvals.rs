@@ -2,7 +2,6 @@ use crate::commands::global_context::GlobalContext;
 use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig, Operation};
 use anyhow::{anyhow, Result};
 
-/// Create an approval request
 /// `Some((required, eligible))` when an approval request could never be
 /// satisfied: self-approval is forbidden, so the requester never counts toward
 /// the threshold. The one rule behind both the planner's refusal and the
@@ -19,6 +18,7 @@ pub fn eligible_approver_shortfall(
     (environment.min_approvals > eligible).then_some((environment.min_approvals, eligible))
 }
 
+/// Create an approval request
 pub fn create_approval_request(
     context: &GlobalContext,
     config: &mut HitchConfig,

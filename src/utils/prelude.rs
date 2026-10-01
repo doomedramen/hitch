@@ -876,17 +876,8 @@ pub fn pin_environment_inputs(
     })
 }
 
-/// Resolve an environment's inputs from local refs alone, the way
-/// `build_state_snapshot` does: `refs/heads/<b>`, then the cached
-/// `refs/remotes/origin/<b>`, and nothing else. No `ls-remote`, no fetch.
-///
-/// A promoted branch that resolves nowhere is dropped from the pins rather
-/// than failing, which is what the tree-based local preflight it replaced did
-/// (`continue`): that branch's own state (missing, stale) is what should
-/// explain it, not a prediction. An unresolvable *base* is an `Err`, because a
-/// composition needs a starting commit; the old `_local` variant returned "no
-/// conflicts" there, and a display caller that wants that back maps this `Err`
-/// to an empty list.
+/// A branch's tip from local refs alone: `refs/heads/<b>`, then the cached
+/// `refs/remotes/origin/<b>`. No `ls-remote`, no fetch.
 fn live_sha_offline(context: &GlobalContext, branch: &str) -> Option<String> {
     let git = context.git();
     git.rev_parse_opt(&format!("refs/heads/{}", branch))
@@ -899,6 +890,17 @@ fn live_sha_offline(context: &GlobalContext, branch: &str) -> Option<String> {
         })
 }
 
+/// Resolve an environment's inputs from local refs alone, the way
+/// `build_state_snapshot` does: `refs/heads/<b>`, then the cached
+/// `refs/remotes/origin/<b>`, and nothing else. No `ls-remote`, no fetch.
+///
+/// A promoted branch that resolves nowhere is dropped from the pins rather
+/// than failing, which is what the tree-based local preflight it replaced did
+/// (`continue`): that branch's own state (missing, stale) is what should
+/// explain it, not a prediction. An unresolvable *base* is an `Err`, because a
+/// composition needs a starting commit; display callers go through
+/// `predict_composition_if_base_resolves`, which turns only that case into
+/// "no prediction".
 fn pin_inputs_offline(context: &GlobalContext, environment: &Environment) -> Result<PinnedInputs> {
     let live = |branch: &str| live_sha_offline(context, branch);
     let base_sha = live(&environment.base).ok_or_else(|| {
