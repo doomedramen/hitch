@@ -389,11 +389,75 @@ hitch rebuild dev
 
 This takes the environment's current declaration and recreates its branch from the current inputs.
 
-You can preview the result first:
+Every Hitch command that changes something follows the same shape: it shows a **plan** (what it will change, and what it will leave alone), asks if it needs to, applies it, and prints a **receipt** of what happened. If anything you planned moved in the meantime, the apply is refused instead of doing something different from what you were shown.
+
+Preview the plan without applying it:
 
 ```bash
-hitch rebuild dev --dry-run
+hitch rebuild staging --dry-run
 ```
+
+```text
+Rebuild staging
+
+Composition
+  ⛔ clash held — conflicts with main
+      shared.txt
+    fix: git checkout clash && git rebase main
+
+Current
+  staging = main + clash
+
+Proposed
+  staging = main + clash
+
+Will change
+  staging                    rebuild from 1 branch · none → 9a09aab
+  build record for staging   record of what 'staging' last built (result 9a09aab)
+  settings                   'rebuilt_at' stamp for 'staging'
+
+Will not change
+  main
+  clash
+  qa
+  dev
+
+Worth knowing
+  ⚠️ 'clash' conflicts with 'main' and will be held out of this build (1 file(s))
+```
+
+A real rebuild prints that plan, then the receipt:
+
+```text
+Applied, with branches held
+
+  ✓ staging
+    none → 9a09aab
+  ✓ build record for staging   record of what 'staging' last built (result 9a09aab)
+  ✓ settings   'rebuilt_at' stamp for 'staging'
+
+Result
+  ✓ dev   partially realised
+      held: clash
+  ✓ qa   partially realised
+      held: clash
+  ✓ staging   partially realised
+      held: clash
+```
+
+### Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| 0    | Success |
+| 1    | Failure, including a plan that was refused |
+| 2    | `rebuild` succeeded **but held a conflicting branch** (also what `--dry-run` returns when it would hold) |
+
+Exit 2 is for pipelines that want to warn on a held branch without failing the build.
+
+### For scripts
+
+Add `--json` for a machine-readable document on stdout (everything else goes to stderr). Because it never prompts, a mutating command needs `--yes` as well, or it exits 1 and changes nothing. See [`docs/architecture/json-schema.md`](docs/architecture/json-schema.md).
 
 Or see current conflicts:
 
@@ -509,7 +573,74 @@ See [`docs/github-pr-workflow-plan.md`](docs/github-pr-workflow-plan.md) for the
 hitch status
 ```
 
-shows your environments and their promoted branches.
+shows a matrix of every feature against every environment, and whether each environment's last build is still current:
+
+```text
+Feature   DEV         QA
+───────────────────────────────────
+clash     ⛔ held      ⛔ held
+payments  ● included  — not desired
+search    ● included  — not desired
+
+DEV  desired 3 · actual 2 · 1 held
+    partially realised
+QA   desired 1 · actual 0 · 1 held
+    partially realised
+```
+
+*Desired* is what the environment's declaration says. *Actual* is what its last build really contained, which Hitch records every time it builds. The two can differ because a branch was held out by a conflict, or because something moved since the build. For the older per-environment view, use `hitch status --environments`.
+
+If an environment was last built by an older Hitch, there is no record of what it contained, and Hitch says so rather than guessing:
+
+```text
+DEV  desired 3 · actual 0 · 3 actual unknown
+    actual unknown
+```
+
+That is normal, exits 0, and clears on the environment's next `hitch rebuild`.
+
+### Why is it like that?
+
+```bash
+hitch why clash qa
+```
+
+```text
+clash → qa
+
+Desired
+  qa = main + clash
+
+Actual
+  qa = main
+    clash ⛔ held — conflicts with main
+        shared.txt
+
+Membership
+  ⛔ Held
+```
+
+Three forms: `hitch why <branch>` (the branch, in every environment), `hitch why <branch> <environment>`, and `hitch why <environment>`. It ends with what Hitch did and the command that would fix it.
+
+### What happened?
+
+```bash
+hitch log
+```
+
+```text
+Today
+  14:35  Dev rebuilt qa, holding clash
+         clash was held — it conflicts with main
+  14:35  Dev added clash to qa
+  14:35  Dev rebuilt dev
+  14:35  Dev added payments to dev
+  14:35  Dev created environment dev from main
+```
+
+This is Hitch's own history (who promoted, rebuilt, released, locked and approved what), not a Git log. Filter with `--env` and `--branch`.
+
+### And the tree
 
 ```bash
 hitch tree
@@ -568,25 +699,34 @@ hitch --no-push ...
 
 # Common commands
 
+The everyday commands. `hitch --help` lists all of them, and `hitch <command> --help` shows each one's options.
+
 | Command                       | Meaning                                               |
 | ----------------------------- | ----------------------------------------------------- |
 | `hitch init`                  | Initialize Hitch                                      |
 | `hitch add dev --base main`   | Create an environment                                 |
+| `hitch remove dev`            | Remove an environment                                 |
+| `hitch set dev --base main`   | Change an environment's settings                      |
 | `hitch promote A dev`         | Put feature `A` into `dev`                            |
 | `hitch demote A dev`          | Remove feature `A` from `dev`                         |
 | `hitch rebuild dev`           | Regenerate `dev`                                      |
 | `hitch rebuild dev --dry-run` | Preview a rebuild                                     |
 | `hitch conflicts dev`         | Show branches that cannot currently compose           |
 | `hitch resolve dev`           | Guided conflict resolution                            |
-| `hitch status`                | Show environment state                                |
+| `hitch status`                | Show what each environment contains                   |
+| `hitch why A dev`             | Explain why `A` is (or is not) in `dev`               |
 | `hitch tree`                  | Show the environment/branch hierarchy                 |
 | `hitch log`                   | Show what happened to your environments               |
 | `hitch release qa main`       | Merge QA's promoted features into `main`              |
 | `hitch lock qa`               | Freeze changes to an environment                      |
 | `hitch unlock qa`             | Unfreeze it                                           |
+| `hitch approvals list`        | Review approval requests (`approve`, `reject`, ...)   |
+| `hitch cleanup`               | Show branches that are no longer promoted             |
 | `hitch pr`                    | Open a PR for the current feature branch              |
 | `hitch setup`                 | Configure GitHub protection for the Hitch PR workflow |
 | `hitch doctor`                | Check repository/Hitch integration health             |
+
+Also available: `branch`, `diff`, `guard`, `push`, `resolutions` and `completion`.
 
 Run:
 

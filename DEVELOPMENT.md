@@ -297,18 +297,30 @@ just setup              # Setup development environment
 ```
 hitch/
 ├── src/
-│   ├── main.rs          # CLI entry point
-│   ├── commands/        # CLI command implementations
-│   ├── utils/           # Utility modules
-│   └── types.rs         # Type definitions
-├── tests/               # Integration and unit tests
+│   ├── main.rs          # CLI entry point and dispatch
+│   ├── cli.rs           # The command tree (clap)
+│   ├── commands/        # One thin file per CLI command
+│   ├── core/            # Read-only models and the one place that words them:
+│   │                    #   state, status (matrix), why, activity, render
+│   ├── operations/      # Plan -> validate -> apply -> receipt, per operation
+│   ├── utils/           # Git/GitHub plumbing, composition, publishing, locks
+│   └── types.rs         # hitch.json schema
+├── crates/
+│   └── hitch-desktop/   # Tauri + React desktop GUI (separate; currently does
+│                        #   not compile against the core, see AGENTS.md)
+├── tests/               # Integration, scenario and unit tests, and the harness
+├── docs/
+│   ├── architecture/    # explainable-operations.md, json-schema.md
+│   └── superpowers/     # Implementation plans
 ├── .github/workflows/   # CI/CD configurations
-├── lefthook.yml        # Git hooks configuration
-├── justfile            # Development commands
-├── coverage.toml       # Coverage configuration
-├── dist-workspace.toml # Distribution config
-└── Cargo.toml          # Project configuration
+├── lefthook.yml         # Git hooks configuration
+├── justfile             # Development commands
+├── CHANGELOG.md         # User-visible changes
+├── dist-workspace.toml  # Distribution config
+└── Cargo.toml           # Project configuration
 ```
+
+New to the codebase? Read [`docs/architecture/explainable-operations.md`](docs/architecture/explainable-operations.md) first.
 
 ## 🤝 Contributing
 

@@ -61,6 +61,7 @@ hitch remove dev                        # Remove an environment
 ```bash
 hitch promote feature/auth dev          # Promote branch to environment
 hitch promote feature/auth dev --no-rebuild  # Skip rebuild (batch mode)
+hitch promote feature/auth dev --dry-run     # Print the plan, change nothing
 hitch demote feature/auth dev           # Remove branch from environment
 ```
 
@@ -87,12 +88,16 @@ hitch doctor --max-resolution-age-days 30  # CI-gate on stale resolution debt
 
 ### Status & Inspection
 ```bash
-hitch status                            # Show status of all environments
+hitch status                            # Feature x environment matrix + whether each build is current
+hitch status --environments [NAME]      # Per-environment detail view
 hitch status --verbose                  # Detailed status
 hitch status --diff                     # Show config changes
 hitch tree                              # Show branch hierarchy
+hitch why feature/x                     # Why is this branch in / out of each environment?
+hitch why feature/x dev                 # ...in this one
+hitch why dev                           # Desired vs actual for an environment
 hitch log                               # What happened: promotes, rebuilds, releases, locks, approvals
-hitch log --env dev --branch feature/x -n 50   # Filter / page (--json for a document)
+hitch log --env dev --branch feature/x -n 50   # Filter / page
 ```
 
 ### Lock/Unlock
@@ -130,6 +135,8 @@ hitch completion bash > /etc/bash_completion.d/hitch  # Shell completions
 ## Global Flags
 - `--verbose` - Print detailed step-by-step logs
 - `--no-push` - Never touch the remote (skips metadata pushes and remote branch replacement)
+- `--json` - One machine-readable document on stdout, all prose on stderr. Supported by `rebuild`, `promote`, `demote`, `release`, `lock`, `unlock`, `set`, `add`, `remove`, `cleanup`, `approvals approve`, `status`, `why`, `log`; any other command prints nothing on stdout. Mutations emit `{schema_version, plan, receipt}` (`receipt` is `null` for `--dry-run`); `status`/`why`/`log` emit `{schema_version, <view>}`. Needs `--yes` on a mutating command or it exits 1 without changing anything. Schema: `docs/architecture/json-schema.md`
+- `--dry-run` (per command) - Print the plan and change nothing. On `add`, `remove`, `set`, `promote`, `demote`, `rebuild`, `release`. `lock`/`unlock` have none; `cleanup` previews unless given `--apply`
 - `--yes` / `-y` - Answer "yes" to every confirmation prompt (also `HITCH_YES=1`)
 
 Non-interactive sessions (CI, scripts, AI agents) have no terminal to answer
@@ -139,6 +146,19 @@ a "no interactive terminal" error unless `--yes` is passed.
 Per-command `--force` means only "override a lock / approval / safety guard" —
 it never skips a confirmation prompt. `hitch cleanup` uses `--apply` to leave
 dry-run mode.
+
+## Reading a Plan and a Receipt
+
+Every mutating command prints a **plan**, then (after confirming, or with `--yes`) a **receipt**.
+
+- Plan sections: `Current` / `Proposed` (the environment as `base + branches`), `Composition` (✓ included, ⛔ held with the partner, files and the fix), `Will change`, `Will not change`, `Worth knowing` (advisories), `Needs your decision` / `Needs approval` / `Why this cannot apply` (gates and refusals, each with the command to run next).
+- Receipt: `Applied` (or `Applied, with branches held`), what was done (✓), anything still owed (⧗, with the command that settles it, usually `hitch rebuild <env>`), then `Result` for the environments affected.
+- A plan is refused at apply time if its inputs moved after it was shown; re-run the command.
+- `hitch status` / `hitch why` health words: *realised*, *partially realised* (a branch is held), *needs rebuild*, *never built*, *branch missing*, and *actual unknown* (no build record: normal for an environment last built by an older Hitch, exits 0, cleared by the next `hitch rebuild`).
+
+## Exit Codes
+
+`0` success. `1` failure (a refused plan, a stale plan, `--json` without `--yes`). `2` `hitch rebuild` applied but **held** a conflicting branch (a `--dry-run` that would hold also exits 2): the build succeeded, but not everything declared is in it. Treat 2 as "warn", not "fail", and read the receipt (or `--json` `receipt.outcome == "AppliedWithHolds"`).
 
 ## Approval Workflow
 
@@ -191,7 +211,9 @@ Hitch stores configuration in `hitch.json` on the `hitch-metadata` branch:
 - After `hitch release`, promoted branches may already be merged — use `hitch cleanup` to remove them
 - Use `hitch diff` before rebuild to preview what commits would be added
 - Use `hitch rebuild <env> --dry-run` or `hitch conflicts <env>` to preview conflicts without building
-- `hitch rebuild` composes in an isolated worktree (your checkout is never touched) and by default *ejects* a conflicting branch — excludes it and keeps building the rest — instead of failing the whole rebuild; set `on_conflict: halt` (`hitch set <env> --on-conflict halt`) for the old all-or-nothing behavior
+- Parse `--json`, never the human output, which is not a stable interface
+- To find out why something is the way it is, use `hitch why`, not `git log`; for history use `hitch log`
+- `hitch rebuild` composes directly in the object database (no worktree, and your checkout is never touched) and by default *ejects* a conflicting branch — excludes it and keeps building the rest — instead of failing the whole rebuild; set `on_conflict: halt` (`hitch set <env> --on-conflict halt`) for the old all-or-nothing behavior
 - Fix guidance: `git checkout <branch> && git rebase <base>`
 - `hitch rebuild` requires a clean working tree (commit or stash first)
 - Document Hitch as explicit branch stacking, not as a required release process or as a replacement for conflict management. The main downside is repeated merge fixes across environments unless resolved changes are carried back into the feature branch.

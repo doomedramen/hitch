@@ -43,7 +43,11 @@ The repair stream rebuilds it on `ActivityLog`, `RepositoryStateSnapshot`,
 `MatrixModel` and `WhyExplanation`.
 
 Read `README.md` for the user-facing model and `SKILL.md` for the condensed
-agent-facing command reference. `docs/merge-conflict-handling-plan.md` is the
+agent-facing command reference. `docs/architecture/explainable-operations.md` is
+the newcomer-facing tour of Desired/Actual/Proposed, plans and receipts, and the
+one-composition rule (this file is its detailed counterpart), and
+`docs/architecture/json-schema.md` documents every `--json` envelope with real
+output. `CHANGELOG.md` carries the user-visible changes and migration notes. `docs/merge-conflict-handling-plan.md` is the
 active design doc for the conflict-handling system (isolated rebuilds,
 eject-and-continue policy, `hitch resolve`) — check its
 "Implementation status" section before assuming a phase is done or before
@@ -58,8 +62,8 @@ original spec, sections 1–42) in ten phases, P0–P10. Read the master plan's
 line numbers are load-bearing and why. Two scope decisions differ from the
 spec's own §29: `crates/hitch-desktop` (spec §20–§26, M9/M10/M11) is deferred
 to a separate repair stream, and the broken-`main` CI repair is handled
-independently of this program. P0–P9 are authored and complete; P10 is
-next. Later phases are authored as they approach, because their `file:lines`
+independently of this program. P0–P9 are authored and complete; P10 (docs and
+legacy removal) is the last phase. Later phases are authored as they approach, because their `file:lines`
 references go stale the moment the previous phase lands.
 
 **The program lives on the `explainable-ux` branch, not `main`.** It forked from
@@ -138,12 +142,20 @@ covered.
   parses the fourteen names out of the doc comment's own backticks and compares
   them as sets, both directions, against the command files in `src/commands/`
   that actually reach `emit_json`/`emit_plan`/`emit_receipt` — so neither a
-  dropped command nor an invented one survives. The three read-only ones use a
+  dropped command nor an invented one survives. The same file also parses the
+  command bullets in `docs/architecture/json-schema.md` and compares them with the
+  comment's list, so that document cannot drift either; changing the list means
+  changing both. The three read-only ones use a
   **one-half envelope**, `{"schema_version": 1, "<view>": …}`, not the
   mutations' `{"plan", "receipt"}` — a read-only view has no "after", and a
   `null` receipt would say "nothing happened", which is true and useless. Every
-  enum in those envelopes is `snake_case`, and a shared collector (`pascal_case_tokens`, `tests/test_framework/json_helpers.rs`) walks the document and fails on any
-  `PascalCase` token, so a new enum cannot forget the rename.
+  enum in the *read-only* envelopes is `snake_case`, and a shared collector
+  (`pascal_case_tokens`, `tests/test_framework/json_helpers.rs`) walks those
+  documents and fails on any `PascalCase` token, so a new enum cannot forget the
+  rename. The `plan`/`receipt` halves of a mutation still spell `kind`, `intent`,
+  `effects` and `outcome` with their Rust variant names (`"Applied"`,
+  `"MetadataChange"`); `json-schema.md` says so, and changing it is a
+  `schema_version` question.
 - `src/commands/*.rs` — one file per CLI command/subcommand, thin: arg
   parsing (`clap::Args` struct) + orchestration. Business logic belongs in
   `src/utils/prelude.rs`, a dedicated `src/utils/*.rs` module, or the

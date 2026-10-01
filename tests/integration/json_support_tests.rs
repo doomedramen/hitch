@@ -223,3 +223,58 @@ fn the_read_only_json_commands_are_status_why_and_log() {
          other mutations: {documented:?}"
     );
 }
+
+/// The command names `docs/architecture/json-schema.md` lists, parsed from the
+/// bullets under its "Commands that honour `--json`" heading.
+///
+/// A third copy of the list would be one more thing to forget; parsing it makes
+/// the document fail the build instead.
+fn schema_doc_json_commands() -> BTreeSet<String> {
+    let path = crate_root().join("docs/architecture/json-schema.md");
+    let text = std::fs::read_to_string(&path).expect("docs/architecture/json-schema.md exists");
+
+    let mut in_section = false;
+    let mut names = BTreeSet::new();
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            in_section = line.starts_with("## Commands that honour");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("- `") {
+            let name = rest
+                .split('`')
+                .next()
+                .expect("a closing backtick on a command bullet");
+            names.insert(name.replace(' ', "/"));
+        }
+    }
+    names
+}
+
+/// The schema document's command list is the doc comment's list.
+#[test]
+fn the_schema_doc_lists_the_same_commands_as_the_json_doc_comment() {
+    let in_comment = documented_json_commands();
+    let in_doc = schema_doc_json_commands();
+
+    assert!(
+        !in_doc.is_empty(),
+        "no commands parsed from docs/architecture/json-schema.md — the heading or \
+         bullet format changed and this test needs to follow it"
+    );
+    let missing: Vec<&String> = in_comment.difference(&in_doc).collect();
+    assert!(
+        missing.is_empty(),
+        "the `--json` doc comment names commands that docs/architecture/json-schema.md \
+         does not list: {missing:?}"
+    );
+    let invented: Vec<&String> = in_doc.difference(&in_comment).collect();
+    assert!(
+        invented.is_empty(),
+        "docs/architecture/json-schema.md lists commands the `--json` doc comment does \
+         not name: {invented:?}"
+    );
+}
