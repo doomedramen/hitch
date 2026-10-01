@@ -125,6 +125,18 @@ Human output only; exit codes are unchanged.
 - `HITCH_YES=1` (and `true`) is accepted. The documented spelling used to fail at
   argument parsing with `invalid value '1' for '--yes'`; `--yes` is unchanged.
 
+- `hitch conflicts` words the conflict policy for people ("hold conflicting
+  branches" / "stop the build") instead of printing the internal name.
+- A promote into an approval-gated environment with no eligible approver (the
+  only approver is you) is refused in the plan, with `hitch set <env> --add-approver
+  <email>` as the next step; it no longer prints a rollback that never happened.
+- A refused promote's "To proceed" step is the rebase that fixes the branch, not
+  the promote that just failed.
+- Release plans name the tag once and no longer show an uninformative `Current`
+  line for the target; a skipped dependent environment says how to unblock its
+  held branch. `hitch tree` indents an environment built on another environment
+  by a whole tree step.
+
 ### Removed
 
 - The desktop-only adapters `core::timeline`, `core::details`,

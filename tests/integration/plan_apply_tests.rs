@@ -1499,8 +1499,10 @@ mod tests {
                 "expected PolicyBlocked, got {detail:?}"
             );
             assert!(
-                detail.to_string().contains("hitch promote"),
-                "a refusal must end with the command to run next: {detail}"
+                detail
+                    .to_string()
+                    .contains("To proceed:\n  git checkout feat-b && git rebase feat-a"),
+                "a refusal must end with the fix to run next: {detail}"
             );
 
             assert_eq!(

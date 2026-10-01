@@ -138,6 +138,7 @@ mod tests {
 
             // Get tree
             let result = env.hitch.run().args(&["tree"]).execute()?;
+            let out = result.stdout();
             result
                 .assert_success()
                 .assert_stdout_contains("Branch Hierarchy")
@@ -150,6 +151,12 @@ mod tests {
                 // side's operand — but the label "base:" went with the count, and
                 // so did the colour it was coloured in.
                 .assert_stdout_contains("b2b-dev = dev");
+            // An environment based on another sits one full tree step in: its
+            // connector lines up under the parent's name, not a column short.
+            assert!(
+                out.contains("\n   └─ [env] ") && out.contains("b2b-dev = dev"),
+                "the nested environment is indented by a whole connector:\n{out}"
+            );
 
             Ok::<(), anyhow::Error>(())
         });

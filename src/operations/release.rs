@@ -483,7 +483,9 @@ pub fn plan_release(
             target: target.to_string(),
         },
         fingerprint,
-        current: Some(projection(Some(target_sha_before), Vec::new())),
+        // No `current`: the target is a shared branch the release merges into, not
+        // a composition, so `main = main` would be the uninformative half of a pair.
+        current: None,
         proposed: Some(projection(Some(result_sha), released_pins.clone())),
         compositions: vec![composition],
         effects,

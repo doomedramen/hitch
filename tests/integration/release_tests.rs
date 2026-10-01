@@ -20,6 +20,53 @@ mod tests {
             .join(format!("{}-{}", repo_name, name))
     }
 
+    /// A release plan names the tag once and prints no `Current` projection
+    /// (`main = main` says nothing about a merge into a shared branch).
+    #[test]
+    fn a_release_plan_names_the_tag_once_and_has_no_uninformative_current() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.git.run(&["checkout", "-b", "feature-1"])?;
+            env.fs.write_file("f1.txt", "feature 1")?;
+            env.git.run(&["add", "."])?;
+            env.git.run(&["commit", "-m", "Add feature 1"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "feature-1", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["release", "dev", "main", "--force"])
+                .execute()?;
+            let stdout = result.stdout();
+            result.assert_success();
+            let tag_line = stdout
+                .lines()
+                .find(|l| l.contains("hitch-release-dev-to-main-") && l.contains(" at "))
+                .expect("a tag row");
+            assert_eq!(
+                tag_line.matches("hitch-release-dev-to-main-").count(),
+                1,
+                "the tag name appears once per row:\n{tag_line}"
+            );
+            assert!(
+                !stdout.contains("Current"),
+                "no Current projection:\n{stdout}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
     #[test]
     fn test_hitch_release_basic() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
@@ -413,6 +460,10 @@ mod tests {
                 stdout.contains("'qa' will not be rebuilt")
                     && stdout.contains("merging 'held-later' onto 'main'"),
                 "the advisory must name the held branch and its partner:\n{stdout}"
+            );
+            assert!(
+                stdout.contains("fix: git checkout held-later && git rebase main"),
+                "the advisory must say how to unblock the branch:\n{stdout}"
             );
 
             Ok::<(), anyhow::Error>(())

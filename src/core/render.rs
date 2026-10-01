@@ -569,8 +569,14 @@ pub fn render_dependent_skip(
         .map(|f| format!("\n  {}", f))
         .collect();
     format!(
-        "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto '{}':{}",
-        environment, conflict.branch, conflict.conflicts_with, files
+        "'{}' will not be rebuilt — compatibility check failed when merging '{}' onto '{}':{}\n  \
+         fix: git checkout {} && git rebase {}",
+        environment,
+        conflict.branch,
+        conflict.conflicts_with,
+        files,
+        conflict.branch,
+        conflict.conflicts_with
     )
 }
 
@@ -814,8 +820,10 @@ fn describe_planned_effect<I>(effect: &PlannedEffect, plan: &OperationPlan<I>) -
         // two-column table this renders into is resource → what happens, so the
         // cell has to name the verb to be a sentence at all.
         PlannedEffect::LocalRefDelete { refname } => format!("delete {}", short_ref(refname)),
-        PlannedEffect::TagCreation { name, target_sha } => {
-            format!("tag {name} at {}", short(target_sha))
+        // The resource column already reads `tag <name>`; naming it again here
+        // printed the tag twice on one row.
+        PlannedEffect::TagCreation { target_sha, .. } => {
+            format!("create at {}", short(target_sha))
         }
         PlannedEffect::DependentEnvironmentRebuild {
             environment,
@@ -3000,11 +3008,7 @@ mod tests {
                     // a rebuild, and the reader is told why the SHA moved.
                     "dev rebuild from 1 branch · aaaaaaa → fffffff",
                     "origin/dev publish aaaaaaa → fffffff",
-                    // `refs/tags/` is both the resource *and* what the effect
-                    // does to it, so the name appears twice. That is redundancy
-                    // in a table, not a bug, and collapsing it would mean the
-                    // renderer was deciding what the resource is.
-                    "tag hitch-release-dev-to-main-2026-01-01T00-00-00Z tag hitch-release-dev-to-main-2026-01-01T00-00-00Z at fffffff",
+                    "tag hitch-release-dev-to-main-2026-01-01T00-00-00Z create at fffffff",
                     "qa rebuild qa — it is built on 'dev', which was rebuilt",
                     "settings prune login, search from qa",
                     // A deletion says the verb. `LocalRefUpdate` cannot express

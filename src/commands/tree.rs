@@ -112,9 +112,9 @@ fn display_branch_tree(
 
             // Calculate prefix for children
             let child_prefix = if is_last_env {
-                format!("{}  ", prefix)
+                format!("{}   ", prefix)
             } else {
-                format!("{}│ ", prefix)
+                format!("{}│  ", prefix)
             };
 
             // Environment node with additional info
