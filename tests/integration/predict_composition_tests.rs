@@ -360,7 +360,7 @@ mod tests {
 
     /// The in-process offline test above cannot see a network call whose error
     /// is swallowed. Reading the metadata branch legitimately fetches it, so a
-    /// fetch naming `hitch-metadata` is let through. This one puts a `git` first on PATH for the child `hitch`
+    /// fetch of exactly `origin hitch-metadata` is let through. This one puts a `git` first on PATH for the child `hitch`
     /// that records every `fetch`/`ls-remote` to a log file (and fails it), then
     /// runs the commands that predict. The log, not the exit code, is the
     /// assertion, so a swallowed error still fails the test.
@@ -385,7 +385,7 @@ mod tests {
             std::fs::create_dir_all(&bin)?;
             let log = env.temp_dir.join("network-calls.log");
             let script = format!(
-                "#!/bin/sh\ncase \"$*\" in *hitch-metadata*) exec '{}' \"$@\";; esac\nfor a in \"$@\"; do\n  case \"$a\" in\n    fetch|ls-remote|pull|push)\n      echo \"$@\" >> '{}'\n      echo NETWORK-CALL-MARKER >&2\n      exit 1;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+                "#!/bin/sh\ncase \"$*\" in *\" fetch origin hitch-metadata\") exec '{}' \"$@\";; esac\nfor a in \"$@\"; do\n  case \"$a\" in\n    fetch|ls-remote|pull|push)\n      echo \"$@\" >> '{}'\n      echo NETWORK-CALL-MARKER >&2\n      exit 1;;\n  esac\ndone\nexec '{}' \"$@\"\n",
                 real_git,
                 log.display(),
                 real_git
@@ -408,7 +408,7 @@ mod tests {
                 bin.display(),
                 std::env::var("PATH").unwrap_or_default()
             );
-            for args in [vec!["status"], vec!["tree"]] {
+            for args in [vec!["status"], vec!["status", "--environments"], vec!["tree"]] {
                 let out = env.hitch.run().args(&args).env("PATH", &path).execute()?;
                 let stderr = out.stderr();
                 let stdout = out.stdout();
@@ -420,7 +420,42 @@ mod tests {
                 assert!(!stderr.contains("NETWORK-CALL-MARKER"), "{stderr}");
                 assert!(out.success(), "`hitch {args:?}` failed: {stderr}");
                 assert!(stdout.contains("feat-a"), "{stdout}");
+                // `status --environments` is the path that predicts; the
+                // plain matrix never reaches it.
+                if args.contains(&"--environments") {
+                    assert!(
+                        stdout.contains("would be held on the next rebuild"),
+                        "the prediction did not run: {stdout}"
+                    );
+                }
             }
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// A branch the last build included and that has since been merged into the
+    /// base (no rebuild) is still offered for demotion. The build record
+    /// outranks the live base check for membership, so this is a separate
+    /// snapshot fact (`contained_in_base`), not `AlreadyInBase`.
+    #[test]
+    fn cleanup_hint_names_an_included_branch_since_merged_into_the_base() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "a.txt", "a\n")?;
+            env.hitch.exec(&["add", "dev"])?.assert_success();
+            env.hitch
+                .exec(&["promote", "feat-a", "dev"])?
+                .assert_success();
+            env.git
+                .run(&["merge", "--no-ff", "-m", "land feat-a", "feat-a"])?;
+
+            let out = env.hitch.exec(&["status", "--environments"])?;
+            let stdout = out.stdout();
+            assert!(out.success(), "{stdout}");
+            assert!(stdout.contains("Branches already in source"), "{stdout}");
+            assert!(stdout.contains("hitch demote feat-a dev"), "{stdout}");
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(())

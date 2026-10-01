@@ -754,12 +754,20 @@ fn check_and_display_cleanup_needs(
     env_name: &str,
     env: &Environment,
 ) {
-    let branches_in_source: Vec<String> = env
-        .branches
+    let branches_in_source: Vec<String> = snapshot
+        .environments
         .iter()
-        .filter(|b| already_in_base(snapshot, b, env_name))
-        .cloned()
-        .collect();
+        .find(|e| e.name == env_name)
+        .map(|state| {
+            state
+                .desired
+                .branches
+                .iter()
+                .filter(|b| b.contained_in_base)
+                .map(|b| b.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Display branches that exist in source branch
     if !branches_in_source.is_empty() {
@@ -893,6 +901,7 @@ fn unknown_environment_state(env_name: &str, env: &Environment) -> EnvironmentSt
                 .map(|name| DeclaredBranch {
                     name: name.clone(),
                     sha: None,
+                    contained_in_base: false,
                 })
                 .collect(),
         },

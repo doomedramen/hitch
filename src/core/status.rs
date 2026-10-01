@@ -456,6 +456,7 @@ mod tests {
                 .map(|n| DeclaredBranch {
                     name: n.to_string(),
                     sha: Some("1".repeat(40)),
+                    contained_in_base: false,
                 })
                 .collect(),
         }

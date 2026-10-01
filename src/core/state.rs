@@ -151,6 +151,14 @@ pub struct DeclaredBranch {
     /// `None` when the ref resolves neither locally nor on the cached
     /// remote-tracking ref.
     pub sha: Option<String>,
+    /// Is this branch's tip an ancestor of the base's tip, from the two SHAs
+    /// pinned above (local refs, then cached remote refs; no network)? A live
+    /// fact about the refs, independent of the build record: it stays true for
+    /// a branch the last build included and that has since been merged into the
+    /// base, which `ActualMembership` deliberately does not say because the
+    /// record outranks it there. The cleanup hint reads this.
+    #[serde(skip)]
+    pub contained_in_base: bool,
 }
 
 /// What the last published build record says is in this environment.
@@ -490,15 +498,24 @@ fn membership_within(
 }
 
 fn build_environment_state(git: &GitOperations, name: &str, env: &Environment) -> EnvironmentState {
+    let base_sha = live_sha(git, &env.base);
     let desired = DesiredComposition {
         base: env.base.clone(),
-        base_sha: live_sha(git, &env.base),
+        base_sha: base_sha.clone(),
         branches: env
             .branches
             .iter()
-            .map(|b| DeclaredBranch {
-                name: b.clone(),
-                sha: live_sha(git, b),
+            .map(|b| {
+                let sha = live_sha(git, b);
+                let contained_in_base = match (&sha, &base_sha) {
+                    (Some(s), Some(base)) => git.is_branch_merged_into(s, base).unwrap_or(false),
+                    _ => false,
+                };
+                DeclaredBranch {
+                    name: b.clone(),
+                    sha,
+                    contained_in_base,
+                }
             })
             .collect(),
     };

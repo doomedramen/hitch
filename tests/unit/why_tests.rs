@@ -63,6 +63,7 @@ fn declared(base: &str, names: &[&str]) -> DesiredComposition {
             .map(|n| DeclaredBranch {
                 name: n.to_string(),
                 sha: Some(sha('1')),
+                contained_in_base: false,
             })
             .collect(),
     }

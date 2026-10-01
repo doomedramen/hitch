@@ -261,6 +261,9 @@ covered.
     the release target is not recorded anywhere, so the log cannot name it.
     `hitch log` takes no repo lock (read-only, in `command_is_mutating`'s
     `false` arm).
+  - `state.rs` also carries `DeclaredBranch::contained_in_base`, an offline
+    per-branch ancestry fact (branch tip in base tip) the status cleanup hint
+    reads; it does not feed `ActualMembership`, where the record outranks it.
   - `state.rs` is **the** authority on "does this environment need a
     rebuild, and what actually moved". `build_state_snapshot` returns a
     `RepositoryStateSnapshot` — Desired read live from refs, Actual read
@@ -1114,8 +1117,11 @@ versus Mode B (a peer) from it; `hitch conflicts`, `resolve` and the approval
 snapshot (`capture_rebuild_snapshot`) sync the declared branches themselves
 first, as their old oracles did, while `status` and `tree` stay offline end to
 end and read `Err` (base resolves nowhere) as "no prediction". `status`'s
-"already in <base>" reads the snapshot's `AlreadyInBase`, not a second
-`is_branch_merged_into`. Known quirk: `conflicts_with` names the last-composed
+"already in <base>" row reads the snapshot's `AlreadyInBase`, and its cleanup
+hint reads `DeclaredBranch::contained_in_base` (computed once in
+`build_state_snapshot` from the pinned SHAs, independent of the record, so a
+branch a build included and the base has since absorbed still gets the hint);
+neither is a second `is_branch_merged_into` in the display. Known quirk: `conflicts_with` names the last-composed
 branch, so a branch that collides with the base after a clean peer reads as
 Mode B. The approval snapshot's `merge_conflicts` is now "does the composition
 hold anything", so two branches that only collide with each other count

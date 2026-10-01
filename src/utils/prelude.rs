@@ -2711,10 +2711,11 @@ mod compose_environment_tests {
     ///
     /// This is the property the whole phase rests on: it is what lets
     /// `hitch rebuild --dry-run` be a *preview of the real build* rather than a
-    /// second, tree-based approximation of it (the deleted preflight family). If composition ever grew a side effect — writing a ref,
-    /// taking a lock, checking out, touching the network — then calling it for
-    /// a preview would no longer be safe, and the dry-run would have to go
-    /// back to approximating.
+    /// second, tree-based approximation of it (the deleted preflight family).
+    /// If composition ever grew a side effect — writing a ref, taking a lock,
+    /// checking out, touching the network — then calling it for a preview would
+    /// no longer be safe, and the dry-run would have to go back to
+    /// approximating.
     ///
     /// Asserted three ways: the result is identical across two calls, no ref
     /// anywhere moved, and no `refs/hitch/*` machinery appeared.

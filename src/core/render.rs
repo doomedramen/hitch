@@ -3343,6 +3343,7 @@ mod tests {
                 branches: vec![DeclaredBranch {
                     name: "auth".into(),
                     sha: Some(sha('1')),
+                    contained_in_base: false,
                 }],
             },
             actual: ActualComposition::LegacyUnknown,
