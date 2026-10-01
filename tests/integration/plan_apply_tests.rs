@@ -1501,7 +1501,7 @@ mod tests {
             assert!(
                 detail
                     .to_string()
-                    .contains("To proceed:\n  git checkout feat-b && git rebase feat-a"),
+                    .contains("To proceed:\n  git checkout feat-b && git rebase feat-a, then hitch promote feat-b dev"),
                 "a refusal must end with the fix to run next: {detail}"
             );
 

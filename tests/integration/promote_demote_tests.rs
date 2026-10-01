@@ -564,12 +564,14 @@ mod tests {
             // The remedy is the fix (the rebase), not the promote that just
             // failed, which would be the same refusal again.
             assert!(
-                stderr.contains("To proceed:\n  git checkout branch-b && git rebase branch-a"),
+                stderr.contains(
+                    "To proceed:\n  git checkout branch-b && git rebase branch-a, then hitch promote branch-b dev"
+                ),
                 "the remedy must be the rebase:\n{stderr}"
             );
             assert!(
-                !stderr.contains("hitch promote branch-b dev"),
-                "re-running the failed command is not a next step:\n{stderr}"
+                !stderr.contains("To proceed:\n  hitch promote"),
+                "re-running the failed command first is not a next step:\n{stderr}"
             );
 
             let stdout = result.stdout();

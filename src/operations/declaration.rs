@@ -517,7 +517,7 @@ fn plan_declaration_change(
                     &declared.base,
                     &conflict,
                 ));
-                refusal_remedy = Some(promote_refusal_remedy(branch, &conflict));
+                refusal_remedy = Some(promote_refusal_remedy(branch, environment, &conflict));
                 break;
             }
         }

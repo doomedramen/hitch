@@ -1067,7 +1067,9 @@ plan whose effect list reorders between runs is not a plan;
 sorts by name. `a_release_plan_names_the_tag_the_target_move_the_prunes_and_the_dependents`
 asserts the exact order.
 
-**Approval feasibility is decided in the declaration planner.** "Fewer eligible
+**Approval feasibility is decided in the declaration planner.** A conflict
+refusal outranks it (the no-approver check runs only when `refused` is still
+none), as a policy refusal outranks the approval gate. "Fewer eligible
 approvers (excluding the requester) than `min_approvals`" is a `PolicyRefusal`
 from `plan_declaration_change`, so `apply_may_write` keeps the rollback disarmed
 (the same check in `utils/approvals.rs` stays as a defensive guard). A test that

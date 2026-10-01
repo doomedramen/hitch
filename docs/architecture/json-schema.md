@@ -145,7 +145,9 @@ The plan's parts:
 
 * `current` / `proposed` — the environment's composition before and after
   (`branch_sha` is the environment branch's tip; `null` when it does not exist).
-  `current` is `null` when there is nothing yet.
+  `current` is `null` when there is nothing yet, and for a release: the target is a
+  shared branch the release merges into, not a composition, so its before-state
+  would only restate the target's name; read `proposed` and `effects` instead.
 * `fingerprint` — what the plan depended on; see `explainable-operations.md`.
 * `compositions` — for builds, one entry per branch: included, held (with the
   partner and files) or replayed.

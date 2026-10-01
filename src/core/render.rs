@@ -545,15 +545,18 @@ pub fn render_insufficient_approvers(
     )
 }
 
-/// The next step after a promote refusal: the fix, not the promote that just
-/// failed (the reason above names the conflict; re-running only follows the fix).
+/// The next step after a promote refusal: the fix, then the promote that the
+/// refusal stopped (re-running it first would only be refused again).
 pub fn promote_refusal_remedy(
     new_branch: &str,
+    environment: &str,
     conflict: &crate::utils::prelude::CompatibilityConflict,
 ) -> String {
     format!(
-        "git checkout {} && git rebase {}",
-        new_branch, conflict.conflicts_with
+        "git checkout {} && git rebase {}, then {}",
+        new_branch,
+        conflict.conflicts_with,
+        crate::operations::model::OperationKind::Promote.command_hint(environment, new_branch)
     )
 }
 

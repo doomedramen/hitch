@@ -134,7 +134,8 @@ Human output only; exit codes are unchanged.
   the promote that just failed.
 - Release plans name the tag once and no longer show an uninformative `Current`
   line for the target; a skipped dependent environment says how to unblock its
-  held branch. `hitch tree` indents an environment built on another environment
+  held branch. In `--json`, a release plan's `current` is now `null` (the target is
+  not a composition). `hitch tree` indents an environment built on another environment
   by a whole tree step.
 
 ### Removed
