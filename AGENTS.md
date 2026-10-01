@@ -1117,8 +1117,8 @@ versus Mode B (a peer) from it; `hitch conflicts`, `resolve` and the approval
 snapshot (`capture_rebuild_snapshot`) sync the declared branches themselves
 first, as their old oracles did, while `status` and `tree` stay offline end to
 end and read `Err` (base resolves nowhere) as "no prediction". `status`'s
-"already in <base>" row reads the snapshot's `AlreadyInBase`, and its cleanup
-hint reads `DeclaredBranch::contained_in_base` (computed once in
+"already in <base>" row and its cleanup hint both read
+`DeclaredBranch::contained_in_base` (computed once in
 `build_state_snapshot` from the pinned SHAs, independent of the record, so a
 branch a build included and the base has since absorbed still gets the hint);
 neither is a second `is_branch_merged_into` in the display. Known quirk: `conflicts_with` names the last-composed

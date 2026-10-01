@@ -448,6 +448,11 @@ mod tests {
             env.hitch
                 .exec(&["promote", "feat-a", "dev"])?
                 .assert_success();
+            // A commit after the build makes feat-a stale; merging it into main
+            // must then read as "already in base", not as new commits.
+            env.git.run(&["checkout", "feat-a"])?;
+            commit_file(env, "a2.txt", "a2\n", "feat-a moves on")?;
+            env.git.run(&["checkout", "main"])?;
             env.git
                 .run(&["merge", "--no-ff", "-m", "land feat-a", "feat-a"])?;
 
@@ -455,6 +460,11 @@ mod tests {
             let stdout = out.stdout();
             assert!(out.success(), "{stdout}");
             assert!(stdout.contains("Branches already in source"), "{stdout}");
+            assert!(stdout.contains("(already in"), "{stdout}");
+            assert!(
+                !stdout.contains("new commits since last rebuild"),
+                "{stdout}"
+            );
             assert!(stdout.contains("hitch demote feat-a dev"), "{stdout}");
             Ok::<(), anyhow::Error>(())
         })?;

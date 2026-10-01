@@ -3,8 +3,8 @@ use crate::core::render::{
     emit_json, render_environment_summaries, render_matrix, render_matrix_at,
 };
 use crate::core::state::{
-    build_state_snapshot, ActualComposition, ActualMembership, ApprovalPolicy, DeclaredBranch,
-    DesiredComposition, EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
+    build_state_snapshot, ActualComposition, ApprovalPolicy, DeclaredBranch, DesiredComposition,
+    EnvironmentHealth, EnvironmentState, RepositoryStateSnapshot,
 };
 use crate::core::status::{build_matrix_model, build_status_model};
 use crate::types::{Environment, HitchConfig};
@@ -464,7 +464,11 @@ fn display_environment_status(
                 .iter()
                 .any(|b| &b.name == branch && b.sha.is_some());
 
-            let is_in_source = branch_exists && already_in_base(snapshot, branch, env_name);
+            let is_in_source = state
+                .desired
+                .branches
+                .iter()
+                .any(|b| &b.name == branch && b.contained_in_base);
 
             // Staleness now comes from the snapshot's SHA comparison, not from
             // comparing a commit timestamp against a wall-clock `rebuilt_at`.
@@ -733,19 +737,6 @@ fn format_relative_time(timestamp: DateTime<Utc>) -> String {
     }
 
     "Just now".to_string()
-}
-
-/// Whether the snapshot's membership view says `branch` is already reachable
-/// from `env_name`'s base. The snapshot answers this once, offline, so status
-/// does not re-derive it per call site (the old cleanup check also ran
-/// `git ls-remote` per branch).
-fn already_in_base(snapshot: &RepositoryStateSnapshot, branch: &str, env_name: &str) -> bool {
-    snapshot
-        .features
-        .iter()
-        .find(|f| f.name == branch)
-        .and_then(|f| f.memberships.iter().find(|m| m.environment == env_name))
-        .is_some_and(|m| m.actual == ActualMembership::AlreadyInBase)
 }
 
 /// Check and display cleanup needs for promoted branches that have been released
