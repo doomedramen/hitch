@@ -655,6 +655,59 @@ mod tests {
         Ok(())
     }
 
+    /// A branch that conflicts only with the base must be refused naming the
+    /// base, even when a clean peer was composed ahead of it; the remedy is a
+    /// rebase onto the base, not onto the unrelated peer.
+    #[test]
+    fn a_promote_refusal_names_the_base_when_a_clean_peer_sits_between() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch.run().args(&["add", "dev"]).execute()?;
+            env.fs
+                .write_file("shared.txt", "one\ntwo\nthree\nfour\nfive\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "shared"])?;
+            env.git.run(&["checkout", "-b", "peer-a", "main"])?;
+            env.fs.write_file("a.txt", "a\n")?;
+            env.git.run(&["add", "-f", "a.txt"])?;
+            env.git.run(&["commit", "-m", "a"])?;
+            env.git.run(&["checkout", "-b", "peer-c", "main"])?;
+            env.fs
+                .write_file("shared.txt", "C\ntwo\nthree\nfour\nfive\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "c"])?;
+            env.git.run(&["checkout", "main"])?;
+            env.fs
+                .write_file("shared.txt", "MAIN\ntwo\nthree\nfour\nfive\n")?;
+            env.git.run(&["add", "-f", "shared.txt"])?;
+            env.git.run(&["commit", "-m", "main moves"])?;
+            env.hitch
+                .run()
+                .args(&["promote", "peer-a", "dev"])
+                .execute()?
+                .assert_success();
+
+            let result = env
+                .hitch
+                .run()
+                .args(&["promote", "peer-c", "dev"])
+                .execute()?;
+            let output = format!("{}\n{}", result.stdout(), result.stderr());
+            result.assert_failure();
+            assert!(
+                output.contains("conflicts with main"),
+                "must name the base as the partner:\n{output}"
+            );
+            assert!(
+                !output.contains("peer-a, which") && !output.contains("rebase peer-a"),
+                "must not blame the clean peer:\n{output}"
+            );
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
+    }
+
     /// When two branches modify different files they should both be promotable
     /// with no conflict errors.
     #[test]

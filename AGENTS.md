@@ -1133,9 +1133,11 @@ end and read `Err` (base resolves nowhere) as "no prediction". `status`'s
 `DeclaredBranch::contained_in_base` (computed once in
 `build_state_snapshot` from the pinned SHAs, independent of the record, so a
 branch a build included and the base has since absorbed still gets the hint);
-neither is a second `is_branch_merged_into` in the display. Known quirk: `conflicts_with` names the last-composed
-branch, so a branch that collides with the base after a clean peer reads as
-Mode B. The approval snapshot's `merge_conflicts` is now "does the composition
+neither is a second `is_branch_merged_into` in the display. `conflicts_with` of a held branch is the *true*
+partner (`true_conflict_partner` in `prelude.rs`: base alone, else the first
+included peer it conflicts with pairwise, else the last-composed branch when
+only the combination conflicts), so a base collision behind a clean peer is
+Mode A. The approval snapshot's `merge_conflicts` is now "does the composition
 hold anything", so two branches that only collide with each other count
 (`a_peer_only_conflict_is_recorded_on_the_approval_snapshot`); the old pairwise
 base-only check missed that.

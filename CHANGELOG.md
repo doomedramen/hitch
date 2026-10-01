@@ -38,6 +38,9 @@ it. See [`docs/architecture/explainable-operations.md`](docs/architecture/explai
 
 Human output only; exit codes are unchanged.
 
+- Held branches now name their true conflict partner (the base, or the peer they
+  collide with) instead of the last branch composed; `resolve` picks Mode A for a
+  base conflict behind a clean peer, and a refused `promote` names the right rebase.
 - **All mutating commands**: output is a plan, then a receipt (`Applied`,
   `Result`), instead of a step-by-step transcript. The `[1/6] Synchronizing
   branches` style narration is gone by default; `--verbose` still shows

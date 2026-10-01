@@ -303,9 +303,8 @@ mod tests {
             held,
             vec![(
                 "feat-b".to_string(),
-                // The last-composed branch is named, not the base the conflict
-                // is really with: shared quirk of every oracle, see AGENTS.md.
-                "feat-a".to_string(),
+                // The base is the true partner, though feat-a composed last.
+                "main".to_string(),
                 vec!["shared.txt".to_string()]
             )]
         );

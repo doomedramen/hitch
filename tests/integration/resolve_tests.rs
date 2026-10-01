@@ -1110,9 +1110,8 @@ mod tests {
     /// The mode decision reads `(branch, conflicts_with, files)` of the target's
     /// held entry. These pin the verdicts; before the tree-based preflight was
     /// dropped from `resolve` they were compared side by side with it and agreed
-    /// in every case. In the three-branch case the target collides with the
-    /// accumulated composition, and `conflicts_with` names the last-composed
-    /// branch, not the one it actually collides with.
+    /// in every case. In the three-branch case `conflicts_with` names the peer the
+    /// target actually collides with, not the last-composed branch.
     #[test]
     fn test_resolve_mode_selection_verdicts_are_pinned() -> anyhow::Result<()> {
         use hitch::commands::global_context::{GlobalContext, GlobalFlags};
@@ -1178,7 +1177,7 @@ mod tests {
             vec![entry("b", "a", "shared.txt")]
         );
         // Three branches: c collides with a, which is not the last-composed
-        // branch (b). Both oracles name the last-composed one.
+        // branch (b); the true partner is named.
         assert_eq!(
             held(|env| {
                 commit_file(env, "shared.txt", S)?;
@@ -1187,7 +1186,7 @@ mod tests {
                 branch_off_main(env, "c", "shared.txt", C)?;
                 Ok(vec!["a", "b", "c"])
             })?,
-            vec![entry("c", "b", "shared.txt")]
+            vec![entry("c", "a", "shared.txt")]
         );
         // Nothing to resolve.
         assert!(held(|env| {
@@ -1257,11 +1256,11 @@ mod tests {
         Ok(())
     }
 
-    /// Documents a quirk: `conflicts_with` is the last-composed branch, so a
-    /// branch that collides with the *base* after a clean peer names the peer
-    /// and `resolve` picks Mode B (a peer-conflict session) rather than Mode A.
+    /// A branch that collides with the *base* after a clean peer still names the
+    /// base as its partner, so `resolve` picks Mode A (a guided rebase onto the
+    /// base), not Mode B.
     #[test]
-    fn test_resolve_base_collision_after_a_clean_peer_starts_mode_b() -> anyhow::Result<()> {
+    fn test_resolve_base_collision_after_a_clean_peer_starts_mode_a() -> anyhow::Result<()> {
         let framework = HitchTestFramework::new()?;
         framework.with_test_environment(TestSetup::HitchInit, |env| {
             env.hitch
@@ -1280,8 +1279,7 @@ mod tests {
                 .args(&["resolve", "dev"])
                 .execute()?
                 .assert_success()
-                .assert_stdout_contains("Conflicts left in")
-                .assert_stdout_contains("--continue");
+                .assert_stdout_contains("durable fix is rebasing");
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(())

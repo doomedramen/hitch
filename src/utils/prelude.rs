@@ -724,7 +724,7 @@ pub fn compose_environment(
             .collect();
         let conflict = CompatibilityConflict {
             branch: branch.clone(),
-            conflicts_with: last_composed.clone(),
+            conflicts_with: true_conflict_partner(git, inputs, &included, sha, &last_composed)?,
             conflicted_files: conflicted_paths,
         };
 
@@ -754,6 +754,48 @@ pub fn compose_environment(
         held,
         replayed,
     })
+}
+
+/// Name the branch a held branch really collides with.
+///
+/// The composition merges onto an accumulated tip, so the failed merge alone
+/// cannot say which input is responsible. Probed in order, each probe a
+/// `merge_tree_compose` that writes only trees: (1) the branch against the base
+/// alone, because the remedy there is a rebase onto the base; (2) the branch
+/// against each already-included peer's own tip, in composition order. Peer tip
+/// rather than `base + peer` because git finds the merge base itself and no
+/// commit is created, and a conflict that exists only against the base was
+/// already caught by (1). (3) Otherwise the conflict arises only from the
+/// combination, and the last-composed branch is the honest fallback. Runs for
+/// held branches only, so clean composition pays nothing. The label is the only
+/// thing this decides; replay and recording key on the real composition.
+fn true_conflict_partner(
+    git: &crate::utils::git_operations::GitOperations,
+    inputs: &PinnedInputs,
+    included: &[String],
+    sha: &str,
+    last_composed: &str,
+) -> Result<String> {
+    if !git
+        .merge_tree_compose(&inputs.base_sha, sha)?
+        .conflicted_stages
+        .is_empty()
+    {
+        return Ok(inputs.base_name.clone());
+    }
+    for peer in included {
+        let Some((_, peer_sha)) = inputs.branches.iter().find(|(n, _)| n == peer) else {
+            continue;
+        };
+        if !git
+            .merge_tree_compose(peer_sha, sha)?
+            .conflicted_stages
+            .is_empty()
+        {
+            return Ok(peer.clone());
+        }
+    }
+    Ok(last_composed.to_string())
 }
 
 /// Resolve the environment's branches to the concrete SHAs a composition will
@@ -2389,10 +2431,10 @@ pub fn get_environment_config_for_approval(
 pub struct CompatibilityConflict {
     /// The branch that could not be folded into the composition.
     pub branch: String,
-    /// What it conflicts with: the environment's base branch if this is the
-    /// first branch (or every earlier branch was also skipped), or the last
-    /// branch that composed successfully ahead of it otherwise. Distinguishing
-    /// the two matters because the fix differs — rebase onto base, or resolve
+    /// What it truly conflicts with: the base if it conflicts with the base
+    /// alone, else the first included peer (composition order) it conflicts with
+    /// pairwise, else — when only the combination conflicts — the last branch
+    /// composed ahead of it. The fix differs: rebase onto base, or resolve
     /// against the specific peer.
     pub conflicts_with: String,
     pub conflicted_files: Vec<String>,
@@ -2726,6 +2768,140 @@ mod compose_environment_tests {
     /// identical content. The tree is pure content and timestamp-independent —
     /// the same reasoning `crash_recovery_tests.rs` uses for its convergence
     /// check, and the reason that test compares `<branch>^{tree}`.
+    fn partner_fixture(
+        files: &[(&str, &str)],
+        branches: &[(&str, &[(&str, &str)])],
+        main_moves: &[(&str, &str)],
+    ) -> anyhow::Result<(tempfile::TempDir, GlobalContext, PinnedInputs)> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+        git(repo, &["init", "-q", "-b", "main"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        for (f, c) in files {
+            std::fs::write(repo.join(f), c)?;
+            git(repo, &["add", f]);
+        }
+        git(repo, &["commit", "-q", "-m", "init"]);
+        for (name, edits) in branches {
+            git(repo, &["checkout", "-q", "-b", name, "main"]);
+            for (f, c) in *edits {
+                std::fs::write(repo.join(f), c)?;
+                git(repo, &["add", f]);
+            }
+            git(repo, &["commit", "-q", "-m", name]);
+        }
+        git(repo, &["checkout", "-q", "main"]);
+        for (f, c) in main_moves {
+            std::fs::write(repo.join(f), c)?;
+            git(repo, &["add", f]);
+            git(repo, &["commit", "-q", "-m", "main moves"]);
+        }
+        let logger = Arc::new(Logger::for_command("test", false));
+        let context =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
+                .expect("failed to build test GlobalContext");
+        let inputs = PinnedInputs {
+            base_name: "main".to_string(),
+            base_sha: git(repo, &["rev-parse", "main"]),
+            branches: branches
+                .iter()
+                .map(|(n, _)| (n.to_string(), git(repo, &["rev-parse", n])))
+                .collect(),
+        };
+        Ok((dir, context, inputs))
+    }
+
+    const FIVE: &str = "one\ntwo\nthree\nfour\nfive\n";
+
+    #[test]
+    fn a_held_branch_names_the_base_behind_a_clean_peer() -> anyhow::Result<()> {
+        let (_d, ctx, inputs) = partner_fixture(
+            &[("s.txt", FIVE)],
+            &[
+                ("a", &[("a.txt", "a\n")]),
+                ("c", &[("s.txt", "C\ntwo\nthree\nfour\nfive\n")]),
+            ],
+            &[("s.txt", "MAIN\ntwo\nthree\nfour\nfive\n")],
+        )?;
+        let r = compose_environment(&ctx, &inputs, "dev", OnConflict::Eject, false, false)?;
+        assert_eq!(r.held.len(), 1);
+        assert_eq!(r.held[0].conflicts_with, "main");
+        Ok(())
+    }
+
+    #[test]
+    fn a_held_branch_names_the_pairwise_peer_not_the_last_composed() -> anyhow::Result<()> {
+        let (_d, ctx, inputs) = partner_fixture(
+            &[("s.txt", FIVE)],
+            &[
+                ("a", &[("s.txt", "A\ntwo\nthree\nfour\nfive\n")]),
+                ("x", &[("x.txt", "x\n")]),
+                ("b", &[("s.txt", "B\ntwo\nthree\nfour\nfive\n")]),
+            ],
+            &[],
+        )?;
+        let r = compose_environment(&ctx, &inputs, "dev", OnConflict::Eject, false, false)?;
+        assert_eq!(r.included, vec!["a".to_string(), "x".to_string()]);
+        assert_eq!(r.held.len(), 1);
+        assert_eq!(r.held[0].conflicts_with, "a");
+        Ok(())
+    }
+
+    /// Fallback. `q` renames directory `d/` to `e/`; `p` adds `d/new.txt`, which
+    /// directory-rename detection carries to `e/new.txt` once composed after `q`. `b` adds a different `e/new.txt`: clean against base, `p`
+    /// and `q` alone, an add/add conflict against `p + q`. The last-composed
+    /// branch is the honest answer there.
+    #[test]
+    fn a_combination_only_conflict_names_the_last_composed_branch() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = dir.path();
+        git(repo, &["init", "-q", "-b", "main"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        git(repo, &["config", "merge.directoryRenames", "true"]);
+        std::fs::create_dir(repo.join("d"))?;
+        std::fs::write(repo.join("d/one.txt"), "one\nuno\n")?;
+        std::fs::write(repo.join("d/two.txt"), "two\ndos\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+        git(repo, &["checkout", "-q", "-b", "p", "main"]);
+        std::fs::write(repo.join("d/new.txt"), "from p\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "p"]);
+        git(repo, &["checkout", "-q", "-b", "q", "main"]);
+        git(repo, &["mv", "d", "e"]);
+        git(repo, &["commit", "-q", "-m", "q"]);
+        git(repo, &["checkout", "-q", "-b", "b", "main"]);
+        std::fs::create_dir(repo.join("e"))?;
+        std::fs::write(repo.join("e/new.txt"), "from b\n")?;
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", "b"]);
+        git(repo, &["checkout", "-q", "main"]);
+
+        let logger = Arc::new(Logger::for_command("test", false));
+        let ctx =
+            GlobalContext::new_at_path(&repo.to_string_lossy(), GlobalFlags::for_tests(), logger)
+                .expect("failed to build test GlobalContext");
+        let inputs = PinnedInputs {
+            base_name: "main".to_string(),
+            base_sha: git(repo, &["rev-parse", "main"]),
+            branches: ["q", "p", "b"]
+                .iter()
+                .map(|n| (n.to_string(), git(repo, &["rev-parse", n])))
+                .collect(),
+        };
+        let r = compose_environment(&ctx, &inputs, "dev", OnConflict::Eject, false, false)?;
+        assert_eq!(r.included, vec!["q".to_string(), "p".to_string()]);
+        assert_eq!(
+            r.held.len(),
+            1,
+            "fixture must produce a combination conflict"
+        );
+        assert_eq!(r.held[0].conflicts_with, "p");
+        Ok(())
+    }
+
     #[test]
     fn compose_environment_is_pure_and_deterministic() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
