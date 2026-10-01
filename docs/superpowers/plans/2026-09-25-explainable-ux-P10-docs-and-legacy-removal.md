@@ -587,4 +587,5 @@ All listed in `CHANGELOG.md`. In brief: an already-held sibling no longer blocks
 - Step-2 partner probe uses the peer's tip, not base-plus-peer (stale-peer label limit); the combination-only test relies on `merge.directoryRenames=true`.
 - Post-migration "differential" tests are regression tests only; `tree.rs` verbose fix untested.
 - A lost-test note: three lib tests went with deleted modules in Task 2 (report said none removed).
+- Final review: release dependents are predicted against the pre-release target (open: compose against the release result); display callers (`status`, `tree`) now map only an unresolvable base to "no prediction" via `predict_composition_if_base_resolves` and warn on any other error; approver feasibility is one predicate (`eligible_approver_shortfall`) and one renderer.
 - Open program items are listed in the master plan's "Program closed".

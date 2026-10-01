@@ -100,6 +100,11 @@ Human output only; exit codes are unchanged.
 
 ### Fixed
 
+- `hitch status` and `hitch tree` no longer hide a failed next-build prediction:
+  only a base that resolves nowhere means "no prediction"; any other failure is
+  now a warning naming the environment.
+- The approval request refusal for too few eligible approvers now uses the same
+  wording as the plan's refusal.
 - `hitch status` could say an environment was up to date when a feature had been
   rebased onto older commit dates, when a promotion was staged with `--no-rebuild`,
   or when a branch had been removed from the declaration.

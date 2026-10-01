@@ -3,6 +3,22 @@ use crate::types::{ApprovalRequest, ApprovalStatus, HitchConfig, Operation};
 use anyhow::{anyhow, Result};
 
 /// Create an approval request
+/// `Some((required, eligible))` when an approval request could never be
+/// satisfied: self-approval is forbidden, so the requester never counts toward
+/// the threshold. The one rule behind both the planner's refusal and the
+/// request-creation guard.
+pub fn eligible_approver_shortfall(
+    environment: &crate::types::Environment,
+    requester: &str,
+) -> Option<(usize, usize)> {
+    let eligible = environment
+        .approvers
+        .iter()
+        .filter(|a| a.as_str() != requester)
+        .count();
+    (environment.min_approvals > eligible).then_some((environment.min_approvals, eligible))
+}
+
 pub fn create_approval_request(
     context: &GlobalContext,
     config: &mut HitchConfig,
@@ -55,23 +71,15 @@ pub fn create_approval_request(
     // count toward the threshold. If the number of *other* approvers is below
     // min_approvals, the request could never be satisfied — reject it up front
     // with an actionable message instead of creating an unfillable request.
-    let eligible_approvers = environment
-        .approvers
-        .iter()
-        .filter(|a| **a != requester_email)
-        .count();
-    if environment.min_approvals > eligible_approvers {
+    if let Some((required, eligible)) = eligible_approver_shortfall(environment, &requester_email) {
         return Err(anyhow!(
-            "Cannot create approval request: {} approval(s) required, but only {} eligible \
-             approver(s) are available.\n\
-             The requester ({}) cannot approve their own request, so they don't count toward \
-             the threshold.\n\
-             Add more approvers (hitch set {} --add-approver <email>) or lower the threshold \
-             (hitch set {} --min-approvals <n>).",
-            environment.min_approvals,
-            eligible_approvers,
-            requester_email,
-            environment_name,
+            "{}\nAdd more approvers: hitch set {} --add-approver <email>",
+            crate::core::render::render_insufficient_approvers(
+                environment_name,
+                required,
+                eligible,
+                &requester_email
+            ),
             environment_name
         ));
     }
@@ -354,4 +362,36 @@ pub fn display_approval_request_info(
     ));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod shortfall_tests {
+    use super::eligible_approver_shortfall;
+    use crate::types::Environment;
+
+    fn env(approvers: &[&str], min: usize) -> Environment {
+        let mut e = Environment::new("main".to_string());
+        e.approvers = approvers.iter().map(|a| a.to_string()).collect();
+        e.min_approvals = min;
+        e
+    }
+
+    #[test]
+    fn requester_is_excluded_from_the_eligible_count() {
+        let e = env(&["a@x.com", "b@x.com"], 2);
+        assert_eq!(eligible_approver_shortfall(&e, "a@x.com"), Some((2, 1)));
+        assert_eq!(eligible_approver_shortfall(&e, "c@x.com"), None);
+    }
+
+    #[test]
+    fn matching_is_exact_and_case_sensitive() {
+        let e = env(&["a@x.com"], 1);
+        assert_eq!(eligible_approver_shortfall(&e, "A@x.com"), None);
+        assert_eq!(eligible_approver_shortfall(&e, "a@x.com"), Some((1, 0)));
+    }
+
+    #[test]
+    fn no_threshold_means_no_shortfall() {
+        assert_eq!(eligible_approver_shortfall(&env(&[], 0), "a@x.com"), None);
+    }
 }

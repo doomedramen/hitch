@@ -1047,7 +1047,10 @@ in `render_approval_recorded`.
 decision about the release's own result must be evaluated against the planned
 result, not the live ref.** Two instances. (1) `plan_dependents` runs
 `predict_composition` (offline: local refs, then cached `origin/*`; always
-ejects, never replays, takes no lock) and leaves a provably-unrebuildable
+ejects, never replays, takes no lock; it composes against the *current*
+pre-release target, so a branch conflicting only with the newly released content
+shows up as a hold in the receipt, not in the plan — composing against the
+release's result is an open item) and leaves a provably-unrebuildable
 environment out of `dependents` entirely, as an `Advisory` warning —
 `DependentRebuildOutcome::Skipped` is then for *runtime* skips only (a base
 that failed its own rebuild, `--no-rebuild-dependents`). A plan that declares a

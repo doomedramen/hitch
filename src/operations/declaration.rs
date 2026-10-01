@@ -529,15 +529,12 @@ fn plan_declaration_change(
         && declared.requires_approval_check()
     {
         let requester = crate::utils::authorization::get_current_user(context)?;
-        let eligible = declared
-            .approvers
-            .iter()
-            .filter(|a| **a != requester)
-            .count();
-        if declared.min_approvals > eligible {
+        if let Some((required, eligible)) =
+            crate::utils::approvals::eligible_approver_shortfall(declared, &requester)
+        {
             refused = Some(render_insufficient_approvers(
                 environment,
-                declared.min_approvals,
+                required,
                 eligible,
                 &requester,
             ));

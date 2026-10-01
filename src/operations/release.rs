@@ -818,9 +818,11 @@ fn plan_dependents(
 
         // A prediction, and the executor still records the outcome it observes.
         // Run here so a plan does not declare a rebuild it already knows cannot
-        // happen. It is the same composition the rebuild runs, over the branch
-        // list the rebuild will have, so a held branch here is a held branch
-        // there.
+        // happen. It composes the branch list the rebuild will have, but over
+        // the *current* (pre-release) target, whereas the apply-time rebuild
+        // composes over the post-release target. A branch that conflicts only
+        // with the newly released content therefore surfaces as a hold in the
+        // receipt, not as a skip in the plan.
         let mut proposed = env.clone();
         proposed.branches = effective;
         if let Some(conflict) = predict_composition(context, &proposed, &name)?.held.first() {

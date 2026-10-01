@@ -469,4 +469,22 @@ mod tests {
         })?;
         Ok(())
     }
+
+    #[test]
+    fn a_display_prediction_is_none_only_for_an_unresolvable_base() -> anyhow::Result<()> {
+        use hitch::utils::prelude::predict_composition_if_base_resolves;
+        let framework = HitchTestFramework::new()?;
+        framework.with_test_environment(TestSetup::HitchInit, |env| {
+            seed_shared(env)?;
+            branch_off_main(env, "feat-a", "a.txt", "a\n")?;
+            let ctx = context_for(env)?;
+            let gone = environment("no-such-base", &["feat-a"]);
+            assert!(predict_composition_if_base_resolves(&ctx, &gone, "dev")?.is_none());
+            let ok = environment("main", &["feat-a"]);
+            let p = predict_composition_if_base_resolves(&ctx, &ok, "dev")?;
+            assert!(p.is_some_and(|p| p.held.is_empty()));
+            Ok::<(), anyhow::Error>(())
+        })?;
+        Ok(())
+    }
 }

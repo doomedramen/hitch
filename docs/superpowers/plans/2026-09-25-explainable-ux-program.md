@@ -472,6 +472,7 @@ The source spec's §40 checklist, minus the desktop rows (out of scope: spec §2
 - A stuck operation lock (crash or `rebuild --force`) and the manual `hitch unlock` that clears it are invisible to `hitch log`; fixing it needs a marker written at unlock time.
 - `GitOperations::delete_branch` still escalates a "used by worktree" refusal to `-D --force` and `update-ref -d`; `cleanup` avoids it with `delete_branch_strict`.
 - Mutation plan/receipt JSON enums are PascalCase while read-only documents are snake_case. Changing it is a JSON contract change, so it was documented, not fixed.
+- Release dependents are predicted against the current (pre-release) target, not the release's result, so a branch that conflicts only with the newly released content is a hold in the receipt rather than a skip in the plan. Composing against the release's result is open.
 - The step-2 partner probe in `compose_environment` compares a held branch against a peer's *tip*, not base-plus-peer, so a peer stale against the base can be blamed for a base-vs-peer clash (label only, narrow).
 - Definition-of-Done limits above: `resolve` and `push` are not on plan/receipt; SKILL.md outside P10's edits was not line-audited.
 

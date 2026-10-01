@@ -887,18 +887,20 @@ pub fn pin_environment_inputs(
 /// composition needs a starting commit; the old `_local` variant returned "no
 /// conflicts" there, and a display caller that wants that back maps this `Err`
 /// to an empty list.
-fn pin_inputs_offline(context: &GlobalContext, environment: &Environment) -> Result<PinnedInputs> {
+fn live_sha_offline(context: &GlobalContext, branch: &str) -> Option<String> {
     let git = context.git();
-    let live = |branch: &str| -> Option<String> {
-        git.rev_parse_opt(&format!("refs/heads/{}", branch))
-            .ok()
-            .flatten()
-            .or_else(|| {
-                git.rev_parse_opt(&format!("refs/remotes/origin/{}", branch))
-                    .ok()
-                    .flatten()
-            })
-    };
+    git.rev_parse_opt(&format!("refs/heads/{}", branch))
+        .ok()
+        .flatten()
+        .or_else(|| {
+            git.rev_parse_opt(&format!("refs/remotes/origin/{}", branch))
+                .ok()
+                .flatten()
+        })
+}
+
+fn pin_inputs_offline(context: &GlobalContext, environment: &Environment) -> Result<PinnedInputs> {
+    let live = |branch: &str| live_sha_offline(context, branch);
     let base_sha = live(&environment.base).ok_or_else(|| {
         anyhow::anyhow!(
             "Base branch '{}' does not exist locally or as a fetched remote branch.\n\
@@ -940,6 +942,20 @@ pub fn predict_composition(
 ) -> Result<CompositionResult> {
     let inputs = pin_inputs_offline(context, environment)?;
     compose_environment(context, &inputs, env_name, OnConflict::Eject, false, false)
+}
+
+/// [`predict_composition`] for a display path: `Ok(None)` only when the base
+/// resolves nowhere offline (nothing to predict against), `Err` for every other
+/// failure so a caller cannot mistake a broken composition for "no holds".
+pub fn predict_composition_if_base_resolves(
+    context: &GlobalContext,
+    environment: &Environment,
+    env_name: &str,
+) -> Result<Option<CompositionResult>> {
+    if live_sha_offline(context, &environment.base).is_none() {
+        return Ok(None);
+    }
+    predict_composition(context, environment, env_name).map(Some)
 }
 
 /// The environment-level refusal printed when `OnConflict::Halt` stops a build.

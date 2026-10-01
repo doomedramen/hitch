@@ -441,14 +441,23 @@ fn display_environment_status(
             _ => None,
         };
         // No prediction is possible when the base resolves nowhere (the
-        // record-or-snapshot arms above already explain that), so an `Err`
-        // here is "nothing to add", never a failure of a read-only view.
+        // record-or-snapshot arms above already explain that). Any other
+        // failure is warned about by name and the view continues, as for
+        // other per-environment problems; it is never read as "no holds".
         let would_be_held = if env.branches.is_empty() {
             Vec::new()
         } else {
-            crate::utils::prelude::predict_composition(context, env, env_name)
-                .map(|p| p.held)
-                .unwrap_or_default()
+            match crate::utils::prelude::predict_composition_if_base_resolves(
+                context, env, env_name,
+            ) {
+                Ok(p) => p.map(|p| p.held).unwrap_or_default(),
+                Err(e) => {
+                    context.log_warning(&format!(
+                        "Could not predict the next build of '{env_name}': {e}"
+                    ));
+                    Vec::new()
+                }
+            }
         };
 
         for (i, branch) in env.branches.iter().enumerate() {

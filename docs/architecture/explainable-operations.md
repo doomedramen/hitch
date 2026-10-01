@@ -171,7 +171,7 @@ composition, and nothing else may answer it.
   `Preview` purpose. `predict_composition` runs the same composition offline and unlocked,
   ejecting on conflict and never replaying; `hitch status`, `hitch tree`,
   `hitch conflicts`, the approval snapshot, promote's pre-check, release's
-  dependent planning and `hitch resolve`'s mode choice all go through it.
+  dependent planning (against the current, pre-release target) and `hitch resolve`'s mode choice all go through it.
   There is no second, tree-based oracle: when there were two, a preview could
   say "would hold" about a build that went on to succeed.
 * **Releases** — `compose_release` (`src/operations/release.rs`). A release
