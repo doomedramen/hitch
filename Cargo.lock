@@ -1598,6 +1598,7 @@ name = "hitch-desktop"
 version = "0.0.12"
 dependencies = [
  "anyhow",
+ "chrono",
  "git2",
  "hitch",
  "serde",

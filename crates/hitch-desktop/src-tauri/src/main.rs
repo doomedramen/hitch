@@ -2,9 +2,10 @@
 
 mod repo;
 mod types;
+mod views;
 
 use anyhow::Result;
-use hitch::commands::global_context::GlobalContext;
+use hitch::commands::global_context::{GlobalContext, GlobalFlags};
 use hitch::utils::confirm::{AlwaysYesConfirm, Confirm};
 use hitch::utils::logging::Logger;
 use hitch::utils::output::{BufferedOutputSink, OutputLevel, OutputSink};
@@ -17,7 +18,7 @@ use crate::types::{
 
 fn context_at(repo_path: &str) -> Result<GlobalContext> {
     let logger = Arc::new(Logger::for_command("desktop", false));
-    GlobalContext::new_at_path(repo_path, false, false, logger)
+    GlobalContext::new_at_path(repo_path, GlobalFlags::defaults(), logger)
         .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
@@ -33,9 +34,7 @@ async fn repo_probe(path: String) -> RepoProbeResultDto {
 async fn workspace_index(repo_path: String) -> Result<WorkspaceIndexDto, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ctx = context_at(&repo_path).map_err(|e| e.to_string())?;
-        let model = hitch::core::workspace_index::build_workspace_index_model(&ctx)
-            .map_err(|e| e.to_string())?;
-        Ok(WorkspaceIndexDto::from(model))
+        views::workspace_index(&ctx).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -49,27 +48,7 @@ async fn branch_details(
     tauri::async_runtime::spawn_blocking(move || {
         let ctx = context_at(&repo_path).map_err(|e| e.to_string())?;
 
-        // Find the branch row from a fresh index (keeps the API simple for the UI).
-        let index = hitch::core::workspace_index::build_workspace_index_model(&ctx)
-            .map_err(|e| e.to_string())?;
-        let row = index
-            .promoted_branches
-            .iter()
-            .chain(index.branches.iter())
-            .find(|b| b.name == branch_name)
-            .cloned()
-            .ok_or_else(|| format!("Branch '{}' not found", branch_name))?;
-
-        let metadata_sha = ctx.git().get_branch_commit_sha("hitch-metadata").ok();
-        let branch_sha = ctx
-            .git()
-            .get_branch_commit_sha(&row.name)
-            .map_err(|e| e.to_string())?;
-
-        let model =
-            hitch::core::details::build_branch_details_model(&ctx, &row, branch_sha, metadata_sha)
-                .map_err(|e| e.to_string())?;
-        Ok(BranchDetailsDto::from(model))
+        views::branch_details(&ctx, &branch_name).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -79,20 +58,7 @@ async fn branch_details(
 async fn env_details(repo_path: String, env_name: String) -> Result<EnvironmentDetailsDto, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let ctx = context_at(&repo_path).map_err(|e| e.to_string())?;
-        let metadata_sha = ctx.git().get_branch_commit_sha("hitch-metadata").ok();
-        let env_sha = ctx
-            .git()
-            .get_branch_commit_sha(&env_name)
-            .map_err(|e| e.to_string())?;
-
-        let model = hitch::core::details::build_environment_details_model(
-            &ctx,
-            &env_name,
-            env_sha,
-            metadata_sha,
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(EnvironmentDetailsDto::from(model))
+        views::env_details(&ctx, &env_name).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -144,7 +110,7 @@ fn run_locked_op<F>(
     action: F,
 ) -> OperationResultDto
 where
-    F: FnOnce(&GlobalContext) -> Result<()>,
+    F: FnOnce(&GlobalContext) -> Result<bool>,
 {
     let (ctx, buffer) = match op_context_streaming(repo_path, on_log) {
         Ok(v) => v,
@@ -161,7 +127,18 @@ where
     };
 
     let res = action(&ctx);
-    OperationResultDto::from_result(res.map_err(|e| e.to_string()), buffer.snapshot())
+    // A rebuild that held back conflicting branches succeeded; say so in the
+    // output (the DTO shape is unchanged).
+    if let Ok(true) = res {
+        ctx.output.log(
+            OutputLevel::Warning,
+            "Finished, but one or more branches were held back because they conflict.",
+        );
+    }
+    OperationResultDto::from_result(
+        res.map(|_| ()).map_err(|e| e.to_string()),
+        buffer.snapshot(),
+    )
 }
 
 #[tauri::command]
@@ -177,8 +154,9 @@ async fn promote(
                 branch: branch_name,
                 env_name,
                 no_rebuild: false,
+                dry_run: false,
             };
-            hitch::commands::promote::run(args, ctx)
+            hitch::commands::promote::run(args, ctx).map(|()| false)
         })
     })
     .await
@@ -194,7 +172,14 @@ async fn rebuild(
 ) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
         run_locked_op(&repo_path, "rebuild", on_log, |ctx| {
-            let args = hitch::commands::rebuild::RebuildCommand { env_name, force };
+            let args = hitch::commands::rebuild::RebuildCommand {
+                env_name,
+                force,
+                dry_run: false,
+                on_conflict: None,
+                pr_comments: false,
+                replay_resolutions: false,
+            };
             hitch::commands::rebuild::run(args, ctx)
         })
     })
@@ -218,8 +203,9 @@ async fn release(
                 no_prune: false,
                 no_rebuild_dependents: false,
                 squash: false,
+                dry_run: false,
             };
-            hitch::commands::release::run(args, ctx)
+            hitch::commands::release::run(args, ctx).map(|()| false)
         })
     })
     .await
@@ -268,7 +254,7 @@ async fn approval_approve(
                 // Normalize an empty/whitespace comment to None.
                 comment: comment.filter(|c| !c.trim().is_empty()),
             };
-            hitch::commands::approvals::approve::run(args, ctx)
+            hitch::commands::approvals::approve::run(args, ctx).map(|()| false)
         })
     })
     .await
@@ -285,7 +271,7 @@ async fn approval_reject(
     tauri::async_runtime::spawn_blocking(move || {
         run_locked_op(&repo_path, "approvals reject", on_log, |ctx| {
             let args = hitch::commands::approvals::reject::RejectArgs { request_id, reason };
-            hitch::commands::approvals::reject::run(args, ctx)
+            hitch::commands::approvals::reject::run(args, ctx).map(|()| false)
         })
     })
     .await
@@ -300,13 +286,10 @@ async fn approval_cancel(
 ) -> OperationResultDto {
     tauri::async_runtime::spawn_blocking(move || {
         run_locked_op(&repo_path, "approvals cancel", on_log, |ctx| {
-            // force=true: the desktop confirms via UI, and there is no stdin to
-            // read an interactive confirmation from.
-            let args = hitch::commands::approvals::cancel::CancelArgs {
-                request_id,
-                force: true,
-            };
-            hitch::commands::approvals::cancel::run(args, ctx)
+            // The desktop confirms via UI; `AlwaysYesConfirm` answers the
+            // command's own confirmation.
+            let args = hitch::commands::approvals::cancel::CancelArgs { request_id };
+            hitch::commands::approvals::cancel::run(args, ctx).map(|()| false)
         })
     })
     .await
@@ -322,7 +305,7 @@ async fn approval_refresh(
     tauri::async_runtime::spawn_blocking(move || {
         run_locked_op(&repo_path, "approvals refresh", on_log, |ctx| {
             let args = hitch::commands::approvals::refresh::RefreshArgs { request_id };
-            hitch::commands::approvals::refresh::run(args, ctx)
+            hitch::commands::approvals::refresh::run(args, ctx).map(|()| false)
         })
     })
     .await

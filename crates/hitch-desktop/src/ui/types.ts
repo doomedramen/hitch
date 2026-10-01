@@ -22,7 +22,7 @@ export type RepoProbeResult =
     }
   | { ok: false; path: string; error: string };
 
-export type OutputLevel = "Info" | "Success" | "Warning" | "Error";
+export type OutputLevel = "Verbose" | "Info" | "Success" | "Warning" | "Error";
 
 export type BufferedLine = {
   level: OutputLevel;

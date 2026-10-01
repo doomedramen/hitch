@@ -251,8 +251,8 @@ condition for removal.
 
 The desktop app's old adapters (`core::timeline`, `core::details`,
 `core::workspace_index`, `core::workspace`) are **not** on this list: they were
-deleted, and `crates/hitch-desktop` no longer compiles until it is rebuilt on
-`ActivityLog`, `RepositoryStateSnapshot`, `MatrixModel` and `WhyExplanation`.
+deleted; `crates/hitch-desktop` builds its own views over `ActivityLog` and
+`RepositoryStateSnapshot` (`src-tauri/src/views.rs`).
 
 ## 8. Adding a new operation
 

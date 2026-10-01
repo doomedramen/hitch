@@ -147,9 +147,8 @@ Human output only; exit codes are unchanged.
 
 - The desktop-only adapters `core::timeline`, `core::details`,
   `core::workspace_index` and `core::workspace`. `crates/hitch-desktop` consumed
-  them and **does not compile against the core until it is rebuilt** on
-  `ActivityLog`, `RepositoryStateSnapshot`, `MatrixModel` and `WhyExplanation`.
-  The CLI never called them.
+  them and now builds the same views itself over `ActivityLog` and
+  `RepositoryStateSnapshot`. The CLI never called them.
 - The tree-based `preflight_*` oracle and the step-transcript plumbing
   (`StepNarration`, `StepLogger`, `on_step`), `get_commit_timestamp`, and the
   unused `format_conflict_report`.
@@ -176,5 +175,5 @@ Human output only; exit codes are unchanged.
   `--json` without `--yes` is now 1, not 0.
 - `hitch status` now prints the matrix; use `hitch status --environments` for the
   old per-environment layout.
-- Any tooling built on `crates/hitch-desktop`'s use of the removed adapters must
-  move to the typed models above.
+- Any other tooling built on the removed adapters must move to the typed models
+  above.

@@ -35,12 +35,12 @@ environment branch from that declaration rather than accumulating manual
 merges. Config lives as `hitch.json` on a dedicated `hitch-metadata` branch.
 
 A secondary crate, `crates/hitch-desktop`, is a Tauri + React desktop GUI —
-out of scope unless a task explicitly touches it. It **no longer compiles
-against the core**: P10 deleted the adapters it consumed
-(`core::{timeline,details,workspace_index,workspace}`), by the user's decision
-(deviation 1 of `docs/superpowers/plans/2026-09-25-explainable-ux-P10-docs-and-legacy-removal.md`).
-The repair stream rebuilds it on `ActivityLog`, `RepositoryStateSnapshot`,
-`MatrixModel` and `WhyExplanation`.
+out of scope unless a task explicitly touches it. It compiles against the typed
+core API through desktop-local adapters in `crates/hitch-desktop/src-tauri/src/views.rs`
+(over `RepositoryStateSnapshot` and `ActivityLog`); P10 deleted the core's own
+desktop adapters (`core::{timeline,details,workspace_index,workspace}`) and they
+must not come back. The UI's JSON contract (field names, the `key: value` overview
+text) is held by those adapters. CI gate: `just desktop-check`.
 
 Read `README.md` for the user-facing model and `SKILL.md` for the condensed
 agent-facing command reference. `docs/architecture/explainable-operations.md` is
