@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "environments": {
+    "dev": {
+      "base": "main",
+      "branches": [],
+      "locked": false,
+      "locked_by": null,
+      "locked_at": null,
+      "rebuilt_at": null,
+      "released_at": null,
+      "requires_approval": false,
+      "approvers": [],
+      "min_approvals": 1,
+      "on_conflict": "eject"
+    }
+  },
+  "approval_requests": [],
+  "require_signed_resolutions": false
+}
