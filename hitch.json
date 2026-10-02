@@ -3,7 +3,9 @@
   "environments": {
     "dev": {
       "base": "main",
-      "branches": [],
+      "branches": [
+        "fix/dogfood-output-nits"
+      ],
       "locked": true,
       "locked_by": "wookoouk@gmail.com",
       "locked_at": "2026-10-02T06:45:05.458353Z",
