@@ -3,6 +3,16 @@
 All notable changes to Hitch are recorded here, in the style of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.0.1 — 2026-10-02
+
+### Fixed
+
+- `hitch status` on a repository with nothing promoted: no empty table, real
+  environment names, a plain-word summary and specific next steps.
+- `hitch init`'s hint now names `hitch promote <branch> <environment>`.
+- `hitch rebuild` keeps its force-push note under `--verbose` instead of the
+  default output.
+
 ## 2.0.0 — 2026-10-02 — explainable UX
 
 Every mutation now explains itself as `INTENT → PLAN → APPLY → RESULT`, and every
