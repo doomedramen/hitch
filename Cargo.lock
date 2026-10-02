@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "hitch-desktop"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "anyhow",
  "chrono",
