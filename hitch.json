@@ -6,9 +6,10 @@
       "branches": [
         "fix/dogfood-output-nits"
       ],
-      "locked": false,
-      "locked_by": null,
-      "locked_at": null,
+      "locked": true,
+      "locked_by": "wookoouk@gmail.com",
+      "locked_at": "2026-10-02T12:13:38.602456Z",
+      "lock_purpose": "operation",
       "rebuilt_at": "2026-10-02T06:45:20.285491Z",
       "released_at": null,
       "requires_approval": false,
