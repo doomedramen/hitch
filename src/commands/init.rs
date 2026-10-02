@@ -83,7 +83,7 @@ pub fn run(args: InitCommand, context: &GlobalContext) -> Result<()> {
 
     if let Some(env_names) = &args.environments {
         context.log_info(&format!("Created environments: {}", env_names.join(", ")));
-        context.log_info("You can now promote branches to these environments using 'hitch promote <branch> to <environment>'");
+        context.log_info("You can now promote branches to these environments using 'hitch promote <branch> <environment>'");
     } else {
         context.log_info("You can add environments using 'hitch add <environment-name>'");
     }
