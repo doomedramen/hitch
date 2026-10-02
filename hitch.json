@@ -6,10 +6,9 @@
       "branches": [
         "fix/status-on-a-clean-repo"
       ],
-      "locked": true,
-      "locked_by": "wookoouk@gmail.com",
-      "locked_at": "2026-10-02T12:46:15.607827Z",
-      "lock_purpose": "operation",
+      "locked": false,
+      "locked_by": null,
+      "locked_at": null,
       "rebuilt_at": "2026-10-02T12:46:29.409121Z",
       "released_at": "2026-10-02T12:13:47.007422Z",
       "requires_approval": false,
