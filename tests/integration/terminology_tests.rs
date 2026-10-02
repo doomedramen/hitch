@@ -411,6 +411,18 @@ mod tests {
             "push-time output leaked mechanism words:\n{}",
             bad.join("\n")
         );
+        // The publish step is in the receipt; narrating the force push between
+        // the plan and the receipt is a second voice for the same effect.
+        let narrated: Vec<&String> = transcript
+            .iter()
+            .filter(|(_, t)| t.contains("Force pushing"))
+            .map(|(step, _)| step)
+            .collect();
+        assert!(
+            narrated.is_empty(),
+            "force push narrated in default output: {:?}",
+            narrated
+        );
         Ok(())
     }
 

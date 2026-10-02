@@ -1716,7 +1716,7 @@ pub(crate) fn publish_environment_build(
                 return Ok(PushOutcome::Declined);
             }
 
-            context.log_info(&format!(
+            context.log_verbose(&format!(
                 "Force pushing rebuilt '{}' branch to replace remote",
                 env_name
             ));

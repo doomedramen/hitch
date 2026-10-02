@@ -43,7 +43,8 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Hitch initialized successfully")
-                .assert_stdout_contains("Created environments: dev, qa, prod");
+                .assert_stdout_contains("Created environments: dev, qa, prod")
+                .assert_stdout_contains("hitch promote <branch> <environment>");
 
             // Verify environments were created
             let config = env.read_hitch_config()?;
