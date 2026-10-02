@@ -3,7 +3,9 @@
   "environments": {
     "dev": {
       "base": "main",
-      "branches": [],
+      "branches": [
+        "fix/status-on-a-clean-repo"
+      ],
       "locked": true,
       "locked_by": "wookoouk@gmail.com",
       "locked_at": "2026-10-02T12:46:15.607827Z",
