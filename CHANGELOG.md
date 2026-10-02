@@ -3,7 +3,7 @@
 All notable changes to Hitch are recorded here, in the style of
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased — explainable UX
+## 2.0.0 — 2026-10-02 — explainable UX
 
 Every mutation now explains itself as `INTENT → PLAN → APPLY → RESULT`, and every
 display of "what is in this environment" reads one model instead of re-deriving
