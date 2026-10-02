@@ -4,9 +4,10 @@
     "dev": {
       "base": "main",
       "branches": [],
-      "locked": false,
-      "locked_by": null,
-      "locked_at": null,
+      "locked": true,
+      "locked_by": "wookoouk@gmail.com",
+      "locked_at": "2026-10-02T06:33:07.450520Z",
+      "lock_purpose": "operation",
       "rebuilt_at": "2026-10-02T06:30:26.352133Z",
       "released_at": null,
       "requires_approval": false,
