@@ -40,27 +40,68 @@ mod tests {
         line.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// Assert that `name`'s summary line reads `desired D · actual A`, optionally
-    /// with the lock marker.
+    /// Assert that `name`'s summary line is an equation `name = base + ...` with
+    /// `branches` terms, optionally with the lock marker.
     ///
-    /// Whole-output on failure, because a wrong count is nearly always a
+    /// Whole-output on failure, because a wrong line is nearly always a
     /// misread view: a detail-view line and a matrix line differ in everything
-    /// except the numbers, so the surrounding output is what tells the two
-    /// apart.
-    fn assert_summary(stdout: &str, name: &str, desired: usize, actual: usize, locked: bool) {
-        let prefix = normalise(&format!(
-            "{} desired {desired} · actual {actual}",
-            name.to_uppercase()
-        ));
-        let expected = if locked {
-            format!("{prefix} 🔒")
-        } else {
-            prefix
-        };
+    /// except the names, so the surrounding output tells the two apart.
+    fn assert_summary(stdout: &str, name: &str, branches: usize, locked: bool) {
+        let found = stdout.lines().map(normalise).find(|line| {
+            line.starts_with(&format!("{name} = "))
+                && line.matches(" + ").count() == branches
+                && line.ends_with("🔒") == locked
+        });
         assert!(
-            stdout.lines().any(|line| normalise(line) == expected),
-            "expected the summary line {expected:?}.\n--- full output ---\n{stdout}"
+            found.is_some(),
+            "expected a summary line for {name} with {branches} branches (locked: {locked}).\n--- full output ---\n{stdout}"
         );
+    }
+
+    #[test]
+    fn test_hitch_status_on_a_clean_repo_is_plain_words() -> anyhow::Result<()> {
+        let framework = HitchTestFramework::new()?;
+        let _ = framework.with_test_environment(TestSetup::HitchInit, |env| {
+            env.hitch
+                .run()
+                .args(&["add", "dev"])
+                .execute()?
+                .assert_success();
+            env.hitch
+                .run()
+                .args(&["rebuild", "dev"])
+                .execute()?
+                .assert_success();
+
+            let stdout = env
+                .hitch
+                .run()
+                .args(&["status"])
+                .execute()?
+                .assert_success()
+                .stdout()
+                .to_string();
+
+            assert!(!stdout.contains("DEV"), "names as typed:\n{stdout}");
+            assert!(!stdout.contains("desired"), "no model internals:\n{stdout}");
+            assert!(!stdout.contains("Feature"), "no empty table:\n{stdout}");
+            assert!(
+                stdout.contains(
+                    "Nothing is promoted yet. Promote a branch with: hitch promote <branch> dev"
+                ),
+                "{stdout}"
+            );
+            assert!(
+                stdout
+                    .lines()
+                    .any(|l| l.starts_with("dev = main  ·  up to date  ·  rebuilt ")),
+                "{stdout}"
+            );
+            assert!(!stdout.contains("git branch -a"), "{stdout}");
+            assert!(!stdout.contains("Quick commands"), "{stdout}");
+            Ok::<(), anyhow::Error>(())
+        });
+        Ok(())
     }
 
     #[test]
@@ -127,14 +168,14 @@ mod tests {
             let stdout = result
                 .assert_success()
                 .assert_stdout_contains("Hitch Environment Status")
-                // The grid's header row: `Feature`, then the environment as a
-                // column, upper-cased by the renderer.
-                .assert_stdout_contains("Feature")
-                .assert_stdout_contains("DEV")
+                // Nothing is promoted, so there is no grid to draw: one
+                // sentence names the next step, with the real environment name.
+                .assert_stdout_contains("Nothing is promoted yet")
+                .assert_stdout_contains("hitch promote <branch> dev")
                 .stdout()
                 .to_string();
 
-            assert_summary(&stdout, "dev", 0, 0, false);
+            assert_summary(&stdout, "dev", 0, false);
             // `hitch add` declares an environment without building it, so the
             // environment branch itself does not exist yet. The verdict says
             // that rather than reporting a stale "up to date".
@@ -279,10 +320,10 @@ mod tests {
                 .assert_stdout_contains("feature-2")
                 .assert_stdout_contains("feature-3")
                 .assert_stdout_contains("● included")
-                .assert_stdout_contains("realised")
+                .assert_stdout_contains("up to date")
                 .stdout()
                 .to_string();
-            assert_summary(&stdout, "dev", 3, 3, false);
+            assert_summary(&stdout, "dev", 3, false);
 
             // The detail view still reports the promoted-branch count.
             let detail = env
@@ -325,7 +366,7 @@ mod tests {
             // Get status with locked environment
             let result = env.hitch.run().args(&["status"]).execute()?;
             let stdout = result.assert_success().stdout().to_string();
-            assert_summary(&stdout, "dev", 0, 0, true);
+            assert_summary(&stdout, "dev", 0, true);
             // And only that row carries it: with one environment, a lock
             // anywhere else in the block would show up in the same assertion, so
             // this pins the count rather than the presence.
@@ -370,7 +411,7 @@ mod tests {
             let result = env.hitch.run().args(&["rebuild", "dev"]).execute()?;
             result.assert_success();
 
-            // The matrix says "realised" and counts the branch. The rebuild
+            // The matrix says "up to date" and counts the branch. The rebuild
             // *timestamp* is a detail-view fact — the matrix deliberately shows
             // no clock, because no verdict in it depends on one.
             let result = env.hitch.run().args(&["status"]).execute()?;
@@ -378,10 +419,10 @@ mod tests {
                 .assert_success()
                 .assert_stdout_contains("feature-1")
                 .assert_stdout_contains("● included")
-                .assert_stdout_contains("realised")
+                .assert_stdout_contains("up to date")
                 .stdout()
                 .to_string();
-            assert_summary(&stdout, "dev", 1, 1, false);
+            assert_summary(&stdout, "dev", 1, false);
 
             let detail = env
                 .hitch
@@ -443,16 +484,16 @@ mod tests {
             let stdout = result
                 .assert_success()
                 .assert_stdout_contains("Feature")
-                .assert_stdout_contains("DEV")
-                .assert_stdout_contains("QA")
-                .assert_stdout_contains("STAGING")
+                .assert_stdout_contains("dev")
+                .assert_stdout_contains("qa")
+                .assert_stdout_contains("staging")
                 .assert_stdout_contains("feature-dev")
                 .stdout()
                 .to_string();
 
-            assert_summary(&stdout, "dev", 1, 1, false);
-            assert_summary(&stdout, "qa", 0, 0, true);
-            assert_summary(&stdout, "staging", 0, 0, false);
+            assert_summary(&stdout, "dev", 1, false);
+            assert_summary(&stdout, "qa", 0, true);
+            assert_summary(&stdout, "staging", 0, false);
             assert!(
                 !stdout.contains("environments:"),
                 "the rollup line should be gone. Got:\n{stdout}"
@@ -587,9 +628,9 @@ mod tests {
                 .assert_stdout_contains("Feature")
                 .stdout()
                 .to_string();
-            assert_summary(&stdout, "dev", 2, 2, false);
-            assert_summary(&stdout, "qa", 1, 1, false);
-            assert_summary(&stdout, "staging", 0, 0, true);
+            assert_summary(&stdout, "dev", 2, false);
+            assert_summary(&stdout, "qa", 1, false);
+            assert_summary(&stdout, "staging", 0, true);
 
             // The detail view keeps the bases and the rebuild stamp.
             let detail = env
@@ -634,7 +675,7 @@ mod tests {
             result
                 .assert_success()
                 .assert_stdout_contains("Hitch Environment Status")
-                .assert_stdout_contains("DEV");
+                .assert_stdout_contains("dev = main");
 
             Ok::<(), anyhow::Error>(())
         });
@@ -682,7 +723,7 @@ mod tests {
                 .assert_stdout_contains("needs rebuild")
                 .stdout()
                 .to_string();
-            assert_summary(&stdout, "dev", 0, 0, false);
+            assert_summary(&stdout, "dev", 0, false);
 
             // The name of what moved, in the form spec §11.2 asks for: an
             // explicit before → after rather than a bare verdict. This is a
@@ -753,8 +794,8 @@ mod tests {
 
             let result = env.hitch.run().args(&["status"]).execute()?;
             let stdout = result.assert_success().stdout().to_string();
-            assert_summary(&stdout, "dev", 0, 0, false);
-            assert_summary(&stdout, "qa", 0, 0, false);
+            assert_summary(&stdout, "dev", 0, false);
+            assert_summary(&stdout, "qa", 0, false);
             // Once per summary row's verdict line, and nowhere else: the
             // suggested-actions block prompts with commands (`hitch rebuild dev`)
             // rather than repeating the verdict, so this counts verdicts.

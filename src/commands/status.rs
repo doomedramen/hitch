@@ -1,6 +1,7 @@
 use crate::commands::global_context::GlobalContext;
 use crate::core::render::{
     emit_json, render_environment_summaries, render_matrix, render_matrix_at,
+    render_matrix_next_steps,
 };
 use crate::core::state::{
     build_state_snapshot, ActualComposition, ApprovalPolicy, DeclaredBranch, DesiredComposition,
@@ -175,13 +176,11 @@ fn display_matrix(
     // `LegacyUnknown` — so this is a move and not a rewrite.
     display_suggested_actions(snapshot);
 
-    println!("{}", "🔧 Quick commands:".bright_blue());
-    println!("  • Explain a branch: 'hitch why <branch> [environment]'");
-    println!("  • List branches: 'git branch -a'");
-    println!("  • Promote branch: 'hitch promote <branch> <environment>'");
-    println!("  • Rebuild env: 'hitch rebuild <environment>'");
-    println!("  • Lock env: 'hitch lock <environment>'");
-    println!();
+    if let Some(steps) = render_matrix_next_steps(&matrix) {
+        println!("{}", "🔧 Quick commands:".bright_blue());
+        println!("{steps}");
+        println!();
+    }
 
     display_protection_status(context, config);
 

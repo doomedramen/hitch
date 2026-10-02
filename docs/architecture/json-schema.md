@@ -290,7 +290,9 @@ view's name. None of the three takes the repository lock.
           "missing": 0,
           "actual_unknown": 0,
           "locked": false,
-          "health": { "partially_realised": { "held": ["clash"] } }
+          "health": { "partially_realised": { "held": ["clash"] } },
+          "equation": { "environment": "dev", "base": "main", "terms": [ { "branch": "clash", "state": "plain" }, "…" ], "excluded": [] },
+          "rebuilt_at": "2026-10-02T12:13:00Z"
         },
         "…"
       ]
@@ -300,7 +302,7 @@ view's name. None of the three takes the repository lock.
 ```
 
 Cells are one of `not_desired`, `included`, `held`, `in_base`, `needs_rebuild`,
-`actual_unknown`, `missing`. `health` is one of `realised`,
+`actual_unknown`, `missing`. `equation` is the environment's declaration and `rebuilt_at` its last rebuild (`null` if never). `health` is one of `realised`,
 `{"partially_realised": {"held": [...]}}`, `{"needs_rebuild": {...}}`,
 `never_built`, `legacy_unknown`, `missing_branch`. Each environment's `desired`
 and `actual` are both present, so a consumer can diff them itself.

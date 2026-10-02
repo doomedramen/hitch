@@ -1011,11 +1011,21 @@ mod tests {
                 .to_string();
             for state in &snap.environments {
                 let label = state.health.label();
+                let phrase = match label {
+                    "realised" => "up to date",
+                    "partially realised" => "holding back",
+                    "needs rebuild" => "needs rebuild",
+                    "never built" => "never built",
+                    "actual unknown" => "no build record",
+                    "branch missing" => "branch missing",
+                    other => panic!("unmapped health label {other:?}"),
+                };
                 assert!(
                     matrix
                         .lines()
-                        .any(|line| line.trim() == label),
-                    "the snapshot says {} is {:?}, whose label is {label:?}, so a matrix row must carry exactly that. Got:\n{matrix}",
+                        .any(|line| line.starts_with(&format!("{} = ", state.name))
+                            && line.contains(phrase)),
+                    "the snapshot says {} is {:?}, whose label is {label:?}, so its summary line must say {phrase:?}. Got:\n{matrix}",
                     state.name,
                     state.health,
                 );
@@ -1130,7 +1140,7 @@ mod tests {
             assert!(
                 matrix
                     .lines()
-                    .any(|line| line.trim() == "actual unknown"),
+                    .any(|line| line.starts_with("dev = ") && line.contains("no build record")),
                 "and the environment's verdict line must say so. Got:\n{matrix}"
             );
 
