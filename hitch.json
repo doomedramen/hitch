@@ -3,15 +3,13 @@
   "environments": {
     "dev": {
       "base": "main",
-      "branches": [
-        "fix/status-on-a-clean-repo"
-      ],
+      "branches": [],
       "locked": true,
       "locked_by": "wookoouk@gmail.com",
       "locked_at": "2026-10-02T13:44:32.514991Z",
       "lock_purpose": "operation",
       "rebuilt_at": "2026-10-02T12:46:29.409121Z",
-      "released_at": "2026-10-02T12:13:47.007422Z",
+      "released_at": "2026-10-02T13:44:41.785209Z",
       "requires_approval": false,
       "approvers": [],
       "min_approvals": 1,
