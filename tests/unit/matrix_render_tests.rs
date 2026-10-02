@@ -27,7 +27,11 @@
 //! reason a reader can see, and hardcoding it would make every test that adds
 //! an environment silently start asserting a layout decision.
 
-use hitch::core::render::{render_environment_summaries, render_matrix, render_matrix_at};
+use chrono::TimeZone;
+use hitch::core::render::{
+    render_environment_summaries, render_matrix, render_matrix_at, render_matrix_next_steps,
+    EnvironmentEquation, EquationTerm, EquationTermState,
+};
 use hitch::core::state::EnvironmentHealth;
 use hitch::core::status::{MatrixCell, MatrixModel, MatrixRow, MatrixSummaryRow};
 
@@ -73,6 +77,20 @@ fn summary(environment: &str) -> MatrixSummaryRow {
         actual_unknown: 0,
         locked: false,
         health: EnvironmentHealth::Realised,
+        equation: EnvironmentEquation {
+            environment: environment.to_string(),
+            base: "main".to_string(),
+            terms: Vec::new(),
+            excluded: Vec::new(),
+        },
+        rebuilt_at: None,
+    }
+}
+
+fn term(branch: &str) -> EquationTerm {
+    EquationTerm {
+        branch: branch.to_string(),
+        state: EquationTermState::Plain,
     }
 }
 
@@ -130,10 +148,11 @@ fn normalise(line: &str) -> String {
 
 /// One summary block line, with its whitespace collapsed, if it exists.
 fn counts_line(rendered: &str, name: &str) -> Option<String> {
-    let wanted = normalise(&name.to_uppercase());
-    rendered.lines().map(normalise).find(|line| {
-        line.contains("desired") && (*line == wanted || line.starts_with(&format!("{wanted} ")))
-    })
+    let wanted = format!("{name} = ");
+    rendered
+        .lines()
+        .map(normalise)
+        .find(|line| line.starts_with(&wanted))
 }
 
 /// The whole cell a glyph opens: from the glyph to the next glyph, trimmed.
@@ -350,7 +369,7 @@ fn every_column_agrees_on_its_own_start_across_all_rows() {
         let label: String = header[at..at + name.chars().count()].iter().collect();
         assert_eq!(
             label,
-            name.to_uppercase(),
+            name.to_string(),
             "the header for {name} does not sit above its cells:\n{rendered}"
         );
         // The gutter is exactly two spaces, so the header cannot be narrower than
@@ -410,29 +429,15 @@ fn a_repository_with_no_environments_says_so_rather_than_printing_an_empty_grid(
     };
     let rendered = render_matrix(&empty);
 
-    assert_eq!(
-        rendered.lines().count(),
-        2,
-        "a header and a rule, and nothing else:\n{rendered}"
-    );
-    assert_eq!(rendered.lines().next().unwrap().trim_end(), "Feature");
-    assert!(rendered.lines().nth(1).unwrap().chars().all(|c| c == '─'));
-
-    // A zero column budget cannot fit even the `Feature` header, so this is the
-    // fallback — and "0 environments declared" is a better answer than a
-    // two-line table with nothing in it, which is the point of the prose form.
-    // A grid wide enough for the header gets the grid, empty.
-    let at_zero = render_matrix_at(&empty, 0);
+    assert_eq!(rendered.lines().count(), 1, "one sentence:\n{rendered}");
     assert!(
-        at_zero.contains("0 environments declared, 0 features."),
-        "{at_zero}"
+        rendered.starts_with("Nothing is promoted yet"),
+        "{rendered}"
     );
-    assert!(at_zero.contains("this terminal has 0"), "{at_zero}");
-    assert_eq!(
-        render_matrix_at(&empty, 7),
-        rendered,
-        "a budget that fits the header renders the grid, empty or not"
-    );
+
+    // The sentence needs no width arithmetic, so no budget replaces it.
+    assert_eq!(render_matrix_at(&empty, 0), rendered);
+    assert_eq!(render_matrix_at(&empty, 7), rendered);
 }
 
 /// Rows with no columns, and columns with no rows: the model is rectangular by
@@ -451,12 +456,14 @@ fn a_row_with_no_cells_and_a_column_with_no_rows_both_render() {
     );
 
     let no_rows = render_matrix(&model(&["dev", "qa"], &[]));
-    assert!(no_rows.lines().next().unwrap().contains("DEV"));
     assert_eq!(
-        no_rows.lines().count(),
-        2,
-        "header and rule only:\n{no_rows}"
+        no_rows,
+        "Nothing is promoted yet. Promote a branch with: hitch promote <branch> <environment>",
+        "an empty grid is one sentence, not a header over nothing"
     );
+    let one_env = render_matrix(&model(&["dev"], &[]));
+    assert!(one_env.ends_with("hitch promote <branch> dev"), "{one_env}");
+    assert_eq!(render_matrix_at(&model(&["dev"], &[]), 0), one_env);
 }
 
 /// The first column header is a label for *branch names*, so it is padded to the
@@ -494,13 +501,9 @@ fn the_first_column_is_narrow_only_when_the_names_are() {
     );
 }
 
-/// The summary block's counts come from the cells, and the marker is a suffix.
-///
-/// A marker on the *front* pushes that row's name right of every other row's,
-/// which is a table losing its alignment over an annotation — so the marker takes
-/// the padding the name already had, and the names stay in a column.
+/// The marker is a suffix, so the equation starts the line for every row.
 #[test]
-fn the_lock_marker_is_a_suffix_so_the_names_stay_in_a_column() {
+fn the_lock_marker_is_a_suffix() {
     let rendered = render_environment_summaries(&[
         summary_with("dev", |s| s.locked = true),
         summary_with("qa", |s| s.locked = false),
@@ -510,88 +513,38 @@ fn the_lock_marker_is_a_suffix_so_the_names_stay_in_a_column() {
     let qa = counts_line(&rendered, "qa").expect("qa's line");
     assert!(dev.ends_with("🔒"), "the lock is a suffix: {dev:?}");
     assert!(!qa.contains('🔒'), "and absent when not locked: {qa:?}");
-
-    // The name is the first field of both lines, in the same character column.
-    // Measured on the *raw* lines, because that is the alignment being claimed.
-    let raw: Vec<&str> = rendered.lines().collect();
-    let dev_raw = raw
-        .iter()
-        .find(|l| normalise(l).starts_with("DEV "))
-        .expect("dev's raw line");
-    let qa_raw = raw
-        .iter()
-        .find(|l| normalise(l).starts_with("QA "))
-        .expect("qa's raw line");
-    assert_eq!(
-        column_of(dev_raw, 'D'),
-        column_of(qa_raw, 'Q'),
-        "the locked row's name is not in the same column:\n{rendered}"
-    );
 }
 
-/// A row that reads `dev  desired 3 · actual 3` is silent about three different
-/// things that are not zero, and the one that is an error is a hold. So the
-/// qualifier is its own clause, and the verb agrees with its count.
+/// One line per environment: the equation as typed (lower case, via the shared
+/// equation renderer), the health in plain words, and no model counts.
 #[test]
-fn the_summary_counts_qualify_themselves_and_agree_with_their_counts() {
-    let rendered = render_environment_summaries(&[
-        summary_with("dev", |s| {
-            s.desired = 5;
-            s.realised = 3;
-            s.held = 1;
-        }),
-        summary_with("qa", |s| {
-            s.desired = 2;
-            s.needs_rebuild = 2;
-        }),
-        summary_with("prod", |s| {
-            s.desired = 1;
-            s.missing = 1;
-        }),
-        summary_with("edge", |s| {
-            s.desired = 1;
-            s.actual_unknown = 1;
-        }),
-    ]);
-
-    // `desired` and `actual` are always present, so a rollup cannot read as if
-    // the environment were empty.
-    for (name, expected) in [
-        ("dev", "DEV desired 5 · actual 3 · 1 held"),
-        ("qa", "QA desired 2 · actual 0 · 2 need rebuild"),
-        ("prod", "PROD desired 1 · actual 0 · 1 missing"),
-        ("edge", "EDGE desired 1 · actual 0 · 1 actual unknown"),
-    ] {
-        assert_eq!(
-            counts_line(&rendered, name).as_deref(),
-            Some(expected),
-            "the line for {name}:\n{rendered}"
-        );
-    }
-
-    // The verb agrees with its count, and the two forms differ only in the verb —
-    // which is what makes "1 held" vs "2 held" worth asserting at all.
-    let two = render_environment_summaries(&[summary_with("dev", |s| s.held = 2)]);
+fn a_summary_is_the_equation_and_the_health_in_plain_words() {
+    let mut dev = summary_with("dev", |s| {
+        s.health = EnvironmentHealth::PartiallyRealised {
+            held: vec!["b".to_string()],
+        };
+        s.rebuilt_at = Some(chrono::Utc.with_ymd_and_hms(2026, 10, 2, 14, 3, 0).unwrap());
+    });
+    dev.equation.terms = vec![term("a")];
+    let rendered = render_environment_summaries(&[dev, summary("qa")]);
     assert_eq!(
-        counts_line(&two, "dev").as_deref(),
-        Some("DEV desired 0 · actual 0 · 2 held"),
-        "{two}"
+        rendered,
+        "dev = main + a  ·  holding back 1 branch  ·  rebuilt 2026-10-02 14:03 UTC\n\
+         qa = main  ·  up to date\n"
     );
+    assert!(!rendered.contains("desired") && !rendered.contains("actual"));
 }
 
-/// The health word is the *same* function `hitch status` already used, so the
-/// block cannot grow a second vocabulary of verdicts. Asserted as the vocabulary
-/// itself, because the property that matters is that these six words appear and
-/// nothing else does.
+/// Every health has a plain phrase, and plural agrees with the count.
 #[test]
-fn the_summary_uses_the_six_health_words_and_nothing_else() {
+fn the_summary_phrases_every_health_in_plain_words() {
     let cases = [
-        (EnvironmentHealth::Realised, "realised"),
+        (EnvironmentHealth::Realised, "up to date"),
         (
             EnvironmentHealth::PartiallyRealised {
-                held: vec!["feature/a".to_string()],
+                held: vec!["a".to_string(), "b".to_string()],
             },
-            "partially realised",
+            "holding back 2 branches",
         ),
         (
             EnvironmentHealth::NeedsRebuild {
@@ -602,27 +555,33 @@ fn the_summary_uses_the_six_health_words_and_nothing_else() {
             "needs rebuild",
         ),
         (EnvironmentHealth::NeverBuilt, "never built"),
-        (EnvironmentHealth::LegacyUnknown, "actual unknown"),
+        (
+            EnvironmentHealth::LegacyUnknown,
+            "not known, no build record",
+        ),
         (EnvironmentHealth::MissingBranch, "branch missing"),
     ];
-
-    for (health, word) in &cases {
+    for (health, phrase) in &cases {
         let rendered =
             render_environment_summaries(&[summary_with("dev", |s| s.health = health.clone())]);
-        // On its own indented line under the counts, so it cannot be mistaken for
-        // a qualifier on the counts line — `1 needs rebuild` (a count of branches)
-        // and `needs rebuild` (the environment's verdict) are different claims
-        // about different things.
-        assert!(
-            rendered.lines().any(|l| l.trim() == *word),
-            "expected the health word {word:?} for {}:\n{rendered}",
-            health.label()
-        );
-        assert!(
-            rendered.lines().filter(|l| l.trim() == *word).count() == 1,
-            "and exactly one of it, because one environment has one verdict:\n{rendered}"
-        );
+        assert_eq!(rendered, format!("dev = main  ·  {phrase}\n"));
     }
+}
+
+/// The next-steps block names the real environment and a real feature, and is
+/// absent when there is nothing promoted (the grid already said what to do).
+#[test]
+fn next_steps_use_real_names_and_are_absent_on_an_empty_grid() {
+    assert_eq!(render_matrix_next_steps(&model(&["dev"], &[])), None);
+    let one = model(&["dev"], &[("feature/a", &[MatrixCell::Included])]);
+    let steps = render_matrix_next_steps(&one).unwrap();
+    assert!(steps.contains("hitch why feature/a dev"), "{steps}");
+    assert!(steps.contains("hitch promote <branch> dev"), "{steps}");
+    assert!(!steps.contains("git branch"), "{steps}");
+    let two = model(&["dev", "qa"], &[("feature/a", &[MatrixCell::Included; 2])]);
+    assert!(render_matrix_next_steps(&two)
+        .unwrap()
+        .contains("hitch promote <branch> <environment>"));
 }
 
 /// The narrow-terminal decision, and it is a decision rather than a fallback:
@@ -692,7 +651,7 @@ fn the_fallback_agrees_with_the_grammar() {
     let one = model(&["dev"], &[("feature/alpha", &[MatrixCell::Included])]);
     let wide = render_matrix_at(&one, 10_000);
     let narrow = render_matrix_at(&one, 0);
-    assert!(wide.contains("DEV"), "an unbounded budget renders the grid");
+    assert!(wide.contains("dev"), "an unbounded budget renders the grid");
     assert!(
         narrow.contains("1 environment declared, 1 feature."),
         "{narrow}"

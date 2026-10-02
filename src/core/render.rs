@@ -890,6 +890,9 @@ fn branch_list(branches: &[String]) -> String {
 /// No width budget. See [`render_matrix_at`] for the narrow case and
 /// [`MatrixLayout`] for why the fallback is prose rather than truncation.
 pub fn render_matrix(model: &MatrixModel) -> String {
+    if model.rows.is_empty() {
+        return render_nothing_promoted(model);
+    }
     let layout = MatrixLayout::measure(model);
     render_matrix_within(model, &layout)
 }
@@ -908,7 +911,7 @@ struct MatrixLayout {
 
 impl MatrixLayout {
     fn measure(model: &MatrixModel) -> MatrixLayout {
-        let headers: Vec<String> = model.columns.iter().map(|c| c.to_uppercase()).collect();
+        let headers: Vec<String> = model.columns.clone();
         let cells: Vec<Vec<String>> = model
             .rows
             .iter()
@@ -957,7 +960,7 @@ impl MatrixLayout {
 
 fn render_matrix_within(model: &MatrixModel, layout: &MatrixLayout) -> String {
     let feature_header = "Feature";
-    let headers: Vec<String> = model.columns.iter().map(|c| c.to_uppercase()).collect();
+    let headers: Vec<String> = model.columns.clone();
     let cells: Vec<Vec<String>> = model
         .rows
         .iter()
@@ -1023,6 +1026,11 @@ fn render_matrix_within(model: &MatrixModel, layout: &MatrixLayout) -> String {
 /// narrow, they are *unbounded*, and a budget invented from a guess would be
 /// exactly the kind of untruthful input this program keeps refusing to accept.
 pub fn render_matrix_at(model: &MatrixModel, budget: usize) -> String {
+    // An empty grid is one sentence, which fits any terminal that can show text
+    // at all, so it is decided before the width arithmetic.
+    if model.rows.is_empty() {
+        return render_nothing_promoted(model);
+    }
     let layout = MatrixLayout::measure(model);
     let needed = layout.minimum_width(model.columns.len());
     if needed <= budget {
@@ -1045,66 +1053,81 @@ fn pad_right(text: &str, width: usize) -> String {
     format!("{}{}", text, " ".repeat(width.saturating_sub(len)))
 }
 
-/// Render the per-environment lines beneath the grid.
+/// What to say instead of a grid with no rows.
 ///
-/// The counts come from [`MatrixSummaryRow`], which counted them *from the
-/// cells*, so these lines cannot disagree with the grid above them. The health
-/// word is [`EnvironmentHealth::label`]'s — the same function `hitch status`
-/// already used — rather than a second vocabulary of health words.
+/// A header and a rule over nothing reads as a table that failed to load; one
+/// sentence naming the command that fills it is the answer. The environment is
+/// named only when there is exactly one, because with several the choice is the
+/// reader's and a guess would be a suggestion nobody made.
+fn render_nothing_promoted(model: &MatrixModel) -> String {
+    format!(
+        "Nothing is promoted yet. Promote a branch with: hitch promote <branch> {}",
+        sole_environment(model)
+    )
+}
+
+fn sole_environment(model: &MatrixModel) -> &str {
+    match model.columns.as_slice() {
+        [only] => only.as_str(),
+        _ => "<environment>",
+    }
+}
+
+/// The "Quick commands" lines for the default status view, or `None` when the
+/// grid has no features and [`render_matrix`] already named the one next step.
+///
+/// Suggestions about a *stale* environment are not here: the "Suggested
+/// actions" block is driven by the same health verdict and owns them.
+pub fn render_matrix_next_steps(model: &MatrixModel) -> Option<String> {
+    let first_feature = model.rows.first()?.feature.as_str();
+    let env = sole_environment(model);
+    let why_env = if env == "<environment>" {
+        " [environment]".to_string()
+    } else {
+        format!(" {env}")
+    };
+    Some(format!(
+        "  • Explain a branch: 'hitch why {first_feature}{why_env}'\n  • Promote another branch: 'hitch promote <branch> {env}'"
+    ))
+}
+
+/// Render the per-environment lines beneath the grid, one line each:
+/// the equation, the health in plain words, and when it was last rebuilt.
+///
+/// The equation is [`render_equation`]'s, so a composition is spelled the same
+/// here as in a plan. Every field comes from [`MatrixSummaryRow`], which is built
+/// from the snapshot; no clock is read, so the time is an absolute UTC stamp.
 pub fn render_environment_summaries(summaries: &[MatrixSummaryRow]) -> String {
-    // The name column is as wide as the widest name, not a fixed four. A fixed
-    // width is fine right up until an environment is called `stage`, and then
-    // its counts sit one column right of everyone else's and the block stops
-    // being a table. Same rule as `render_matrix`, for the same reason.
-    let name_width = summaries
-        .iter()
-        .map(|s| s.environment.to_uppercase().chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(3);
     let mut out = String::new();
     for summary in summaries {
-        let name = pad_right(&summary.environment.to_uppercase(), name_width);
-        out.push_str(&format!(
-            "{name}  desired {} · actual {}",
-            summary.desired, summary.realised
-        ));
-        if summary.held > 0 {
-            out.push_str(&format!(
-                " · {}",
-                plural_count(summary.held, "held", "held")
-            ));
-        }
-        if summary.needs_rebuild > 0 {
-            out.push_str(&format!(
-                " · {}",
-                plural_count(summary.needs_rebuild, "needs rebuild", "need rebuild")
-            ));
-        }
-        if summary.missing > 0 {
-            out.push_str(&format!(
-                " · {}",
-                plural_count(summary.missing, "missing", "missing")
-            ));
-        }
-        if summary.actual_unknown > 0 {
-            out.push_str(&format!(
-                " · {}",
-                plural_count(summary.actual_unknown, "actual unknown", "actual unknown")
-            ));
+        out.push_str(&render_equation(&summary.equation));
+        out.push_str(&format!("  ·  {}", health_phrase(&summary.health)));
+        if let Some(at) = summary.rebuilt_at {
+            out.push_str(&format!("  ·  rebuilt {}", at.format("%Y-%m-%d %H:%M UTC")));
         }
         if summary.locked {
-            // In the name's own field, not bolted on the front and not appended
-            // to the counts. Bolting it on the front was the first version and
-            // it pushed this row's name eleven columns right of every other
-            // row's, which is a table losing its own alignment over an
-            // annotation — so the annotation takes the padding the name
-            // already had, and the names stay in a column.
             out.push_str(" 🔒");
         }
-        out.push_str(&format!("\n    {}\n", summary.health.label()));
+        out.push('\n');
     }
     out
+}
+
+/// An environment's health as a short phrase for a summary line.
+fn health_phrase(health: &EnvironmentHealth) -> String {
+    match health {
+        EnvironmentHealth::Realised => "up to date".to_string(),
+        EnvironmentHealth::PartiallyRealised { held } => {
+            format!(
+                "holding back {}",
+                plural_count(held.len(), "branch", "branches")
+            )
+        }
+        EnvironmentHealth::NeedsRebuild { .. } => "needs rebuild".to_string(),
+        EnvironmentHealth::NeverBuilt => "never built".to_string(),
+        EnvironmentHealth::LegacyUnknown => "not known, no build record".to_string(),
+        EnvironmentHealth::MissingBranch => "branch missing".to_string(),
+    }
 }
 
 fn plural_count(count: usize, singular: &str, plural: &str) -> String {
@@ -3981,6 +4004,13 @@ mod tests {
             actual_unknown: 0,
             locked: false,
             health,
+            equation: EnvironmentEquation {
+                environment: environment.to_string(),
+                base: "main".to_string(),
+                terms: Vec::new(),
+                excluded: Vec::new(),
+            },
+            rebuilt_at: None,
         }
     }
 
@@ -4059,10 +4089,16 @@ mod tests {
     }
 
     #[test]
-    fn a_matrix_with_no_rows_still_renders_its_header() {
-        // "No features are promoted" is an answer; an empty screen is not.
+    fn a_matrix_with_no_rows_says_nothing_is_promoted() {
+        // "No features are promoted" is an answer; a header over nothing is not.
         let rendered = render_matrix(&cell_model(&[], &["dev", "qa"]));
-        assert!(has_line(&rendered, "Feature  DEV  QA"), "{rendered:?}");
+        assert!(
+            has_line(
+                &rendered,
+                "Nothing is promoted yet. Promote a branch with: hitch promote <branch> <environment>"
+            ),
+            "{rendered:?}"
+        );
     }
 
     #[test]
@@ -4083,38 +4119,22 @@ mod tests {
     }
 
     #[test]
-    fn environment_summaries_reuse_the_health_label() {
-        // One vocabulary of health words, taken from `EnvironmentHealth::label`
-        // — the same function the rest of the CLI reads — rather than a second
-        // set of words written next to it.
+    fn environment_summaries_say_health_in_plain_words() {
         let rendered = render_environment_summaries(&[
-            summary("dev", EnvironmentHealth::PartiallyRealised { held: vec![] }),
+            summary(
+                "dev",
+                EnvironmentHealth::PartiallyRealised {
+                    held: vec!["a".into()],
+                },
+            ),
             summary("qa", EnvironmentHealth::Realised),
         ]);
         assert!(
-            has_line(&rendered, "    partially realised"),
+            has_line(&rendered, "dev = main  ·  holding back 1 branch"),
             "{rendered:?}"
         );
-        assert!(has_line(&rendered, "    realised"), "{rendered:?}");
         assert!(
-            has_line(&rendered, "DEV  desired 3 · actual 2 · 1 held"),
-            "{rendered:?}"
-        );
-    }
-
-    #[test]
-    fn a_summary_only_mentions_a_count_that_is_non_zero() {
-        // A summary listing "· 0 held · 0 needs rebuild" on every healthy
-        // environment is noise that trains a reader to skip the line.
-        let mut clean = summary("qa", EnvironmentHealth::Realised);
-        clean.held = 0;
-        let rendered = render_environment_summaries(&[clean]);
-        assert!(!rendered.contains("held"), "{rendered:?}");
-        // Two spaces, because `dev`/`qa` are both three characters and the
-        // name column is sized to the widest of them — not a fixed four, which
-        // is what a longer environment name like `stage` exposes.
-        assert!(
-            rendered.contains("QA   desired 3 · actual 2"),
+            has_line(&rendered, "qa = main  ·  up to date"),
             "{rendered:?}"
         );
     }

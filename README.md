@@ -576,16 +576,14 @@ hitch status
 shows a matrix of every feature against every environment, and whether each environment's last build is still current:
 
 ```text
-Feature   DEV         QA
+Feature   dev         qa
 ───────────────────────────────────
 clash     ⛔ held      ⛔ held
 payments  ● included  — not desired
 search    ● included  — not desired
 
-DEV  desired 3 · actual 2 · 1 held
-    partially realised
-QA   desired 1 · actual 0 · 1 held
-    partially realised
+dev = main + clash + payments + search  ·  holding back 1 branch  ·  rebuilt 2026-10-02 12:13 UTC
+qa = main + clash  ·  holding back 1 branch  ·  rebuilt 2026-10-02 12:13 UTC
 ```
 
 *Desired* is what the environment's declaration says. *Actual* is what its last build really contained, which Hitch records every time it builds. The two can differ because a branch was held out by a conflict, or because something moved since the build. For the older per-environment view, use `hitch status --environments`.
@@ -593,8 +591,7 @@ QA   desired 1 · actual 0 · 1 held
 If an environment was last built by an older Hitch, there is no record of what it contained, and Hitch says so rather than guessing:
 
 ```text
-DEV  desired 3 · actual 0 · 3 actual unknown
-    actual unknown
+dev = main + clash + payments + search  ·  not known, no build record
 ```
 
 That is normal, exits 0, and clears on the environment's next `hitch rebuild`.

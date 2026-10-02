@@ -297,6 +297,10 @@ pub struct MatrixSummaryRow {
     /// The environment's own verdict, carried whole so a renderer cannot
     /// derive a second one.
     pub health: EnvironmentHealth,
+    /// The declaration as an equation (`dev = main + a`), for the summary line.
+    pub equation: crate::core::render::EnvironmentEquation,
+    /// When the environment was last rebuilt, if ever.
+    pub rebuilt_at: Option<DateTime<Utc>>,
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
@@ -380,6 +384,15 @@ pub fn build_matrix_model(snapshot: &RepositoryStateSnapshot) -> MatrixModel {
                 health: environment
                     .map(|e| e.health.clone())
                     .unwrap_or(EnvironmentHealth::LegacyUnknown),
+                equation: environment
+                    .map(crate::core::render::EnvironmentEquation::from_declaration)
+                    .unwrap_or_else(|| crate::core::render::EnvironmentEquation {
+                        environment: env_name.clone(),
+                        base: String::new(),
+                        terms: Vec::new(),
+                        excluded: Vec::new(),
+                    }),
+                rebuilt_at: environment.and_then(|e| e.rebuilt_at),
             }
         })
         .collect();
