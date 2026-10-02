@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["process_cancellation","run","show_cancellation_confirmation","suggest_next_actions","validate_cancellation_authorization"],"struct":["CancelArgs"]};

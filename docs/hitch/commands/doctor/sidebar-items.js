@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["RECOMMENDED_SCOPES"],"fn":["age_in_days","check_pending_publishes","check_resolution_debt","format_source_branch_head_note","indent","run","summarize"],"struct":["DoctorCommand"]};

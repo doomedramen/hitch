@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The operation model: plan → apply → receipt."><title>hitch::operations - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="hitch" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.0 (b940084d7 2026-09-28)" data-channel="1.99.0" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module operations</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../hitch/index.html">hitch</a><span class="version">2.0.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module operations</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#one-planner-per-operation-and-promotedemote-are-one-operation" title="One planner per operation, and promote/demote are one operation">One planner per operation, and promote/demote are one operation</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate hitch</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">hitch</a></div><h1>Module <span>operations</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/hitch/operations/mod.rs.html#1-79">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The operation model: plan → apply → receipt.</p>
+<p>Read this header before adding a planner, because two of its claims are
+load-bearing and both are easy to get backwards.</p>
+<p><strong>A plan is a decision that has already been made, not a recipe.</strong> By the
+time a plan exists, every merge has been run: the trees and the composed
+commit already exist in the object database. A planner is therefore a
+<em>summariser</em> of work already done, not a description of work yet to be
+attempted. It does not matter much for correctness, but it matters a great
+deal for what a plan may honestly claim — the plan can name the exact
+commit it will land, because it built it.</p>
+<p><strong>Which is why re-planning can differ from the plan a human read.</strong> The
+composition path uses <code>git commit-tree</code>, which stamps the ambient
+wall-clock time into the commit, so composing the same inputs twice yields
+two different SHAs with identical trees. A second planner invocation is
+therefore not a way to “refresh” a plan; it produces a <em>different object
+with the same content</em>. That is precisely the gap
+<a href="model/struct.PlanFingerprint.html" title="struct hitch::operations::model::PlanFingerprint"><code>model::PlanFingerprint</code></a> closes, and it is why <a href="model/struct.OperationPlan.html" title="struct hitch::operations::model::OperationPlan"><code>model::OperationPlan</code></a>
+carries the composed commit forward rather than a description of how to
+recompose it. A plan that had to be re-evaluated to be applied could not
+be shown to a human at all.</p>
+<p><strong>A receipt is a record, never a prediction.</strong> Every effect in
+<a href="model/struct.ExecutionReceipt.html" title="struct hitch::operations::model::ExecutionReceipt"><code>model::ExecutionReceipt</code></a> is read back from the repository after the
+transaction that performed it, not copied out of the plan. A predicted SHA
+and an observed SHA are different claims, and conflating them is how a tool
+ends up reporting “fully synced” about a push that failed.</p>
+<p>One further boundary, enforced by convention rather than by the type
+system: <strong>this is the only place a plan may be built.</strong> A command module
+composes arguments and calls a planner; it does not assemble an
+<a href="model/struct.OperationPlan.html" title="struct hitch::operations::model::OperationPlan"><code>model::OperationPlan</code></a>, and it does not hand-construct a
+[<code>utils::git_operations::RefEdit</code>] for a plan’s own bookkeeping. Everything
+hitch plans is planned here, so there is exactly one answer to “what is
+hitch about to do” for any given command.</p>
+<p>Scope note: a fingerprint gates staleness; it does not authorise. Nothing
+in this module accepts a plan from the caller, and no plan is ever read
+back from disk or from a flag. It is always core-generated in this process,
+and the repo-wide lock is held across the whole plan → apply window for
+mutating commands, so the fingerprint is defence in depth against the
+things the lock cannot cover (remote refs, and another user’s push), not
+the primary mechanism.</p>
+<h3 id="one-planner-per-operation-and-promotedemote-are-one-operation"><a class="doc-anchor" href="#one-planner-per-operation-and-promotedemote-are-one-operation">§</a>One planner per operation, and promote/demote are one operation</h3>
+<p><a href="declaration/index.html" title="mod hitch::operations::declaration"><code>declaration</code></a> plans both <code>hitch promote</code> and <code>hitch demote</code>, because on
+the declaration they are the same edit with opposite sign: they share the
+approval gate, the environment lock, the rollback, the sibling-conflict
+simulation, and the rebuild that follows. Two planners would be two copies
+of that machinery that have to agree forever, and the day they disagreed
+the bug would be a promote that refuses what a demote allows. The
+direction is <a href="declaration/enum.DeclarationChange.html" title="enum hitch::operations::declaration::DeclarationChange"><code>declaration::DeclarationChange</code></a>, and
+<code>plan_promote</code>/<code>plan_demote</code> are named entry points over one implementation
+so a reader looking for “the promote planner” finds exactly one.</p>
+<p><a href="rebuild/index.html" title="mod hitch::operations::rebuild"><code>rebuild</code></a> and <a href="release/index.html" title="mod hitch::operations::release"><code>release</code></a> each have their own planner for the same
+reason: one per <em>operation</em>, not one per command name.</p>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="cleanup/index.html" title="mod hitch::operations::cleanup">cleanup</a></dt><dd>The prune sweep: the one operation whose effects are <em>deletions</em>.</dd><dt><a class="mod" href="declaration/index.html" title="mod hitch::operations::declaration">declaration</a></dt><dd>The promote / demote planner and executor.</dd><dt><a class="mod" href="metadata/index.html" title="mod hitch::operations::metadata">metadata</a></dt><dd>The metadata operations: <code>lock</code>, <code>unlock</code>, <code>set</code>, <code>add</code>, <code>remove</code>.</dd><dt><a class="mod" href="model/index.html" title="mod hitch::operations::model">model</a></dt><dd>The types a plan is made of, and the types a receipt is made of.</dd><dt><a class="mod" href="rebuild/index.html" title="mod hitch::operations::rebuild">rebuild</a></dt><dd>The rebuild planner and executor.</dd><dt><a class="mod" href="release/index.html" title="mod hitch::operations::release">release</a></dt><dd>The release planner and executor.</dd></dl></section></div></main></body></html>
