@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Hitch</title>
+    <script src="assets/gsap.min.js"></script>
+    <script src="assets/rms.js"></script>
+    <style>
+      @font-face { font-family: "Inter"; font-weight: 400; src: url("assets/fonts/Inter-400.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-weight: 600; src: url("assets/fonts/Inter-600.woff2") format("woff2"); }
+      @font-face { font-family: "Inter"; font-weight: 800; src: url("assets/fonts/Inter-800.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url("assets/fonts/JetBrainsMono-400.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url("assets/fonts/JetBrainsMono-500.woff2") format("woff2"); }
+      @font-face { font-family: "JetBrains Mono"; font-weight: 700; src: url("assets/fonts/JetBrainsMono-700.woff2") format("woff2"); }
+      :root {
+        --bg: #0e0d0d; --text: #f2efe9; --dim: #8a8580; --red: #d0524f; --redbright: #e5534b;
+        --green: #5fd38a; --amber: #ff9f0a; --panel: #161514; --line: #2c2a28;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg);
+        font-family: "Inter", system-ui, sans-serif; color: var(--text); }
+      .abs { position: absolute; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      #vignette { inset: 0; background: radial-gradient(ellipse at 50% 45%, rgba(40,28,26,0.35) 0%, rgba(14,13,13,0) 60%, rgba(0,0,0,0.5) 100%); }
+      #glowWrap { left: 0; top: 0; width: 1400px; height: 900px; opacity: 0; }
+      #glow { inset: 0; background: radial-gradient(closest-side, rgba(176,52,48,0.50) 0%, rgba(145,46,46,0.22) 45%, rgba(145,46,46,0) 100%); }
+
+      /* graph */
+      #graph { left: 0; top: 0; width: 1920px; height: 1080px; }
+      .edge { fill: none; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+      .lbl { font-family: "JetBrains Mono", monospace; font-size: 34px; font-weight: 700; fill: #b4aea4; text-anchor: end; }
+
+      /* captions */
+      .cap { left: 0; width: 1920px; text-align: center; font-weight: 600; letter-spacing: -0.01em; opacity: 0; }
+
+      /* equation */
+      .eq { white-space: pre; line-height: 1; font-family: "JetBrains Mono", monospace; font-weight: 500; color: var(--text); }
+      .eq span.t { position: absolute; top: 0; white-space: pre; opacity: 0; }
+      .eq .d { color: var(--red); font-weight: 700; }
+      .eq .p { color: var(--dim); }
+      #eqWrap { left: 221px; top: 400px; width: 1478px; height: 140px; }
+      #eqWrap .eq { font-size: 112px; line-height: 140px; height: 140px; position: relative; }
+      #tagline { left: 0; top: 618px; width: 1920px; text-align: center; font-size: 46px; font-weight: 600; letter-spacing: -0.015em; color: #d6d0c6; opacity: 0; }
+      #miniLogo { left: 72px; top: 52px; width: 56px; height: 56px; opacity: 0; background: #b73a37;
+        -webkit-mask: url(assets/img/hitch.svg) center/contain no-repeat; mask: url(assets/img/hitch.svg) center/contain no-repeat; }
+
+      /* terminal */
+      #term { left: 240px; top: 195px; width: 1440px; height: 670px; background: var(--panel); border: 1.5px solid var(--line);
+        border-radius: 20px; box-shadow: 0 40px 100px rgba(0,0,0,0.55); opacity: 0; overflow: hidden; }
+      #term .bar { position: absolute; left: 0; top: 0; right: 0; height: 56px; border-bottom: 1.5px solid var(--line); background: #1b1a19; }
+      #term .dot { position: absolute; top: 20px; width: 16px; height: 16px; border-radius: 50%; }
+      .body { position: absolute; left: 56px; top: 86px; right: 56px; bottom: 30px; font-family: "JetBrains Mono", monospace; font-size: 44px; opacity: 0; }
+      .row { height: 60px; line-height: 60px; white-space: pre; opacity: 0; }
+      .gap { height: 24px; }
+      .dim { color: var(--dim); } .b { font-weight: 700; } .g { color: var(--green); } .r { color: var(--redbright); } .am { color: var(--amber); }
+      .ch { display: none; }
+      .cur { display: none; width: 22px; height: 42px; background: var(--text); vertical-align: -5px; opacity: 0.85; }
+      #chip { position: absolute; right: 0; bottom: 8px; font-size: 32px; padding: 10px 24px; border: 1.5px solid #5a3f12; background: #241a0a; border-radius: 12px; opacity: 0; white-space: pre; }
+
+      /* scene 5 */
+      #promoteCmd { left: 0; width: 1920px; top: 262px; text-align: center; font-size: 40px; color: var(--dim); opacity: 0; }
+      .eq5 { left: 326px; width: 1267px; height: 110px; }
+      .eq5 .eq { font-size: 96px; line-height: 110px; height: 110px; position: relative; }
+      .strikewrap { position: relative; display: inline-block; font-family: "JetBrains Mono", monospace; font-weight: 500; font-size: 48px; }
+      .strike { position: absolute; left: -4px; right: -4px; top: 52%; height: 5px; background: var(--redbright); border-radius: 3px; }
+
+      /* outro */
+      #logoBig { left: 840px; top: 120px; width: 240px; height: 240px; opacity: 0; background: #b73a37;
+        -webkit-mask: url(assets/img/hitch.svg) center/contain no-repeat; mask: url(assets/img/hitch.svg) center/contain no-repeat; }
+      #wordmark { left: 0; width: 1920px; top: 385px; text-align: center; font-size: 150px; font-weight: 800; letter-spacing: -0.04em; line-height: 1.05; opacity: 0; }
+      #outroLine { left: 0; width: 1920px; top: 585px; text-align: center; font-size: 58px; font-weight: 600; letter-spacing: -0.02em; color: #e3ddd2; opacity: 0; }
+      #cargo { left: 600px; width: 720px; top: 740px; height: 100px; border: 1.5px solid var(--line); background: var(--panel); border-radius: 18px;
+        font-size: 46px; line-height: 100px; text-align: center; white-space: pre; opacity: 0; }
+      #fade { inset: 0; background: #0e0d0d; opacity: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="21.5" data-width="1920" data-height="1080">
+      <audio id="music" src="assets/music/happy-beats-business-moves-vol-11-by-ende-dot-app.mp3" data-start="0" data-duration="21.5" data-track-index="1" data-volume="0.8" data-fade-in="0.3" data-fade-out="1.5"></audio>
+      <audio id="sfx0" src="assets/sfx/keypress-001.wav" data-start="1.2" data-duration="0.15" data-track-index="2" data-volume="0.07"></audio>
+    <audio id="sfx1" src="assets/sfx/keypress-003.wav" data-start="1.3" data-duration="0.15" data-track-index="3" data-volume="0.07"></audio>
+    <audio id="sfx2" src="assets/sfx/keypress-005.wav" data-start="1.4" data-duration="0.15" data-track-index="4" data-volume="0.07"></audio>
+    <audio id="sfx3" src="assets/sfx/keypress-001.wav" data-start="1.5" data-duration="0.15" data-track-index="2" data-volume="0.07"></audio>
+    <audio id="sfx4" src="assets/sfx/impactSoft_medium_001.ogg" data-start="1.6" data-duration="0.183" data-track-index="3" data-volume="0.32"></audio>
+    <audio id="sfx5" src="assets/sfx/impactSoft_medium_001.ogg" data-start="3.7" data-duration="0.183" data-track-index="4" data-volume="0.28"></audio>
+    <audio id="sfx6" src="assets/sfx/keypress-001.wav" data-start="3.95" data-duration="0.15" data-track-index="2" data-volume="0.12"></audio>
+    <audio id="sfx7" src="assets/sfx/keypress-003.wav" data-start="4.2" data-duration="0.15" data-track-index="3" data-volume="0.12"></audio>
+    <audio id="sfx8" src="assets/sfx/keypress-005.wav" data-start="4.45" data-duration="0.15" data-track-index="4" data-volume="0.12"></audio>
+    <audio id="sfx9" src="assets/sfx/keypress-001.wav" data-start="7.7" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx10" src="assets/sfx/keypress-003.wav" data-start="7.755" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx11" src="assets/sfx/keypress-005.wav" data-start="7.81" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx12" src="assets/sfx/keypress-001.wav" data-start="7.865" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx13" src="assets/sfx/keypress-003.wav" data-start="7.92" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx14" src="assets/sfx/keypress-005.wav" data-start="7.975" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx15" src="assets/sfx/keypress-001.wav" data-start="8.03" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx16" src="assets/sfx/keypress-003.wav" data-start="8.085" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx17" src="assets/sfx/keypress-005.wav" data-start="8.14" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx18" src="assets/sfx/keypress-001.wav" data-start="8.195" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx19" src="assets/sfx/keypress-003.wav" data-start="8.25" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx20" src="assets/sfx/keypress-005.wav" data-start="8.305" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx21" src="assets/sfx/keypress-001.wav" data-start="8.36" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx22" src="assets/sfx/keypress-003.wav" data-start="8.415" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx23" src="assets/sfx/keypress-005.wav" data-start="8.47" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx24" src="assets/sfx/keypress-001.wav" data-start="8.525" data-duration="0.15" data-track-index="2" data-volume="0.09"></audio>
+    <audio id="sfx25" src="assets/sfx/keypress-003.wav" data-start="8.58" data-duration="0.15" data-track-index="3" data-volume="0.09"></audio>
+    <audio id="sfx26" src="assets/sfx/keypress-005.wav" data-start="8.635" data-duration="0.15" data-track-index="4" data-volume="0.09"></audio>
+    <audio id="sfx27" src="assets/sfx/card-slide-1.ogg" data-start="10.2" data-duration="0.6" data-track-index="2" data-volume="0.3"></audio>
+    <audio id="sfx28" src="assets/sfx/bong_001.ogg" data-start="10.4" data-duration="0.122" data-track-index="3" data-volume="0.2"></audio>
+    <audio id="sfx29" src="assets/sfx/keypress-001.wav" data-start="11.75" data-duration="0.15" data-track-index="4" data-volume="0.08"></audio>
+    <audio id="sfx30" src="assets/sfx/keypress-005.wav" data-start="11.822" data-duration="0.15" data-track-index="2" data-volume="0.08"></audio>
+    <audio id="sfx31" src="assets/sfx/keypress-003.wav" data-start="11.894" data-duration="0.15" data-track-index="3" data-volume="0.08"></audio>
+    <audio id="sfx32" src="assets/sfx/keypress-001.wav" data-start="11.966" data-duration="0.15" data-track-index="4" data-volume="0.08"></audio>
+    <audio id="sfx33" src="assets/sfx/keypress-005.wav" data-start="12.038" data-duration="0.15" data-track-index="2" data-volume="0.08"></audio>
+    <audio id="sfx34" src="assets/sfx/keypress-003.wav" data-start="12.11" data-duration="0.15" data-track-index="3" data-volume="0.08"></audio>
+    <audio id="sfx35" src="assets/sfx/keypress-001.wav" data-start="12.182" data-duration="0.15" data-track-index="4" data-volume="0.08"></audio>
+    <audio id="sfx36" src="assets/sfx/keypress-005.wav" data-start="12.254" data-duration="0.15" data-track-index="2" data-volume="0.08"></audio>
+    <audio id="sfx37" src="assets/sfx/keypress-003.wav" data-start="12.326" data-duration="0.15" data-track-index="3" data-volume="0.08"></audio>
+    <audio id="sfx38" src="assets/sfx/keypress-001.wav" data-start="12.398" data-duration="0.15" data-track-index="4" data-volume="0.08"></audio>
+    <audio id="sfx39" src="assets/sfx/keypress-005.wav" data-start="12.47" data-duration="0.15" data-track-index="2" data-volume="0.08"></audio>
+    <audio id="sfx40" src="assets/sfx/impactSoft_heavy_000.ogg" data-start="12.65" data-duration="0.505" data-track-index="3" data-volume="0.38"></audio>
+    <audio id="sfx41" src="assets/sfx/bong_001.ogg" data-start="14.1" data-duration="0.122" data-track-index="4" data-volume="0.22"></audio>
+    <audio id="sfx42" src="assets/sfx/impactBell_heavy_000.ogg" data-start="17.91" data-duration="1.48" data-track-index="2" data-volume="0.42"></audio>
+
+      <div id="vignette" class="abs"></div>
+      <div id="glowWrap" class="abs"><div id="glow" class="abs"></div></div>
+
+      <!-- Scene 1: tangled graph -->
+      <svg id="graph" class="abs" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+        <g id="labels"></g>
+        <g id="edges"></g>
+        <g id="dots"></g>
+        <circle id="ring" cx="1080" cy="470" r="15" fill="none" stroke="#e5534b" stroke-width="4" opacity="0" />
+      </svg>
+      <div id="cap1a" class="abs cap" style="top:828px;font-size:54px;">B isn't ready for QA.</div>
+      <div id="cap1b" class="abs cap" style="top:905px;font-size:76px;font-weight:800;color:#e5534b;">Now what?</div>
+      <div id="collapseLine" class="abs" style="left:300px;top:498px;width:1320px;height:4px;background:#f2efe9;border-radius:2px;opacity:0;"></div>
+
+      <!-- Scene 2/3: equation -->
+      <div id="eqWrap" class="abs"><div id="eq" class="eq"></div></div>
+      <div id="tagline" class="abs">Git environments as desired state, not merge history.</div>
+      <div id="miniLogo" class="abs"></div>
+
+      <!-- Scene 3/4: terminal -->
+      <div id="term" class="abs">
+        <div class="bar">
+          <div class="dot" style="left:26px;background:#ff5f57"></div>
+          <div class="dot" style="left:54px;background:#febc2e"></div>
+          <div class="dot" style="left:82px;background:#28c840"></div>
+        </div>
+        <div id="body3" class="body">
+          <div class="row" id="b3r0"><span class="dim">$ </span><span id="typ1"></span></div>
+          <div class="gap"></div>
+          <div class="row" id="b3r1"><span class="b">Demote B → dev</span></div>
+          <div class="row" id="b3r2"><span class="dim">Current</span></div>
+          <div class="row" id="b3r3">  dev = main + A + B + C</div>
+          <div class="row" id="b3r4"><span class="dim">Proposed</span></div>
+          <div class="row" id="b3r5">  dev = main + A + C</div>
+          <div class="gap"></div>
+          <div class="row" id="b3r6"><span class="b">Applied</span></div>
+          <div class="row" id="b3r7">  <span class="g">✓</span> dev</div>
+        </div>
+        <div id="body4" class="body">
+          <div class="row" id="b4r0"><span class="dim">$ </span><span id="typ2"></span></div>
+          <div class="gap"></div>
+          <div class="row" id="b4r1"><span class="b">Composition</span></div>
+          <div class="row" id="b4r2">  <span class="r">⛔ clash held — conflicts with main</span></div>
+          <div class="row dim" id="b4r3">      shared.txt</div>
+          <div class="row" id="b4r4">    <span class="dim">fix: git checkout clash &amp;&amp; git rebase main</span></div>
+          <div class="gap"></div>
+          <div class="row" id="b4r5"><span class="b am">Applied, with branches held</span></div>
+          <div class="row" id="b4r6">  <span class="g">✓</span> staging</div>
+          <div id="chip" class="mono"><span class="am b">exit 2</span><span class="dim">  held a conflicting branch</span></div>
+        </div>
+      </div>
+      <div id="cap3" class="abs cap" style="top:922px;font-size:52px;">No undoing merges. Just a rebuild.</div>
+      <div id="cap4" class="abs cap" style="top:922px;font-size:52px;">Conflicts get held — and named.</div>
+
+      <!-- Scene 5 -->
+      <div id="promoteCmd" class="abs mono">$ hitch promote A qa</div>
+      <div id="eqDev" class="abs eq5" style="top:410px;"><div class="eq" id="eq5a"></div></div>
+      <div id="eqQa" class="abs eq5" style="top:565px;"><div class="eq" id="eq5b"></div></div>
+      <div id="cap5" class="abs cap" style="top:790px;font-size:54px;">Hitch did not merge <span class="strikewrap"><span>dev → qa</span><i class="strike" id="strike"></i></span>.</div>
+
+      <!-- Scene 6 -->
+      <div id="logoBig" class="abs"></div>
+      <div id="wordmark" class="abs">hitch</div>
+      <div id="outroLine" class="abs">Environment branches are outputs.</div>
+      <div id="cargo" class="abs mono"><span class="dim">$ </span>cargo install hitch</div>
+
+      <div id="fade" class="abs"></div>
+    </div>
+
+    <script>
+      var NS = "http://www.w3.org/2000/svg";
+      var tl = gsap.timeline({ paused: true });
+
+      /* ---------- helpers ---------- */
+      function el(id) { return document.getElementById(id); }
+      function buildEq(container, cw, terms) {
+        // terms: [cls, idx, text, id]
+        terms.forEach(function (t) {
+          var s = document.createElement("span");
+          s.className = "t " + (t[0] || "");
+          s.id = t[3];
+          s.style.left = (t[1] * cw) + "px";
+          s.innerHTML = t[2];
+          container.appendChild(s);
+        });
+      }
+      var CW1 = 67.2, CW5 = 57.6;
+      buildEq(el("eq"), CW1, [
+        ["d", 0, "dev", "e_dev"], ["p", 4, "=", "e_eq"], ["", 6, "main", "e_main"],
+        ["", 11, '<span class="p">+</span> A', "e_A"], ["", 15, '<span class="p">+</span> B', "e_B"], ["", 19, '<span class="p">+</span> C', "e_C"]
+      ]);
+      buildEq(el("eq5a"), CW5, [
+        ["d", 0, "dev", "f_dev"], ["p", 4, "=", "f_eq"], ["", 6, "main", "f_main"],
+        ["", 11, '<span class="p">+</span> A', "f_A"], ["", 15, '<span class="p">+</span> B', "f_B"], ["", 19, '<span class="p">+</span> C', "f_C"]
+      ]);
+      buildEq(el("eq5b"), CW5, [
+        ["d", 0, "qa", "g_qa"], ["p", 4, "=", "g_eq"], ["", 6, "main", "g_main"],
+        ["", 11, '<span class="p">+</span> A', "g_A"], ["", 15, '<span class="p">+</span> C', "g_C"]
+      ]);
+
+      function typed(spanId, text, t0, per, curId) {
+        var host = el(spanId); var cur = document.createElement("span"); cur.className = "cur"; host.appendChild(cur);
+        for (var i = 0; i < text.length; i++) {
+          var c = document.createElement("span"); c.className = "ch"; c.textContent = text[i];
+          host.insertBefore(c, cur);
+          tl.set(c, { display: "inline" }, t0 + i * per);
+        }
+        tl.set(cur, { display: "inline-block" }, t0 - 0.12);
+        tl.set(cur, { display: "none" }, t0 + text.length * per + 0.3);
+      }
+      function rowIn(id, t) { tl.fromTo(el(id), { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.2, ease: "power2.out" }, t); }
+      function capIn(id, t, outT) {
+        tl.fromTo(el(id), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.32, ease: "power2.out" }, t);
+        if (outT) tl.to(el(id), { opacity: 0, y: -6, duration: 0.25, ease: "power1.in" }, outT);
+      }
+
+      /* ---------- Scene 1: tangled graph ---------- */
+      var LANE = { main: 250, A: 360, B: 470, C: 580, dev: 710 };
+      var DIM = "#7c7771", MID = "#a9a399", BRIGHT = "#f2efe9";
+      // [cls, d, stroke, width, start, dur]
+      var edges = [
+        ["main", "M300 250 H1620", DIM, 5, 0.10, 0.55],
+        ["dev", "M300 250 C335 250 335 710 385 710 H1620", BRIGHT, 6, 0.25, 0.6],
+        ["A", "M420 250 C470 250 460 360 530 360 H800", MID, 5, 0.40, 0.4],
+        ["B bBp", "M540 250 C590 250 580 470 650 470 H1080", MID, 5, 0.50, 0.45],
+        ["C", "M780 250 C830 250 820 580 890 580 H1200", MID, 5, 0.60, 0.4],
+        ["x", "M700 250 C790 250 760 470 860 470", DIM, 4, 0.75, 0.35],
+        ["x", "M640 360 C700 360 690 470 760 470", DIM, 4, 0.82, 0.3],
+        ["x", "M960 470 C1010 470 980 580 1040 580", DIM, 4, 0.9, 0.3],
+        ["x", "M1100 250 C1160 250 1130 580 1180 580", DIM, 4, 0.95, 0.35],
+        ["m", "M800 360 C880 360 860 710 940 710", MID, 5, 0.85, 0.35],
+        ["m bBp", "M1080 470 C1160 470 1130 710 1210 710", MID, 5, 0.95, 0.35],
+        ["m", "M1200 580 C1270 580 1260 710 1330 710", MID, 5, 1.05, 0.35],
+        ["m", "M1480 250 C1550 250 1520 710 1580 710", DIM, 4, 1.15, 0.35]
+      ];
+      var eg = el("edges");
+      edges.forEach(function (e, i) {
+        var p = document.createElementNS(NS, "path");
+        p.setAttribute("d", e[1]); p.setAttribute("pathLength", "1"); p.setAttribute("class", "edge " + e[0]);
+        p.setAttribute("stroke", e[2]); p.setAttribute("stroke-width", e[3]); p.id = "edge" + i;
+        eg.appendChild(p);
+        tl.to(p, { strokeDashoffset: 0, duration: e[5], ease: "power1.inOut" }, e[4]);
+      });
+      // dots [x,y,t,r,isB]
+      var dots = [
+        [300,250,0.1,10],[420,250,0.3,10],[540,250,0.4,10],[700,250,0.5,10],[780,250,0.55,10],[1100,250,0.8,10],[1480,250,1.0,10],[1620,250,0.6,10],
+        [385,710,0.5,10],[520,710,0.55,10],[940,710,1.2,14],[1210,710,1.3,14],[1330,710,1.4,14],[1580,710,1.5,14],[1620,710,0.85,10],
+        [530,360,0.6,10],[660,360,0.7,10],[800,360,0.8,10],
+        [650,470,0.7,10,1],[860,470,1.05,12,1],[760,470,1.0,12,1],[980,470,0.95,10,1],[1080,470,0.95,17,1],
+        [890,580,0.85,10],[1040,580,1.2,12],[1180,580,1.3,12],[1200,580,1.0,10]
+      ];
+      var dg = el("dots");
+      dots.forEach(function (d, i) {
+        var c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", d[0]); c.setAttribute("cy", d[1]); c.setAttribute("r", d[3]);
+        c.setAttribute("fill", d[3] > 11 ? "#f2efe9" : "#0e0d0d"); c.setAttribute("stroke", d[3] > 11 ? "#0e0d0d" : "#cfc9bf");
+        c.setAttribute("stroke-width", d[3] > 11 ? 3 : 4); c.setAttribute("class", d[4] ? "bBd" : "");
+        c.setAttribute("opacity", 0);
+        dg.appendChild(c);
+        gsap.set(c, { svgOrigin: d[0] + " " + d[1] });
+        tl.fromTo(c, { opacity: 0, scale: 0.2 }, { opacity: 1, scale: 1, duration: 0.2, ease: "back.out(2)" }, d[2]);
+      });
+      // lane labels
+      var lg = el("labels");
+      [["main", 250, 0.1], ["A", 360, 0.4], ["B", 470, 0.5], ["C", 580, 0.6], ["dev", 710, 0.25]].forEach(function (l) {
+        var t = document.createElementNS(NS, "text");
+        t.setAttribute("x", l[0] === "dev" || l[0] === "main" ? 262 : 500 - (l[0] === "A" ? 0 : -60));
+        t.setAttribute("y", l[1] + 12); t.setAttribute("class", "lbl"); t.id = "lbl" + l[0]; t.textContent = l[0];
+        t.setAttribute("opacity", 0); lg.appendChild(t);
+        tl.to(t, { opacity: 1, duration: 0.25 }, l[2]);
+      });
+      // A / B / C labels sit just left of their lanes
+      el("lblA").setAttribute("x", 498); el("lblB").setAttribute("x", 618); el("lblC").setAttribute("x", 858);
+      // B turns red at 1.60 and pulses
+      tl.to(".bBp", { stroke: "#e5534b", duration: 0.15 }, 1.6);
+      tl.to(".bBd", { stroke: "#e5534b", duration: 0.15 }, 1.6);
+      tl.to(el("lblB"), { fill: "#e5534b", duration: 0.15 }, 1.6);
+      gsap.set(el("ring"), { svgOrigin: "1080 470" });
+      [1.6, 2.2, 2.8].forEach(function (T) {
+        tl.fromTo(el("ring"), { scale: 1, opacity: 0.95 }, { scale: 3.4, opacity: 0, duration: 0.6, ease: "power2.out" }, T);
+      });
+      capIn("cap1a", 0.3, 2.85);
+      capIn("cap1b", 1.6, 2.85);
+      // collapse
+      gsap.set(el("graph"), { svgOrigin: "960 500" });
+      tl.to(el("graph"), { scaleY: 0.02, duration: 0.65, ease: "power3.in" }, 3.0);
+      tl.to(el("graph"), { opacity: 0, duration: 0.15 }, 3.55);
+      tl.to(el("collapseLine"), { opacity: 0.95, duration: 0.3 }, 3.3);
+      tl.to(el("collapseLine"), { opacity: 0, duration: 0.12 }, 3.68);
+
+      /* ---------- Scene 2: equation ---------- */
+      function pop(id, t) { tl.fromTo(el(id), { opacity: 0, y: 18, scale: 0.94 }, { opacity: 1, y: 0, scale: 1, duration: 0.28, ease: "back.out(1.6)" }, t); }
+      pop("e_dev", 3.70); pop("e_eq", 3.74); pop("e_main", 3.78);
+      pop("e_A", 3.95); pop("e_B", 4.20); pop("e_C", 4.45);
+      tl.fromTo(el("tagline"), { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" }, 4.5);
+      tl.to(el("tagline"), { opacity: 0, y: -8, duration: 0.25, ease: "power1.in" }, 6.7);
+      tl.fromTo(el("miniLogo"), { opacity: 0 }, { opacity: 1, duration: 0.4 }, 3.9);
+      // glow envelope
+      gsap.set(el("glowWrap"), { x: 260, y: 20 });
+      tl.to(el("glowWrap"), { opacity: 1, duration: 0.5, ease: "power1.out" }, 3.5);
+
+      /* ---------- Scene 3: pin equation, demote ---------- */
+      tl.to(el("eqWrap"), { scale: 0.56, y: -365, duration: 0.55, ease: "power3.inOut" }, 6.8);
+      tl.to(el("glowWrap"), { y: -330, scale: 0.7, duration: 0.55, ease: "power3.inOut" }, 6.8);
+      tl.fromTo(el("term"), { opacity: 0, y: 70 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, 7.1);
+      tl.set(el("body3"), { opacity: 1 }, 7.1);
+      rowIn("b3r0", 7.5);
+      typed("typ1", "hitch demote B dev", 7.7, 0.055);
+      rowIn("b3r1", 8.95); rowIn("b3r2", 9.05); rowIn("b3r3", 9.15); rowIn("b3r4", 9.25); rowIn("b3r5", 9.35);
+      capIn("cap3", 9.4, 11.3);
+      rowIn("b3r6", 10.15); rowIn("b3r7", 10.35);
+      // B lifts out of the pinned equation, C closes the gap
+      tl.to(el("e_B"), { color: "#e5534b", duration: 0.1 }, 10.1);
+      tl.to(el("e_B"), { y: -90, opacity: 0, duration: 0.5, ease: "power2.in" }, 10.2);
+      tl.to(el("e_C"), { x: -2 * CW1, duration: 0.5, ease: "power3.inOut" }, 10.25);
+      ["e_dev", "e_eq", "e_main", "e_A"].forEach(function (id) {
+        tl.to(el(id), { x: 2 * CW1, duration: 0.5, ease: "power3.inOut" }, 10.25);
+      });
+
+      /* ---------- Scene 4: held, not broken ---------- */
+      tl.to(el("body3"), { opacity: 0, x: -50, duration: 0.22, ease: "power2.in" }, 11.35);
+      tl.to(el("eqWrap"), { opacity: 0, duration: 0.25 }, 11.3);
+      tl.to(el("glowWrap"), { opacity: 0.35, duration: 0.4 }, 11.3);
+      tl.set(el("body4"), { opacity: 1 }, 11.58);
+      rowIn("b4r0", 11.6);
+      typed("typ2", "hitch rebuild staging", 11.75, 0.036);
+      rowIn("b4r1", 12.5);
+      rowIn("b4r2", 12.65); rowIn("b4r3", 12.8); rowIn("b4r4", 12.95);
+      tl.fromTo(el("b4r2"), { backgroundColor: "rgba(229,83,75,0.0)" }, { backgroundColor: "rgba(229,83,75,0.12)", duration: 0.2 }, 12.65);
+      capIn("cap4", 12.95, 15.2);
+      rowIn("b4r5", 13.9); rowIn("b4r6", 14.1);
+      tl.fromTo(el("chip"), { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.25, ease: "power2.out" }, 14.4);
+      tl.to(el("term"), { opacity: 0, y: 20, duration: 0.25, ease: "power2.in" }, 15.28);
+
+      /* ---------- Scene 5: promote, don't merge ---------- */
+      tl.fromTo(el("promoteCmd"), { opacity: 0 }, { opacity: 0.8, duration: 0.3 }, 15.6);
+      tl.to(el("glowWrap"), { opacity: 0.7, y: 0, scale: 1, x: 260, duration: 0.5 }, 15.5);
+      ["f_dev", "f_eq", "f_main", "f_A", "f_B", "f_C"].forEach(function (id, i) { pop(id, 15.65 + i * 0.04); });
+      ["g_qa", "g_eq", "g_main", "g_A", "g_C"].forEach(function (id, i) { pop(id, 16.05 + i * 0.04); });
+      capIn("cap5", 16.3, 17.5);
+      gsap.set(el("strike"), { scaleX: 0, transformOrigin: "0% 50%" });
+      tl.to(el("strike"), { scaleX: 1, duration: 0.3, ease: "power2.out" }, 16.85);
+      ["promoteCmd", "eqDev", "eqQa"].forEach(function (id) { tl.to(el(id), { opacity: 0, duration: 0.25, ease: "power1.in" }, 17.55); });
+      tl.to(el("miniLogo"), { opacity: 0, duration: 0.25 }, 17.55);
+      tl.to(el("glowWrap"), { opacity: 0, duration: 0.25 }, 17.55);
+
+      /* ---------- Scene 6: outro ---------- */
+      gsap.set(el("glowWrap"), { });
+      tl.set(el("glowWrap"), { x: 260, y: -210, scale: 1 }, 17.6);
+      tl.to(el("glowWrap"), { opacity: 1, duration: 0.5, ease: "power2.out" }, 17.91);
+      tl.fromTo(el("logoBig"), { opacity: 0, scale: 0.55 }, { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.7)" }, 17.91);
+      tl.fromTo(el("wordmark"), { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 18.35);
+      tl.fromTo(el("outroLine"), { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 18.8);
+      tl.fromTo(el("cargo"), { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 19.5);
+      tl.to(el("fade"), { opacity: 1, duration: 0.3, ease: "power1.in" }, 21.2);
+
+      /* ---------- Audio-reactive glow (pre-extracted RMS, sampled by time) ---------- */
+      var drv = { t: 0 };
+      var glowEl = el("glow");
+      function drawGlow() {
+        var f = Math.max(0, Math.min(window.RMS.length - 1, Math.round(drv.t * 30)));
+        var v = window.RMS[f];
+        glowEl.style.opacity = (0.55 + 0.45 * v).toFixed(3);
+        glowEl.style.transform = "scale(" + (1 + 0.07 * v).toFixed(3) + ")";
+      }
+      tl.fromTo(drv, { t: 0 }, { t: 21.5, duration: 21.5, ease: "none", onUpdate: drawGlow }, 0);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

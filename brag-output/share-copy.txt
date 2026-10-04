@@ -1,0 +1,1 @@
+Your dev branch shouldn't be a pile of merges you're scared to touch. Made Hitch: dev = main + A + B + C, and B not ready means `hitch demote B dev`, a rebuild, done. Git environments as desired state, not merge history.
