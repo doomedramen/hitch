@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["execute_approved_operation","refuse_unconfirmable","run","validate_and_approve"],"struct":["ApproveArgs"]};

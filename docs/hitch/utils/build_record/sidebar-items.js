@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SCHEMA_VERSION"],"enum":["EnvironmentBuildState"],"fn":["read_state","record_blob","resolve_metadata_sha","state_ref"],"struct":["EnvironmentBuildRecord","PinnedBranch","ResolutionUse"]};

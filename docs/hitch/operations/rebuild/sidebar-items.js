@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PlanPurpose"],"fn":["apply_rebuild_plan","apply_validated_plan","assemble_plan","assemble_receipt","build_record_for","discard_plan","plan_rebuild","planned_old_of","resolution_exists","short","validate_plan"],"struct":["RebuildPlanDetail","RebuildPlanOptions"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["validate_base_branch_exists","validate_environment_exists","validate_environment_not_exists","validate_name"]};

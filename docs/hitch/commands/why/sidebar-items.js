@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["known_environments","resolve_subject","run"],"struct":["WhyCommand","WhyDocument"]};

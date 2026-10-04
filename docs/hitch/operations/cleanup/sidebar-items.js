@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ARCHIVE_REF_RETENTION","PRUNABLE_NAMESPACES"],"fn":["apply_cleanup_plan","envs_in_scope","first_line","fully_qualified","plan_cleanup","stale_archive_refs","validate_cleanup_plan"],"struct":["CheckedOutBranch","CleanupPlanDetail","CleanupRun"]};

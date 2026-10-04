@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_deploy_key_to_repo","configure_git_ssh","generate_deploy_key","get_unprotected_branches","is_setup","key_path","load_protection_cache","lookup_deploy_key_id","protection_cache_path","save_protection_cache","whoami"],"struct":["ProtectionCache"]};

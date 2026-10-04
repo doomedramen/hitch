@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MatrixCell"],"fn":["build_matrix_model","build_status_model","classify_from_snapshot","has_record_for"],"struct":["EnvironmentStatusModel","MatrixModel","MatrixRow","MatrixSummaryRow","StatusModel","StatusSummary"]};

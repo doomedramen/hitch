@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LEGACY_OPERATION_LOCK_WINDOW"],"enum":["ApprovalDirection","HitchEvent","RebuildOutcome"],"fn":["approval_transition","attach_build_records","build_activity","derive_events","drop_event","lock_purpose_in","read_config_at"],"struct":["ActivityEntry","ActivityLog","ActivityQuery","ConfigReader","Draft","SkippedCommit"]};
