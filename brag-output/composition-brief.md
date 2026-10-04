@@ -34,7 +34,7 @@ Create a short launch-style brag video for Hitch, a Git CLI for environment bran
       ✓ staging
     ```
   - Hitch did not merge dev → qa.
-  - Environment branches are outputs.
+  - Change the equation, not the history.
   - `cargo install hitch`
   - Captions (framing, may be reworded lightly): "B isn't ready for QA." / "Now
     what?" / "No undoing merges. Just a rebuild." / "Conflicts get held — and named."
@@ -50,7 +50,7 @@ Create a short launch-style brag video for Hitch, a Git CLI for environment bran
   then show the CLI editing the equation.
 - Hook: tangled `dev` merge graph draws itself, node `B` pulses red, "B isn't
   ready for QA." → "Now what?"
-- Outro / punchline: red logo + `hitch` + "Environment branches are outputs." +
+- Outro / punchline: red logo + `hitch` + "Change the equation, not the history." +
   `cargo install hitch`.
 - Avoid:
   - Generic SaaS language

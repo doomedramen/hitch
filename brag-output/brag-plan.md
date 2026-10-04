@@ -32,7 +32,7 @@ then **"Now what?"** The pain is instantly recognisable to anyone who has run
 
 ## Outro / punchline
 Hitch logo (the red hitch mark) + "hitch" wordmark + `cargo install hitch`.
-Line: "Environment branches are outputs."
+Line: "Change the equation, not the history."
 
 ## User flow worth showing
 1. Entry: an environment's declaration — `dev = main + A + B + C`.
@@ -141,7 +141,7 @@ Transition mood: dramatic → logo.
 
 ### Scene 6 — Outro — 3.6s (17.9–21.5)
 Hitch red logo scales in at 17.91s strong cue. Wordmark "hitch". Line:
-"Environment branches are outputs." Below: `cargo install hitch`.
+"Change the equation, not the history." Below: `cargo install hitch`.
 Audio intent: payoff, then fade.
 Audio-coupled idea: one clean logo hit; music fades under hold.
 
